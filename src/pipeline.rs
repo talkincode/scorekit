@@ -121,7 +121,67 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         ));
     }
     let scene = schema::load_scene(args.scene)?;
-    let one_pass = composer::compose(&scene);
+    let meta_path = args.output.with_extension("meta.json");
+
+    if scene.sections.is_empty() {
+        let entry = build_one(args, &scene, args.output, &ext)?;
+        let meta_bytes = serde_json::to_vec_pretty(&entry).expect("meta serializes");
+        tools::write_atomic(&meta_path, &meta_bytes)?;
+        return Ok(format!(
+            "wrote {} ({} samples{}), {}",
+            args.output.display(),
+            entry["total_samples"],
+            if scene.r#loop { ", seamless loop" } else { "" },
+            meta_path.display(),
+        ));
+    }
+
+    // Suite: one asset per section, all sharing tracks, motifs and key.
+    let stem = args
+        .output
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut entries = Vec::new();
+    let mut names = Vec::new();
+    for section in &scene.sections {
+        let derived = scene.for_section(section);
+        let output = args
+            .output
+            .with_file_name(format!("{stem}-{}.{ext}", section.name));
+        let mut entry = build_one(args, &derived, &output, &ext)?;
+        entry["name"] = json!(section.name);
+        entries.push(entry);
+        names.push(section.name.clone());
+    }
+    let manifest = json!({
+        "title": scene.title,
+        "suite": true,
+        "tempo": scene.tempo,
+        "key": scene.key,
+        "time_signature": scene.time_signature,
+        "sample_rate": args.sample_rate,
+        "sections": entries,
+    });
+    let meta_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serializes");
+    tools::write_atomic(&meta_path, &meta_bytes)?;
+    Ok(format!(
+        "wrote {} section(s) [{}] and {}",
+        names.len(),
+        names.join(", "),
+        meta_path.display(),
+    ))
+}
+
+/// Compile one scene into one audio asset (+ optional stems) at `output` and
+/// return its metadata entry. Does not write the meta.json file.
+fn build_one(
+    args: &BuildArgs,
+    scene: &Scene,
+    output: &Path,
+    ext: &str,
+) -> Result<serde_json::Value> {
+    let one_pass = composer::compose(scene);
     let loop_samples = midi::exact_samples(one_pass.total_ticks, scene.tempo, args.sample_rate);
     let tail_samples = (args.tail * f64::from(args.sample_rate)).round() as u64;
     let crossfade = u64::from(args.crossfade_ms) * u64::from(args.sample_rate) / 1000;
@@ -146,8 +206,8 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     };
     let total_samples = window.take;
 
-    let mid = args.output.with_extension("mid");
-    let raw = args.output.with_extension("raw.wav");
+    let mid = output.with_extension("mid");
+    let raw = output.with_extension("raw.wav");
     let mut cleanup = Cleanup {
         files: vec![mid.clone(), raw.clone()],
         dirs: Vec::new(),
@@ -155,17 +215,15 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     };
 
     // Full mix: render, cut sample-exactly in-process, then encode if needed.
-    tools::write_atomic(&mid, &midi_bytes(&scene, passes, None)?)?;
+    tools::write_atomic(&mid, &midi_bytes(scene, passes, None)?)?;
     tools::render(&mid, args.soundfont, &raw, args.sample_rate, args.gain)?;
-    produce(&raw, args.output, &ext, args.quality, window, &mut cleanup)?;
+    produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
 
     // Stems: staged in a temp dir, swapped in only when every track rendered.
     let mut stem_rel: Vec<String> = Vec::new();
     if args.stems {
-        let stems_dir = args.output.with_extension("stems");
-        let staging = args
-            .output
-            .with_extension(format!("stems.tmp-{}", std::process::id()));
+        let stems_dir = output.with_extension("stems");
+        let staging = output.with_extension(format!("stems.tmp-{}", std::process::id()));
         std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
             path: staging.display().to_string(),
             source: e,
@@ -175,12 +233,12 @@ pub fn build(args: &BuildArgs) -> Result<String> {
             let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
             let mid_i = staging.join(format!("{:02}.mid", i + 1));
             let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
-            tools::write_atomic(&mid_i, &midi_bytes(&scene, passes, Some(i))?)?;
+            tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
             tools::render(&mid_i, args.soundfont, &raw_i, args.sample_rate, args.gain)?;
             produce(
                 &raw_i,
                 &staging.join(&name),
-                &ext,
+                ext,
                 args.quality,
                 window,
                 &mut cleanup,
@@ -206,14 +264,12 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         cleanup.dirs.clear();
     }
 
-    // Machine-readable sidecar for game engines and agent pipelines.
-    let meta_path = args.output.with_extension("meta.json");
-    let audio_name = args
-        .output
+    // Machine-readable metadata for game engines and agent pipelines.
+    let audio_name = output
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let meta = json!({
+    Ok(json!({
         "title": scene.title,
         "loop": scene.r#loop,
         "tempo": scene.tempo,
@@ -232,15 +288,5 @@ pub fn build(args: &BuildArgs) -> Result<String> {
             "pattern": serde_json::to_value(t.pattern).unwrap_or(json!(null)),
             "intensity": t.intensity,
         })).collect::<Vec<_>>(),
-    });
-    let meta_bytes = serde_json::to_vec_pretty(&meta).expect("meta serializes");
-    tools::write_atomic(&meta_path, &meta_bytes)?;
-
-    Ok(format!(
-        "wrote {} ({} samples{}), {}",
-        args.output.display(),
-        total_samples,
-        if scene.r#loop { ", seamless loop" } else { "" },
-        meta_path.display(),
-    ))
+    }))
 }

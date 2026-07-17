@@ -52,6 +52,21 @@ fn degree_note(key: Key, degree: usize) -> u8 {
     (base + i32::from(key.root_pc) + semis).clamp(0, 127) as u8
 }
 
+/// MIDI note for a signed 1-based melody degree (0 is a rest and never maps),
+/// one octave above the harmony register.
+fn melody_note(key: Key, degree: i8) -> u8 {
+    let base: i32 = if key.root_pc > 6 { 60 } else { 72 };
+    let idx = if degree > 0 {
+        i32::from(degree) - 1
+    } else {
+        i32::from(degree)
+    };
+    let octave = idx.div_euclid(7);
+    let step = idx.rem_euclid(7) as usize;
+    let semis = i32::from(scale(key)[step]) + 12 * octave;
+    (base + i32::from(key.root_pc) + semis).clamp(0, 127) as u8
+}
+
 /// Root-position triad for the bar's chord.
 fn chord_for_bar(key: Key, bar: u32) -> [u8; 3] {
     let prog = if key.minor { MINOR_PROG } else { MAJOR_PROG };
@@ -72,6 +87,47 @@ fn scaled(vel: u8, factor: f32) -> u8 {
     ((f32::from(vel) * factor).round()).clamp(1.0, 127.0) as u8
 }
 
+/// Fill `total_ticks` by cycling the motif, truncating the last note at the
+/// end. Rests (degree 0) advance time silently.
+fn melody_notes(
+    steps: &[crate::schema::MotifNote],
+    key: Key,
+    beat_ticks: u32,
+    total_ticks: u32,
+    vel: u8,
+) -> Vec<NoteEvent> {
+    let mut notes = Vec::new();
+    let total = u64::from(total_ticks);
+    let mut tick: u64 = 0;
+    while tick < total {
+        let pass_start = tick;
+        for step in steps {
+            let dur = u64::from((step.beats * f64::from(beat_ticks)).round() as u32);
+            if dur == 0 {
+                continue;
+            }
+            let end = (tick + dur).min(total);
+            if step.degree != 0 && end > tick {
+                notes.push(NoteEvent {
+                    tick: tick as u32,
+                    dur: (end - tick) as u32,
+                    key: melody_note(key, step.degree),
+                    vel,
+                });
+            }
+            tick += dur;
+            if tick >= total {
+                break;
+            }
+        }
+        // Guard against motifs whose steps all round to zero ticks.
+        if tick == pass_start {
+            break;
+        }
+    }
+    notes
+}
+
 pub fn compose(scene: &Scene) -> ScoreIr {
     let key = parse_key(&scene.key).expect("scene is validated");
     let ts = parse_time_signature(&scene.time_signature).expect("scene is validated");
@@ -84,11 +140,23 @@ pub fn compose(scene: &Scene) -> ScoreIr {
     let mut next_channel: u8 = 0;
     for track in &scene.tracks {
         let vel = base_velocity(track.intensity);
-        let mut notes = Vec::new();
-        for bar in 0..bars {
+        let mut notes = if track.pattern == Pattern::Melody {
+            // Melody flows across barlines; the per-bar loop below is skipped.
+            let name = track.motif.as_deref().expect("scene is validated");
+            melody_notes(&scene.motifs[name], key, beat_ticks, total_ticks, vel)
+        } else {
+            Vec::new()
+        };
+        let harmony_bars = if track.pattern == Pattern::Melody {
+            0
+        } else {
+            bars
+        };
+        for bar in 0..harmony_bars {
             let start = bar * bar_ticks;
             let chord = chord_for_bar(key, bar);
             match track.pattern {
+                Pattern::Melody => unreachable!("handled above"),
                 Pattern::Sustain => {
                     for k in chord {
                         notes.push(NoteEvent {

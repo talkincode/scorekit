@@ -1,9 +1,12 @@
 use crate::error::{Error, Location, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
-/// A scene is the unit of compilation: one loopable piece of game music.
+/// A scene is the unit of compilation: one loopable piece of game music, or —
+/// when `sections` is present — a suite of related cues sharing tracks,
+/// motifs, key and tempo.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scene {
@@ -23,8 +26,17 @@ pub struct Scene {
     /// Whether this scene is intended to loop seamlessly (asset metadata).
     #[serde(default)]
     pub r#loop: bool,
+    /// Named melodic motifs, referenced by tracks with pattern `melody`.
+    /// Sorted map keeps compilation deterministic.
+    #[serde(default)]
+    pub motifs: BTreeMap<String, Vec<MotifNote>>,
     /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one drums.
     pub tracks: Vec<Track>,
+    /// Suite sections. When present, `build` emits one asset per section
+    /// (e.g. intro / explore / combat / victory), all sharing this scene's
+    /// tracks, motifs and key.
+    #[serde(default)]
+    pub sections: Vec<Section>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -34,8 +46,46 @@ pub struct Track {
     pub instrument: Instrument,
     /// What this track plays. `drums` pattern pairs only with the `drums` instrument.
     pub pattern: Pattern,
+    /// Motif name to play; required with (and only with) pattern `melody`.
+    #[serde(default)]
+    pub motif: Option<String>,
     /// Dynamic level 0.0..=1.0, scales note velocities. Default: 0.6.
     #[serde(default = "default_intensity")]
+    pub intensity: f32,
+}
+
+/// One step of a motif, in scale degrees of the scene key.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MotifNote {
+    /// Scale degree: 1 = tonic, 8 = tonic an octave up, negative = below,
+    /// 0 = rest. Range: -21..=21.
+    pub degree: i8,
+    /// Duration in beats. Range: 0.125..=16.
+    pub beats: f64,
+}
+
+/// A named cue in a suite. Sections share the scene's tracks, motifs, key and
+/// (unless overridden) tempo, so every cue develops the same material —
+/// transitions are just short non-loop sections.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Section {
+    /// Section name, used in output file names. `[A-Za-z0-9_-]+`.
+    pub name: String,
+    /// Length in bars. Range: 1..=256.
+    pub bars: u16,
+    /// Whether this section loops seamlessly.
+    #[serde(default)]
+    pub r#loop: bool,
+    /// Optional tempo override in BPM. Range: 20..=300.
+    #[serde(default)]
+    pub tempo: Option<u16>,
+    /// 0-based indices of tracks silenced in this section.
+    #[serde(default)]
+    pub mute: Vec<usize>,
+    /// Multiplier applied to every track's intensity. Range: 0.0..=2.0. Default: 1.
+    #[serde(default = "default_section_intensity")]
     pub intensity: f32,
 }
 
@@ -51,6 +101,10 @@ fn default_intensity() -> f32 {
     0.6
 }
 
+fn default_section_intensity() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Pattern {
@@ -62,6 +116,9 @@ pub enum Pattern {
     Bass,
     /// Kick / snare / hi-hat groove on the percussion channel.
     Drums,
+    /// Plays the motif named by the track's `motif` field, looped/truncated
+    /// to fill the section.
+    Melody,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -324,8 +381,138 @@ impl Scene {
                 }
                 _ => {}
             }
+            match (t.pattern == Pattern::Melody, &t.motif) {
+                (true, None) => {
+                    return fail(
+                        &format!("tracks[{i}].motif"),
+                        "pattern `melody` requires a `motif` name".to_owned(),
+                    );
+                }
+                (true, Some(name)) if !self.motifs.contains_key(name) => {
+                    return fail(
+                        &format!("tracks[{i}].motif"),
+                        format!(
+                            "unknown motif `{name}` (defined: {:?})",
+                            self.motifs.keys().collect::<Vec<_>>()
+                        ),
+                    );
+                }
+                (false, Some(_)) => {
+                    return fail(
+                        &format!("tracks[{i}].motif"),
+                        "`motif` is only valid with pattern `melody`".to_owned(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        for (name, notes) in &self.motifs {
+            if notes.is_empty() {
+                return fail(&format!("motifs.{name}"), "motif has no notes".to_owned());
+            }
+            for (j, n) in notes.iter().enumerate() {
+                if !(-21..=21).contains(&n.degree) {
+                    return fail(
+                        &format!("motifs.{name}[{j}].degree"),
+                        format!("{} out of range -21..=21", n.degree),
+                    );
+                }
+                if !(0.125..=16.0).contains(&n.beats) {
+                    return fail(
+                        &format!("motifs.{name}[{j}].beats"),
+                        format!("{} out of range 0.125..=16", n.beats),
+                    );
+                }
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, s) in self.sections.iter().enumerate() {
+            if s.name.is_empty()
+                || !s
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return fail(
+                    &format!("sections[{i}].name"),
+                    format!(
+                        "`{}` must match [A-Za-z0-9_-]+ (used in file names)",
+                        s.name
+                    ),
+                );
+            }
+            if !seen.insert(s.name.as_str()) {
+                return fail(
+                    &format!("sections[{i}].name"),
+                    format!("duplicate section name `{}`", s.name),
+                );
+            }
+            if !(1..=256).contains(&s.bars) {
+                return fail(
+                    &format!("sections[{i}].bars"),
+                    format!("{} out of range 1..=256", s.bars),
+                );
+            }
+            if let Some(t) = s.tempo
+                && !(20..=300).contains(&t)
+            {
+                return fail(
+                    &format!("sections[{i}].tempo"),
+                    format!("{t} out of range 20..=300"),
+                );
+            }
+            if !(0.0..=2.0).contains(&s.intensity) {
+                return fail(
+                    &format!("sections[{i}].intensity"),
+                    format!("{} out of range 0.0..=2.0", s.intensity),
+                );
+            }
+            let muted: std::collections::BTreeSet<usize> = s.mute.iter().copied().collect();
+            for (j, &m) in s.mute.iter().enumerate() {
+                if m >= self.tracks.len() {
+                    return fail(
+                        &format!("sections[{i}].mute[{j}]"),
+                        format!(
+                            "track index {m} out of range (scene has {})",
+                            self.tracks.len()
+                        ),
+                    );
+                }
+            }
+            if muted.len() >= self.tracks.len() {
+                return fail(
+                    &format!("sections[{i}].mute"),
+                    "section mutes every track".to_owned(),
+                );
+            }
         }
         Ok(())
+    }
+
+    /// Derive the standalone scene a section compiles to: shared key, motifs
+    /// and tracks; section-local bars, loop flag, tempo and dynamics.
+    pub fn for_section(&self, section: &Section) -> Scene {
+        let mut derived = self.clone();
+        derived.title = Some(match &self.title {
+            Some(t) => format!("{t} — {}", section.name),
+            None => section.name.clone(),
+        });
+        derived.tempo = section.tempo.unwrap_or(self.tempo);
+        derived.bars = section.bars;
+        derived.r#loop = section.r#loop;
+        derived.sections = Vec::new();
+        derived.tracks = self
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !section.mute.contains(i))
+            .map(|(_, t)| {
+                let mut t = t.clone();
+                t.intensity = (t.intensity * section.intensity).clamp(0.0, 1.0);
+                t
+            })
+            .collect();
+        derived
     }
 }
 

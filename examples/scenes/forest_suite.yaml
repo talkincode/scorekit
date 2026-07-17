@@ -1,0 +1,53 @@
+# A suite: one scene file, one asset per section, all sharing the same
+# theme (motif), key and instrumentation — intro / explore loop / combat
+# loop / victory sting. Transitions are just short non-loop sections.
+title: Forest Suite
+tempo: 92
+key: D_minor
+time_signature: 4/4
+bars: 8 # base material length (used when compiling without --section)
+
+motifs:
+  theme: # the shared melodic identity of this scene
+    - { degree: 1, beats: 1.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 1 }
+    - { degree: 3, beats: 1.5 }
+    - { degree: 2, beats: 0.5 }
+    - { degree: 1, beats: 2 }
+
+tracks:
+  - instrument: flute # 0: lead voice carrying the theme
+    pattern: melody
+    motif: theme
+    intensity: 0.7
+  - instrument: strings # 1: harmonic bed
+    pattern: sustain
+    intensity: 0.5
+  - instrument: harp # 2: motion
+    pattern: arpeggio
+    intensity: 0.5
+  - instrument: bass # 3: foundation
+    pattern: bass
+    intensity: 0.5
+  - instrument: drums # 4: pulse
+    pattern: drums
+    intensity: 0.4
+
+sections:
+  - name: intro # theme alone over strings, no rhythm section
+    bars: 4
+    mute: [3, 4]
+    intensity: 0.7
+  - name: explore # full band, seamless loop
+    bars: 8
+    loop: true
+  - name: combat # same theme, faster and harder
+    bars: 8
+    loop: true
+    tempo: 132
+    intensity: 1.4
+  - name: victory # short sting with natural decay
+    bars: 2
+    mute: [4]

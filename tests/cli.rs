@@ -524,6 +524,160 @@ fn build_corrupt_soundfont_leaves_no_partial_output_or_stems() {
     assert_dir_contains_exactly(dir.path(), &["scene.yaml", "fake.sf2"]);
 }
 
+// ---- suites: sections + motifs (M2) ----
+
+/// Two-section suite with a shared motif; small bars for fast rendering.
+fn suite_yaml() -> &'static str {
+    "tempo: 120\nbars: 2\nkey: C_major\nmotifs:\n  theme:\n    - { degree: 1, beats: 1 }\n    - { degree: 5, beats: 1 }\n    - { degree: 3, beats: 2 }\ntracks:\n  - instrument: flute\n    pattern: melody\n    motif: theme\n  - instrument: strings\n    pattern: sustain\nsections:\n  - name: explore\n    bars: 2\n    loop: true\n  - name: sting\n    bars: 1\n    tempo: 140\n    mute: [0]\n"
+}
+
+#[test]
+fn build_suite_emits_per_section_assets_with_exact_lengths() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(&scene, suite_yaml()).unwrap();
+    let out = dir.path().join("suite.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "suite.yaml",
+            "suite-explore.wav",
+            "suite-sting.wav",
+            "suite.meta.json",
+        ],
+    );
+    // explore: 2 bars 4/4 @120, loop → exactly L frames
+    let l_explore = exact_samples(2 * 4 * 480, 120, 44100);
+    let (spec, explore) = read_frames(&dir.path().join("suite-explore.wav"));
+    assert_eq!(explore.len() as u64, l_explore * u64::from(spec.channels));
+    // sting: 1 bar @140 (tempo override), non-loop → L + 4s tail
+    let l_sting = exact_samples(4 * 480, 140, 44100) + 4 * 44100;
+    let (spec, sting) = read_frames(&dir.path().join("suite-sting.wav"));
+    assert_eq!(sting.len() as u64, l_sting * u64::from(spec.channels));
+    // manifest describes the whole suite
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("suite.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["suite"], true);
+    let sections = meta["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0]["name"], "explore");
+    assert_eq!(sections[0]["loop"], true);
+    assert_eq!(sections[0]["loop_samples"], l_explore);
+    assert_eq!(sections[1]["name"], "sting");
+    assert_eq!(sections[1]["tempo"], 140);
+    // muted track dropped from the sting section
+    assert_eq!(sections[1]["tracks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn midi_section_selector_compiles_that_section_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(&scene, suite_yaml()).unwrap();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    for out in [&a, &b] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(out)
+            .args(["--section", "sting"])
+            .assert()
+            .success();
+    }
+    assert_eq!(fs::read(&a).unwrap(), fs::read(&b).unwrap());
+    // full scene compiles differently from a single section
+    let full = dir.path().join("full.mid");
+    bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&full)
+        .assert()
+        .success();
+    assert_ne!(fs::read(&a).unwrap(), fs::read(&full).unwrap());
+}
+
+#[test]
+fn midi_unknown_section_is_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(&scene, suite_yaml()).unwrap();
+    let out = bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(dir.path().join("x.mid"))
+        .args(["--section", "boss"])
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("boss"), "stderr: {stderr}");
+    assert_dir_contains_exactly(dir.path(), &["suite.yaml"]);
+}
+
+#[test]
+fn validate_rejects_unknown_motif_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: flute\n    pattern: melody\n    motif: nonexistent\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    let v: serde_json::Value = serde_json::from_str(stderr.trim()).expect("stderr is JSON");
+    assert_eq!(v["field"], "tracks[0].motif");
+}
+
+#[test]
+fn validate_rejects_duplicate_section_names_and_mute_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let dup = dir.path().join("dup.yaml");
+    fs::write(
+        &dup,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1 }\n  - { name: a, bars: 2 }\n",
+    )
+    .unwrap();
+    let out = bin().arg("validate").arg(&dup).assert().code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("sections[1].name"), "stderr: {stderr}");
+
+    let mute = dir.path().join("mute.yaml");
+    fs::write(
+        &mute,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1, mute: [0] }\n",
+    )
+    .unwrap();
+    let out = bin().arg("validate").arg(&mute).assert().code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("sections[0].mute"), "stderr: {stderr}");
+}
+
+#[test]
+fn example_suite_validates() {
+    bin()
+        .arg("validate")
+        .arg(repo("examples/scenes/forest_suite.yaml"))
+        .assert()
+        .success();
+}
+
 // ---- export: sample-exact window ----
 
 #[test]

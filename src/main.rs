@@ -43,6 +43,9 @@ enum Command {
         /// Keep only the given track (0-based), preserving its mix channel
         #[arg(long)]
         solo: Option<usize>,
+        /// Compile one named section of a suite scene
+        #[arg(long)]
+        section: Option<String>,
     },
     /// Render a MIDI file to WAV via FluidSynth + SoundFont
     Render {
@@ -100,17 +103,30 @@ enum Command {
     },
 }
 
-fn compile_midi(scene_path: &Path, output: &Path, passes: u8, solo: Option<usize>) -> Result<()> {
-    let scene = schema::load_scene(scene_path)?;
-    let bytes = pipeline::midi_bytes(&scene, passes, solo)?;
-    if let Some(parent) = output.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| error::Error::Io {
-            path: parent.display().to_string(),
-            source: e,
-        })?;
+fn compile_midi(
+    scene_path: &Path,
+    output: &Path,
+    passes: u8,
+    solo: Option<usize>,
+    section: Option<&str>,
+) -> Result<()> {
+    let mut scene = schema::load_scene(scene_path)?;
+    if let Some(name) = section {
+        let found = scene.sections.iter().find(|s| s.name == name).cloned();
+        match found {
+            Some(s) => scene = scene.for_section(&s),
+            None => {
+                return Err(error::Error::Validation {
+                    path: "--section".to_owned(),
+                    message: format!(
+                        "unknown section `{name}` (defined: {:?})",
+                        scene.sections.iter().map(|s| &s.name).collect::<Vec<_>>()
+                    ),
+                });
+            }
+        }
     }
+    let bytes = pipeline::midi_bytes(&scene, passes, solo)?;
     tools::write_atomic(output, &bytes)
 }
 
@@ -118,8 +134,13 @@ fn run(command: &Command) -> Result<String> {
     match command {
         Command::Validate { scene } => {
             let s = schema::load_scene(scene)?;
+            let sections = if s.sections.is_empty() {
+                String::new()
+            } else {
+                format!(", {} section(s)", s.sections.len())
+            };
             Ok(format!(
-                "ok: {} bars, {} track(s), tempo {}",
+                "ok: {} bars, {} track(s), tempo {}{sections}",
                 s.bars,
                 s.tracks.len(),
                 s.tempo
@@ -131,8 +152,9 @@ fn run(command: &Command) -> Result<String> {
             output,
             passes,
             solo,
+            section,
         } => {
-            compile_midi(scene, output, *passes, *solo)?;
+            compile_midi(scene, output, *passes, *solo, section.as_deref())?;
             Ok(format!("wrote {}", output.display()))
         }
         Command::Render {
