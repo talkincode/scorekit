@@ -6,7 +6,8 @@ description: >
   render seamless loops, stems, and OGG/WAV assets, and lint compositions
   against aesthetic grammar profiles. Use when the user asks for game BGM,
   background music, a music loop, adaptive-music stems, film-style scoring,
-  a scene.yaml, or scorekit itself (游戏配乐/背景音乐/循环音乐/分轨/生成音乐/写一首曲子).
+  a scene.yaml, or scorekit itself (game score, background music, looping
+  music, stems, generated music, composing a piece).
   Not for singing with lyrics, audio analysis, or editing existing recordings.
 ---
 
