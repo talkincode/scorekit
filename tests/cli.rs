@@ -48,6 +48,22 @@ fn validate_happy_path() {
 }
 
 #[test]
+fn all_shipped_examples_validate() {
+    // Guards examples/scenes/ against schema drift: every scene we ship
+    // must always pass `validate`.
+    let dir = repo("examples/scenes");
+    let mut count = 0;
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "yaml") {
+            bin().arg("validate").arg(&path).assert().success();
+            count += 1;
+        }
+    }
+    assert!(count >= 7, "expected shipped examples, found {count}");
+}
+
+#[test]
 fn validate_rejects_unknown_field_with_location() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("bad.yaml");

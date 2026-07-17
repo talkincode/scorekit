@@ -1,0 +1,35 @@
+# Lyrical ballad — a gentle 3/4 waltz. Singing cello over piano broken
+# chords and slow strings; intimate, warm, no percussion.
+title: Evening Waltz
+tempo: 76
+key: G_major
+time_signature: 3/4
+bars: 8
+loop: true
+
+motifs:
+  song: # long singing phrases, one pass per 4-bar progression
+    - { degree: 3, beats: 2 }
+    - { degree: 2, beats: 0.5 }
+    - { degree: 1, beats: 0.5 }
+    - { degree: 2, beats: 2 }
+    - { degree: 3, beats: 1 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 0.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 2, beats: 3 }
+
+tracks:
+  - instrument: cello # 0: the singing voice
+    pattern: melody
+    motif: song
+    intensity: 0.6
+  - instrument: piano # 1: waltzing broken chords
+    pattern: arpeggio
+    intensity: 0.5
+  - instrument: slow_strings # 2: soft cushion
+    pattern: sustain
+    intensity: 0.35
+  - instrument: contrabass # 3: quiet floor
+    pattern: bass
+    intensity: 0.3

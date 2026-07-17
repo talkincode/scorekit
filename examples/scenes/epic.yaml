@@ -1,0 +1,41 @@
+# Light epic — heroic horn fanfare over strings, choir and timpani.
+# Orchestral but airborne, not grimdark: an overworld banner theme.
+title: Banner in the Wind
+tempo: 104
+key: F_major
+time_signature: 4/4
+bars: 8
+loop: true
+
+motifs:
+  fanfare: # rising 1-5-8 call, answered by a stepwise descent
+    - { degree: 1, beats: 1 }
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1.5 }
+    - { degree: 7, beats: 0.5 }
+    - { degree: 8, beats: 2 }
+    - { degree: 6, beats: 1 }
+    - { degree: 7, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 5, beats: 3 }
+    - { degree: 4, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 1, beats: 2 }
+
+tracks:
+  - instrument: horn # 0: heroic lead
+    pattern: melody
+    motif: fanfare
+    intensity: 0.75
+  - instrument: strings # 1: orchestral bed
+    pattern: sustain
+    intensity: 0.55
+  - instrument: choir # 2: halo above the strings
+    pattern: sustain
+    intensity: 0.35
+  - instrument: harp # 3: glinting motion
+    pattern: arpeggio
+    intensity: 0.4
+  - instrument: timpani # 4: martial pulse on chord roots
+    pattern: bass
+    intensity: 0.6

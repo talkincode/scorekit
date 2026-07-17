@@ -1,0 +1,37 @@
+# Elegy — solo violin lament in D minor over sparse harp and slow strings,
+# in the spirit of the Schindler's List theme: grief carried by one voice.
+title: Ashes and Snow
+tempo: 58
+key: D_minor
+time_signature: 4/4
+bars: 8
+loop: true
+
+motifs:
+  lament: # arch shape — reach upward, then a long descent to rest
+    - { degree: 5, beats: 2 }
+    - { degree: 8, beats: 1.5 }
+    - { degree: 7, beats: 0.5 }
+    - { degree: 6, beats: 2 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 1 }
+    - { degree: 3, beats: 2 }
+    - { degree: 4, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 1, beats: 3 }
+    - { degree: 0, beats: 1 } # breath before the phrase returns
+
+tracks:
+  - instrument: violin # 0: the lone voice
+    pattern: melody
+    motif: lament
+    intensity: 0.65
+  - instrument: harp # 1: sparse consolation
+    pattern: arpeggio
+    intensity: 0.3
+  - instrument: slow_strings # 2: barely-there bed
+    pattern: sustain
+    intensity: 0.35
+  - instrument: cello # 3: dark floor
+    pattern: bass
+    intensity: 0.35

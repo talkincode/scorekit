@@ -1,0 +1,56 @@
+# Energetic dance — club EDM at 128 BPM. Syncopated saw riff, pumping
+# synth bass, pad wash, hard drums pushed to the front.
+title: Neon Pulse
+tempo: 128
+key: A_minor
+time_signature: 4/4
+bars: 8
+loop: true
+
+motifs:
+  riff: # syncopated club riff, stabs and holds, one 4-bar pass
+    - { degree: 1, beats: 0.5 }
+    - { degree: 1, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 1, beats: 0.5 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 3, beats: 1 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 8, beats: 0.5 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 3, beats: 1 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 2, beats: 0.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 7, beats: 0.5 }
+    - { degree: 7, beats: 0.5 }
+    - { degree: 8, beats: 0.5 }
+    - { degree: 7, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 4, beats: 0.5 }
+    - { degree: 2, beats: 1 }
+
+tracks:
+  - instrument: saw_lead # 0: the riff
+    pattern: melody
+    motif: riff
+    intensity: 0.8
+  - instrument: synth_bass # 1: pumping root motion
+    pattern: bass
+    intensity: 0.85
+  - instrument: pad # 2: wash behind the riff
+    pattern: sustain
+    intensity: 0.4
+  - instrument: epiano # 3: offbeat sparkle
+    pattern: arpeggio
+    intensity: 0.45
+  - instrument: drums # 4: front and center
+    pattern: drums
+    intensity: 0.9

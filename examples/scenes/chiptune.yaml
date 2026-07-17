@@ -1,0 +1,50 @@
+# Game music — 8-bit platformer chiptune. Square lead bounces over a saw
+# arpeggio and synth bass; fast, bright, relentlessly cheerful.
+title: Pixel Sprint
+tempo: 152
+key: C_major
+time_signature: 4/4
+bars: 8
+loop: true
+
+motifs:
+  hook: # bouncy octave-hopping hook, one pass per 4-bar progression
+    - { degree: 3, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 8, beats: 1 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 3, beats: 0.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 2, beats: 0.5 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 7, beats: 1 }
+    - { degree: 5, beats: 0.5 }
+    - { degree: 2, beats: 0.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 8, beats: 0.5 }
+    - { degree: 10, beats: 1 }
+    - { degree: 8, beats: 0.5 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 3, beats: 1 }
+    - { degree: 4, beats: 0.5 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 8, beats: 1 }
+    - { degree: 6, beats: 0.5 }
+    - { degree: 4, beats: 0.5 }
+    - { degree: 1, beats: 1 }
+
+tracks:
+  - instrument: square_lead # 0: the classic NES voice
+    pattern: melody
+    motif: hook
+    intensity: 0.7
+  - instrument: saw_lead # 1: chirpy eighth-note motion
+    pattern: arpeggio
+    intensity: 0.45
+  - instrument: synth_bass # 2: driving low end
+    pattern: bass
+    intensity: 0.7
+  - instrument: drums # 3: straight uptempo groove
+    pattern: drums
+    intensity: 0.65

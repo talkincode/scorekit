@@ -47,7 +47,12 @@ cargo build --release
 
 退出码：`0` 成功 · `1` IO · `2` 输入非法 · `3` 依赖缺失 · `4` 外部工具失败。
 
-场景 DSL 示例见 [examples/scenes/forest.yaml](examples/scenes/forest.yaml)（单场景）与 [examples/scenes/forest_suite.yaml](examples/scenes/forest_suite.yaml)（含 motifs/sections 的组曲）。
+场景 DSL 示例见 [examples/scenes/](examples/scenes/)：[forest.yaml](examples/scenes/forest.yaml)（单场景）、[forest_suite.yaml](examples/scenes/forest_suite.yaml)（含 motifs/sections 的组曲），以及五种风格参考——[chiptune.yaml](examples/scenes/chiptune.yaml)（8-bit 游戏）、[dance.yaml](examples/scenes/dance.yaml)（动感舞曲）、[epic.yaml](examples/scenes/epic.yaml)（轻史诗）、[ballad.yaml](examples/scenes/ballad.yaml)（3/4 抒情）、[elegy.yaml](examples/scenes/elegy.yaml)（小提琴挽歌）。一次全部渲染：
+
+```bash
+./target/release/scorekit batch examples/scenes/*.yaml \
+  --soundfont assets/TimGM6mb.sf2 --out-dir out/
+```
 
 无缝 loop 的原理：loop 场景渲染两遍取第二遍 `[L, 2L)`（开头自带上一遍的混响尾音），`L` 由量化后的 MIDI tempo 精确推导；因 FluidSynth 按毫秒调度、真实周期存在漂移，尾部再做短交叉淡化封口，使终帧与环回目标位级衔接（`--crossfade-ms` 可调，默认 50ms）。
 
