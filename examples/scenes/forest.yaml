@@ -1,0 +1,19 @@
+title: Forest Theme
+tempo: 92
+key: D_minor
+time_signature: "4/4"
+bars: 8
+loop: true
+tracks:
+  - instrument: strings
+    pattern: sustain
+    intensity: 0.4
+  - instrument: piano
+    pattern: arpeggio
+    intensity: 0.55
+  - instrument: bass
+    pattern: bass
+    intensity: 0.45
+  - instrument: drums
+    pattern: drums
+    intensity: 0.3
