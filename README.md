@@ -4,7 +4,7 @@
 
 Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 可替换渲染后端（FluidSynth/TiMidity++ + SF2）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。它把高级音乐语义稳定地编译为可执行资产；创作智能永远属于上游 Agent。
 
-> 状态：M0–M5 全部完成（全链路 + 无缝 loop + stems + suite + 双后端 + Agent 工作流 + 演奏表现层/和声声明）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
+> 状态：M0–M6 全部完成（全链路 + 无缝 loop + stems + suite + 双后端 + Agent 工作流 + 演奏表现层/和声声明 + 音乐语法校验）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
 
 ```text
 scene.yaml ─► validate ─► midi ─► render ─► export ─► scene.ogg + stems/
@@ -102,6 +102,17 @@ error[lint]: 4 grammar violation(s) against `grief`   # exit 2
 - 确定性压倒一切——同一输入必须产出可复现结果，这是 Agent 回归测试的地基。
 - 一切皆文本——DSL 由 git 原生 diff/merge/回滚，不自研版本控制。
 - 薄编排——不自研 DSP，不做 GUI/DAW，不内嵌作曲智能。
+
+## Agent 技能（第三方安装）
+
+[skills/scorekit/](skills/scorekit/) 是可安装的 Agent 技能（`SKILL.md` 格式）：让任何支持技能的编码 Agent 学会完整的 scorekit 创作工作流——写 scene DSL、validate/lint 闭环、build 出游戏资产，附实战作曲经验与完整 DSL 参考（[reference.md](skills/scorekit/reference.md)）。
+
+```bash
+npx skills add talkincode/scorekit           # skills CLI 生态
+# 或手动复制到你的 Agent 技能目录，例如：
+cp -r skills/scorekit ~/.claude/skills/      # Claude Code
+cp -r skills/scorekit ~/.agents/skills/      # 通用 agents 目录
+```
 
 ## 质量与验收
 
