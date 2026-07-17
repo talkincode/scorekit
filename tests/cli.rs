@@ -975,6 +975,133 @@ fn batch_duplicate_scene_stems_is_input_error() {
     assert!(!out_dir.exists(), "nothing should be built");
 }
 
+// ---- performance & harmony (M5) ----
+
+fn perf_yaml(seed: u64) -> String {
+    format!(
+        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nharmony: [i, iv, VI, v]\nperformance:\n  humanize: {{ timing_ms: 12, velocity: 8, seed: {seed} }}\n  swing: 0.12\n  legato: true\n  dynamics: {{ start: p, peak: f }}\ntracks:\n  - {{ instrument: piano, pattern: arpeggio, intensity: 0.6 }}\n  - {{ instrument: bass, pattern: bass, intensity: 0.5 }}\n  - {{ instrument: drums, pattern: drums, intensity: 0.5 }}\n"
+    )
+}
+
+#[test]
+fn performance_same_seed_is_byte_identical_different_seed_differs() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("perf.yaml");
+    fs::write(&scene, perf_yaml(42)).unwrap();
+    let (a, b, c) = (
+        dir.path().join("a.mid"),
+        dir.path().join("b.mid"),
+        dir.path().join("c.mid"),
+    );
+    for out in [&a, &b] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(out)
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        fs::read(&a).unwrap(),
+        fs::read(&b).unwrap(),
+        "same seed must reproduce the performance bit-exactly"
+    );
+    fs::write(&scene, perf_yaml(43)).unwrap();
+    bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&c)
+        .assert()
+        .success();
+    assert_ne!(
+        fs::read(&a).unwrap(),
+        fs::read(&c).unwrap(),
+        "a different seed must change the performance"
+    );
+}
+
+#[test]
+fn performance_build_keeps_loop_sample_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("perf.yaml");
+    fs::write(&scene, perf_yaml(42)).unwrap();
+    let wav = dir.path().join("perf.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .assert()
+        .success();
+    let want = exact_samples(2 * 4 * 480, 92, 44100);
+    let (spec, frames) = read_frames(&wav);
+    assert_eq!(
+        frames.len() as u64 / u64::from(spec.channels),
+        want,
+        "humanize/swing must not disturb the sample-exact loop length"
+    );
+}
+
+#[test]
+fn harmony_changes_notes_at_same_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.yaml");
+    let harm = dir.path().join("harm.yaml");
+    let base =
+        "tempo: 92\nkey: D_minor\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: arpeggio\n";
+    fs::write(&plain, base).unwrap();
+    fs::write(&harm, format!("harmony: [i, iv, VI, v]\n{base}")).unwrap();
+    let (m0, m1) = (dir.path().join("p.mid"), dir.path().join("h.mid"));
+    for (scene, out) in [(&plain, &m0), (&harm, &m1)] {
+        bin()
+            .arg("midi")
+            .arg(scene)
+            .arg("-o")
+            .arg(out)
+            .assert()
+            .success();
+    }
+    assert_ne!(
+        fs::read(&m0).unwrap(),
+        fs::read(&m1).unwrap(),
+        "a custom progression must change the notes"
+    );
+}
+
+#[test]
+fn validate_rejects_bad_swing_and_bad_numeral() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 92\nbars: 2\nperformance:\n  swing: 0.9\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("performance.swing"), "stderr: {stderr}");
+    fs::write(
+        &scene,
+        "tempo: 92\nbars: 2\nharmony: [viii]\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("harmony[0]"), "stderr: {stderr}");
+}
+
 // ---- export: sample-exact window ----
 
 #[test]

@@ -2,7 +2,10 @@
 //! Determinism rules: integer/table math only, track order preserved,
 //! no hash maps, no randomness, no time or environment reads.
 
-use crate::schema::{Instrument, Key, Pattern, Scene, TimeSig, parse_key, parse_time_signature};
+use crate::schema::{
+    Instrument, Key, Pattern, Performance, Scene, TimeSig, parse_key, parse_numeral,
+    parse_time_signature,
+};
 
 pub const PPQ: u32 = 480;
 const DRUM_CHANNEL: u8 = 9;
@@ -67,9 +70,8 @@ fn melody_note(key: Key, degree: i8) -> u8 {
     (base + i32::from(key.root_pc) + semis).clamp(0, 127) as u8
 }
 
-/// Root-position triad for the bar's chord.
-fn chord_for_bar(key: Key, bar: u32) -> [u8; 3] {
-    let prog = if key.minor { MINOR_PROG } else { MAJOR_PROG };
+/// Root-position triad for the bar's chord, one progression step per bar.
+fn chord_for_bar(key: Key, bar: u32, prog: &[usize]) -> [u8; 3] {
     let deg = prog[(bar as usize) % prog.len()];
     [
         degree_note(key, deg),
@@ -135,6 +137,16 @@ pub fn compose(scene: &Scene) -> ScoreIr {
     let bar_ticks = beat_ticks * u32::from(ts.num);
     let bars = u32::from(scene.bars);
     let total_ticks = bar_ticks * bars;
+    let prog: Vec<usize> = if scene.harmony.is_empty() {
+        let d = if key.minor { MINOR_PROG } else { MAJOR_PROG };
+        d.to_vec()
+    } else {
+        scene
+            .harmony
+            .iter()
+            .map(|n| parse_numeral(n).expect("scene is validated"))
+            .collect()
+    };
 
     let mut tracks = Vec::with_capacity(scene.tracks.len());
     let mut next_channel: u8 = 0;
@@ -154,7 +166,7 @@ pub fn compose(scene: &Scene) -> ScoreIr {
         };
         for bar in 0..harmony_bars {
             let start = bar * bar_ticks;
-            let chord = chord_for_bar(key, bar);
+            let chord = chord_for_bar(key, bar, &prog);
             match track.pattern {
                 Pattern::Melody => unreachable!("handled above"),
                 Pattern::Sustain => {
@@ -260,11 +272,90 @@ pub fn compose(scene: &Scene) -> ScoreIr {
         });
     }
 
+    if let Some(p) = &scene.performance {
+        apply_performance(&mut tracks, p, scene.tempo, beat_ticks, total_ticks);
+    }
+
     ScoreIr {
         tempo: scene.tempo,
         ts,
         total_ticks,
         tracks,
+    }
+}
+
+/// Tiny deterministic LCG (Knuth MMIX constants). No external RNG: identical
+/// seed must yield identical bytes on every platform, forever.
+struct Lcg(u64);
+
+impl Lcg {
+    /// Uniform value in `-max..=max`.
+    fn jitter(&mut self, max: u32) -> i64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        if max == 0 {
+            return 0;
+        }
+        let span = u64::from(max) * 2 + 1;
+        ((self.0 >> 33) % span) as i64 - i64::from(max)
+    }
+}
+
+/// Deterministic performance transforms, applied before any loop `repeat` so
+/// every pass carries the identical performance and loop math is untouched.
+/// Order: swing (grid) → dynamics (phrase) → legato (articulation) →
+/// humanize (noise on top).
+fn apply_performance(
+    tracks: &mut [TrackIr],
+    p: &Performance,
+    tempo: u16,
+    beat_ticks: u32,
+    total_ticks: u32,
+) {
+    if p.swing > 0.0 {
+        let offbeat = beat_ticks / 2;
+        let shift = (p.swing * offbeat as f32).round() as u32;
+        for track in tracks.iter_mut() {
+            for n in &mut track.notes {
+                if n.tick % beat_ticks == offbeat {
+                    n.tick += shift;
+                }
+            }
+        }
+    }
+    if let Some(d) = &p.dynamics {
+        // Sine arch: start level at both ends, peak at the midpoint — the
+        // loop boundary sees the same level on both sides by construction.
+        let (start, peak) = (d.start.factor(), d.peak.factor());
+        for track in tracks.iter_mut() {
+            for n in &mut track.notes {
+                let pos = f64::from(n.tick) / f64::from(total_ticks.max(1));
+                let arch = (std::f64::consts::PI * pos).sin();
+                let factor = f64::from(start) + f64::from(peak - start) * arch;
+                n.vel = (f64::from(n.vel) * factor).round().clamp(1.0, 127.0) as u8;
+            }
+        }
+    }
+    if p.legato {
+        for track in tracks.iter_mut().filter(|t| t.channel != DRUM_CHANNEL) {
+            for n in &mut track.notes {
+                n.dur += n.dur / 8;
+            }
+        }
+    }
+    if let Some(h) = &p.humanize {
+        let mut rng = Lcg(h.seed.wrapping_mul(2862933555777941757).wrapping_add(1));
+        let max_ticks = u32::from(h.timing_ms) * u32::from(tempo) * PPQ / 60_000;
+        for track in tracks.iter_mut() {
+            for n in &mut track.notes {
+                let dt = rng.jitter(max_ticks);
+                n.tick = (i64::from(n.tick) + dt).max(0) as u32;
+                let dv = rng.jitter(u32::from(h.velocity));
+                n.vel = (i64::from(n.vel) + dv).clamp(1, 127) as u8;
+            }
+        }
     }
 }
 

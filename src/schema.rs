@@ -30,6 +30,16 @@ pub struct Scene {
     /// Sorted map keeps compilation deterministic.
     #[serde(default)]
     pub motifs: BTreeMap<String, Vec<MotifNote>>,
+    /// Harmonic progression as diatonic roman numerals (`i`..`vii`, case
+    /// conventional), one chord per bar, cycled. All harmony-following
+    /// patterns (sustain/arpeggio/bass) derive from it. Default when absent:
+    /// I-V-vi-IV in major, i-VI-III-VII in minor.
+    #[serde(default)]
+    pub harmony: Vec<String>,
+    /// Performance rendering: deterministic humanization, dynamics, swing,
+    /// legato. Absent means the exact mechanical rendering (byte-stable).
+    #[serde(default)]
+    pub performance: Option<Performance>,
     /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one drums.
     pub tracks: Vec<Track>,
     /// Suite sections. When present, `build` emits one asset per section
@@ -103,6 +113,96 @@ fn default_intensity() -> f32 {
 
 fn default_section_intensity() -> f32 {
     1.0
+}
+
+/// Deterministic performance rendering. Every field has exact compilation
+/// semantics; identical input (including seed) yields identical MIDI bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Performance {
+    /// Seeded random velocity/timing variation per note.
+    #[serde(default)]
+    pub humanize: Option<Humanize>,
+    /// Swing feel: offbeat eighths delayed by this fraction of half a beat.
+    /// Range: 0.0..=0.5. Default: 0 (straight).
+    #[serde(default)]
+    pub swing: f32,
+    /// Extend melodic note durations so consecutive notes overlap slightly.
+    #[serde(default)]
+    pub legato: bool,
+    /// Dynamic arch over the piece: `start` level rising to `peak` at the
+    /// midpoint and returning to `start` — loop-safe by construction.
+    #[serde(default)]
+    pub dynamics: Option<Dynamics>,
+}
+
+/// Per-note random variation from a seeded deterministic generator.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Humanize {
+    /// Max onset shift in milliseconds, uniform in ±timing_ms. Range: 0..=50.
+    #[serde(default)]
+    pub timing_ms: u8,
+    /// Max velocity shift, uniform in ±velocity. Range: 0..=30.
+    #[serde(default)]
+    pub velocity: u8,
+    /// Random seed; same seed reproduces the same performance bit-exactly.
+    #[serde(default)]
+    pub seed: u64,
+}
+
+/// Dynamic arch endpoints as conventional marks.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Dynamics {
+    /// Level at the beginning and end of the piece.
+    pub start: Dyn,
+    /// Level reached at the midpoint.
+    pub peak: Dyn,
+}
+
+/// Dynamic marks, mapped to velocity multipliers at compile time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Dyn {
+    Pp,
+    P,
+    Mp,
+    Mf,
+    F,
+    Ff,
+}
+
+impl Dyn {
+    /// Velocity multiplier for this mark (mf ≈ written intensity).
+    pub fn factor(self) -> f32 {
+        match self {
+            Dyn::Pp => 0.55,
+            Dyn::P => 0.7,
+            Dyn::Mp => 0.85,
+            Dyn::Mf => 1.0,
+            Dyn::F => 1.15,
+            Dyn::Ff => 1.3,
+        }
+    }
+}
+
+/// Parse a diatonic roman numeral into a 0-based scale-degree index.
+/// Case is conventional only: triads are built from the scene's scale either
+/// way, so `VI` and `vi` select the same diatonic chord.
+pub fn parse_numeral(s: &str) -> std::result::Result<usize, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "i" => Ok(0),
+        "ii" => Ok(1),
+        "iii" => Ok(2),
+        "iv" => Ok(3),
+        "v" => Ok(4),
+        "vi" => Ok(5),
+        "vii" => Ok(6),
+        other => Err(format!(
+            "unknown numeral `{other}`, expected one of i..vii/I..VII"
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -421,6 +521,39 @@ impl Scene {
                     return fail(
                         &format!("motifs.{name}[{j}].beats"),
                         format!("{} out of range 0.125..=16", n.beats),
+                    );
+                }
+            }
+        }
+        if self.harmony.len() > 32 {
+            return fail(
+                "harmony",
+                format!("{} chords exceed the limit of 32", self.harmony.len()),
+            );
+        }
+        for (j, numeral) in self.harmony.iter().enumerate() {
+            if let Err(m) = parse_numeral(numeral) {
+                return fail(&format!("harmony[{j}]"), m);
+            }
+        }
+        if let Some(p) = &self.performance {
+            if !(0.0..=0.5).contains(&p.swing) {
+                return fail(
+                    "performance.swing",
+                    format!("{} out of range 0.0..=0.5", p.swing),
+                );
+            }
+            if let Some(h) = &p.humanize {
+                if h.timing_ms > 50 {
+                    return fail(
+                        "performance.humanize.timing_ms",
+                        format!("{} out of range 0..=50", h.timing_ms),
+                    );
+                }
+                if h.velocity > 30 {
+                    return fail(
+                        "performance.humanize.velocity",
+                        format!("{} out of range 0..=30", h.velocity),
                     );
                 }
             }

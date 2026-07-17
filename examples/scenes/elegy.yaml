@@ -7,6 +7,13 @@ time_signature: 4/4
 bars: 8
 loop: true
 
+harmony: [i, iv, VI, v] # plagal grief, avoiding the brighter default progression
+
+performance:
+  humanize: { timing_ms: 18, velocity: 10, seed: 7 } # a player, not a sequencer
+  legato: true # bow stays on the string
+  dynamics: { start: pp, peak: mf } # one long breath, returning to silence
+
 motifs:
   lament: # arch shape — reach upward, then a long descent to rest
     - { degree: 5, beats: 2 }

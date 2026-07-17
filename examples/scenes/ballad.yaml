@@ -7,6 +7,10 @@ time_signature: 3/4
 bars: 8
 loop: true
 
+performance:
+  humanize: { timing_ms: 10, velocity: 6, seed: 3 } # gentle rubato feel
+  legato: true
+
 motifs:
   song: # long singing phrases, one pass per 4-bar progression
     - { degree: 3, beats: 2 }

@@ -1,8 +1,10 @@
 # scorekit
 
-Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 可替换渲染后端（FluidSynth/TiMidity++ + SF2）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。
+**ScoreKit is an Agent-oriented Music Compiler, not an AI music generator.**
 
-> 状态：M0–M4 全部完成（全链路 + 无缝 loop + stems + suite 段落/motif + 双渲染后端 + Agent 工作流）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
+Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 可替换渲染后端（FluidSynth/TiMidity++ + SF2）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。它把高级音乐语义稳定地编译为可执行资产；创作智能永远属于上游 Agent。
+
+> 状态：M0–M5 全部完成（全链路 + 无缝 loop + stems + suite + 双后端 + Agent 工作流 + 演奏表现层/和声声明）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
 
 ```text
 scene.yaml ─► validate ─► midi ─► render ─► export ─► scene.ogg + stems/
@@ -46,6 +48,17 @@ cargo build --release
 ```
 
 退出码：`0` 成功 · `1` IO · `2` 输入非法 · `3` 依赖缺失 · `4` 外部工具失败。
+
+去掉"AI 味"——`harmony` 声明和声进行（所有伴奏轨一起变），`performance` 做确定性演奏渲染（同种子同字节）：
+
+```yaml
+harmony: [i, iv, VI, v]          # 罗马数字，一小节一个和弦，循环
+performance:
+  humanize: { timing_ms: 18, velocity: 10, seed: 7 }  # 种子化力度/时值抖动
+  legato: true                   # 旋律音衔接
+  swing: 0.12                    # 摇摆律动（0..0.5）
+  dynamics: { start: pp, peak: mf }  # 力度弧线，首尾同级、loop 安全
+```
 
 场景 DSL 示例见 [examples/scenes/](examples/scenes/)：[forest.yaml](examples/scenes/forest.yaml)（单场景）、[forest_suite.yaml](examples/scenes/forest_suite.yaml)（含 motifs/sections 的组曲），以及五种风格参考——[chiptune.yaml](examples/scenes/chiptune.yaml)（8-bit 游戏）、[dance.yaml](examples/scenes/dance.yaml)（动感舞曲）、[epic.yaml](examples/scenes/epic.yaml)（轻史诗）、[ballad.yaml](examples/scenes/ballad.yaml)（3/4 抒情）、[elegy.yaml](examples/scenes/elegy.yaml)（小提琴挽歌）。一次全部渲染：
 
