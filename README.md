@@ -1,8 +1,8 @@
 # scorekit
 
-Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 外部渲染（FluidSynth/SF2 起步）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。
+Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 可替换渲染后端（FluidSynth/TiMidity++ + SF2）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。
 
-> 状态：M0/M1/M2 已完成（全链路 + 无缝 loop + stems + suite 段落/motif）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
+> 状态：M0–M3 已完成（全链路 + 无缝 loop + stems + suite 段落/motif + 双渲染后端）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
 
 ```text
 scene.yaml ─► validate ─► midi ─► render ─► export ─► scene.ogg + stems/
@@ -10,7 +10,7 @@ scene.yaml ─► validate ─► midi ─► render ─► export ─► scene.
 
 ## 快速开始
 
-依赖：Rust、FluidSynth（`brew install fluid-synth` / `apt install fluidsynth`）、FFmpeg。
+依赖：Rust、FluidSynth（`brew install fluid-synth` / `apt install fluidsynth`）、FFmpeg；可选 TiMidity++（第二渲染后端，`--renderer timidity`）。
 
 ```bash
 ./scripts/fetch_assets.sh              # 下载测试用 GM SoundFont 到 assets/
@@ -32,7 +32,7 @@ cargo build --release
 ./target/release/scorekit midi examples/scenes/forest_suite.yaml \
     --section combat -o combat.mid   # 单独编译某一段
 
-# 分步执行
+# 分步执行（--renderer timidity 可切换第二后端，产物结构与长度不变）
 ./target/release/scorekit midi examples/scenes/forest.yaml -o forest.mid
 ./target/release/scorekit render forest.mid --soundfont assets/TimGM6mb.sf2 -o forest.wav
 ./target/release/scorekit export forest.wav -o forest.ogg

@@ -5,6 +5,14 @@ use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Which external synthesizer turns MIDI + SF2 into PCM. The rest of the
+/// pipeline (loop-seal surgery, stems, export) is renderer-agnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Renderer {
+    Fluidsynth,
+    Timidity,
+}
+
 /// Sibling temp path that keeps the target extension (needed for type sniffing).
 fn tmp_sibling(output: &Path) -> PathBuf {
     let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
@@ -141,8 +149,12 @@ fn require_sf2(path: &Path) -> Result<()> {
     }
 }
 
-/// Render a MIDI file to WAV via FluidSynth.
+/// Render a MIDI file to WAV via the selected renderer backend.
+///
+/// Both backends share the SF2 preflight and the same "exit 0 but broken"
+/// defences; the loop-seal math downstream is renderer-agnostic.
 pub fn render(
+    renderer: Renderer,
     midi: &Path,
     soundfont: &Path,
     output: &Path,
@@ -151,28 +163,86 @@ pub fn render(
 ) -> Result<()> {
     require_file(midi, "midi")?;
     require_sf2(soundfont)?;
-    run_to_file(
-        "fluidsynth",
-        "install FluidSynth (e.g. `brew install fluid-synth` or `apt install fluidsynth`)",
-        // FluidSynth exits 0 even when the SoundFont fails to load and the
-        // render is silent; treat its error lines as failures.
-        &["fluidsynth: error:", "Failed to load the SoundFont"],
-        |tmp| {
-            vec![
-                "-ni".into(),
-                "-q".into(),
-                "-g".into(),
-                gain.to_string().into(),
-                "-r".into(),
-                sample_rate.to_string().into(),
-                "-F".into(),
-                tmp.as_os_str().to_owned(),
-                soundfont.as_os_str().to_owned(),
-                midi.as_os_str().to_owned(),
-            ]
-        },
-        output,
-    )
+    let result = match renderer {
+        Renderer::Fluidsynth => run_to_file(
+            "fluidsynth",
+            "install FluidSynth (e.g. `brew install fluid-synth` or `apt install fluidsynth`)",
+            // FluidSynth exits 0 even when the SoundFont fails to load and the
+            // render is silent; treat its error lines as failures.
+            &["fluidsynth: error:", "Failed to load the SoundFont"],
+            |tmp| {
+                vec![
+                    "-ni".into(),
+                    "-q".into(),
+                    "-g".into(),
+                    gain.to_string().into(),
+                    "-r".into(),
+                    sample_rate.to_string().into(),
+                    "-F".into(),
+                    tmp.as_os_str().to_owned(),
+                    soundfont.as_os_str().to_owned(),
+                    midi.as_os_str().to_owned(),
+                ]
+            },
+            output,
+        ),
+        Renderer::Timidity => {
+            // TiMidity++ exits 0 and silently falls back to its built-in
+            // patches when the SoundFont cannot be read — worse than silence:
+            // wrong timbres. `-idq` keeps its `***` error lines on stderr
+            // (`-idqq` would suppress them) while staying quiet on success.
+            let cfg = format!("soundfont \"{}\"", soundfont.display());
+            // TiMidity's -A amplification is 0..=800 (%), default 70.
+            let amp = (gain * 100.0).round().clamp(0.0, 800.0) as u32;
+            run_to_file(
+                "timidity",
+                "install TiMidity++ (e.g. `brew install timidity` or `apt install timidity`)",
+                &[
+                    "*** not a RIFF file",
+                    "*** illegal",
+                    "Can't open soundfont file",
+                    "No instrument mapped",
+                ],
+                |tmp| {
+                    vec![
+                        "-x".into(),
+                        cfg.into(),
+                        "-idq".into(),
+                        format!("-A{amp}").into(),
+                        "-s".into(),
+                        sample_rate.to_string().into(),
+                        "-Ow".into(),
+                        "-o".into(),
+                        tmp.as_os_str().to_owned(),
+                        midi.as_os_str().to_owned(),
+                    ]
+                },
+                output,
+            )
+        }
+    };
+    result?;
+    // Renderer-agnostic backstop: TiMidity writes a header-only WAV (zero
+    // frames) for some corrupt SoundFonts while exiting 0 with a clean stderr.
+    let frames = hound::WavReader::open(output)
+        .map(|r| r.duration())
+        .unwrap_or(0);
+    if frames == 0 {
+        let _ = std::fs::remove_file(output);
+        return Err(Error::ToolFailure {
+            tool: renderer_tool(renderer).to_owned(),
+            status: "exit 0 but zero audio frames".to_owned(),
+            stderr: String::new(),
+        });
+    }
+    Ok(())
+}
+
+fn renderer_tool(renderer: Renderer) -> &'static str {
+    match renderer {
+        Renderer::Fluidsynth => "fluidsynth",
+        Renderer::Timidity => "timidity",
+    }
 }
 
 /// Convert audio via FFmpeg. The codec follows the output extension:

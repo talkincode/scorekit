@@ -678,6 +678,78 @@ fn example_suite_validates() {
         .success();
 }
 
+// ---- renderer backends (M3) ----
+
+/// Same DSL, second backend: identical sample-exact length, different timbre.
+#[test]
+fn build_timidity_backend_same_length_different_timbre() {
+    let dir = tempfile::tempdir().unwrap();
+    let tim = dir.path().join("tim.wav");
+    let flu = dir.path().join("flu.wav");
+    for (out, renderer) in [(&tim, "timidity"), (&flu, "fluidsynth")] {
+        bin()
+            .arg("build")
+            .arg(forest())
+            .arg("--soundfont")
+            .arg(sf2())
+            .arg("-o")
+            .arg(out)
+            .args(["--renderer", renderer])
+            .assert()
+            .success();
+    }
+    let (spec_t, t) = read_frames(&tim);
+    let (spec_f, f) = read_frames(&flu);
+    let expected = forest_loop_samples() * u64::from(spec_t.channels);
+    assert_eq!(t.len() as u64, expected, "timidity length");
+    assert_eq!(f.len() as u64, expected, "fluidsynth length");
+    assert_eq!(spec_t.sample_rate, spec_f.sample_rate);
+    assert_ne!(t, f, "backends should produce different renders");
+    // Both produce actual audio, not silence.
+    assert!(t.iter().any(|&s| s.abs() > 100), "timidity is silent");
+    assert!(f.iter().any(|&s| s.abs() > 100), "fluidsynth is silent");
+}
+
+/// Corrupt SF2 that passes the magic pre-check: TiMidity exits 0 and writes a
+/// header-only WAV; the zero-frame backstop must turn that into a failure.
+#[test]
+fn render_timidity_corrupt_soundfont_fails_without_partial_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let mid = make_midi(dir.path());
+    let fake = dir.path().join("fake.sf2");
+    let mut bytes = b"RIFF\x10\x00\x00\x00sfbk".to_vec();
+    bytes.extend_from_slice(&[0u8; 16]);
+    fs::write(&fake, bytes).unwrap();
+    bin()
+        .arg("render")
+        .arg(&mid)
+        .arg("--soundfont")
+        .arg(&fake)
+        .arg("-o")
+        .arg(dir.path().join("scene.wav"))
+        .args(["--renderer", "timidity"])
+        .assert()
+        .code(4);
+    assert_dir_contains_exactly(dir.path(), &["scene.mid", "fake.sf2"]);
+}
+
+#[test]
+fn render_timidity_missing_soundfont_is_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let mid = make_midi(dir.path());
+    bin()
+        .arg("render")
+        .arg(&mid)
+        .arg("--soundfont")
+        .arg(dir.path().join("nope.sf2"))
+        .arg("-o")
+        .arg(dir.path().join("scene.wav"))
+        .args(["--renderer", "timidity"])
+        .assert()
+        .code(2);
+    assert_dir_contains_exactly(dir.path(), &["scene.mid"]);
+}
+
 // ---- export: sample-exact window ----
 
 #[test]

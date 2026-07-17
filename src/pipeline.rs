@@ -21,6 +21,7 @@ pub struct BuildArgs<'a> {
     pub scene: &'a Path,
     pub soundfont: &'a Path,
     pub output: &'a Path,
+    pub renderer: tools::Renderer,
     pub sample_rate: u32,
     pub gain: f32,
     pub quality: u8,
@@ -216,7 +217,14 @@ fn build_one(
 
     // Full mix: render, cut sample-exactly in-process, then encode if needed.
     tools::write_atomic(&mid, &midi_bytes(scene, passes, None)?)?;
-    tools::render(&mid, args.soundfont, &raw, args.sample_rate, args.gain)?;
+    tools::render(
+        args.renderer,
+        &mid,
+        args.soundfont,
+        &raw,
+        args.sample_rate,
+        args.gain,
+    )?;
     produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
 
     // Stems: staged in a temp dir, swapped in only when every track rendered.
@@ -234,7 +242,14 @@ fn build_one(
             let mid_i = staging.join(format!("{:02}.mid", i + 1));
             let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
             tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
-            tools::render(&mid_i, args.soundfont, &raw_i, args.sample_rate, args.gain)?;
+            tools::render(
+                args.renderer,
+                &mid_i,
+                args.soundfont,
+                &raw_i,
+                args.sample_rate,
+                args.gain,
+            )?;
             produce(
                 &raw_i,
                 &staging.join(&name),

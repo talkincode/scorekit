@@ -47,13 +47,16 @@ enum Command {
         #[arg(long)]
         section: Option<String>,
     },
-    /// Render a MIDI file to WAV via FluidSynth + SoundFont
+    /// Render a MIDI file to WAV via a synthesizer backend + SoundFont
     Render {
         midi: PathBuf,
         #[arg(long)]
         soundfont: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        /// Synthesizer backend
+        #[arg(long, value_enum, default_value_t = tools::Renderer::Fluidsynth)]
+        renderer: tools::Renderer,
         #[arg(long, default_value_t = 44100)]
         sample_rate: u32,
         #[arg(long, default_value_t = 0.8)]
@@ -82,6 +85,9 @@ enum Command {
         /// Output audio file (.ogg or .wav)
         #[arg(short, long)]
         output: PathBuf,
+        /// Synthesizer backend
+        #[arg(long, value_enum, default_value_t = tools::Renderer::Fluidsynth)]
+        renderer: tools::Renderer,
         #[arg(long, default_value_t = 44100)]
         sample_rate: u32,
         #[arg(long, default_value_t = 0.8)]
@@ -161,10 +167,11 @@ fn run(command: &Command) -> Result<String> {
             midi,
             soundfont,
             output,
+            renderer,
             sample_rate,
             gain,
         } => {
-            tools::render(midi, soundfont, output, *sample_rate, *gain)?;
+            tools::render(*renderer, midi, soundfont, output, *sample_rate, *gain)?;
             Ok(format!("wrote {}", output.display()))
         }
         Command::Export {
@@ -206,6 +213,7 @@ fn run(command: &Command) -> Result<String> {
             scene,
             soundfont,
             output,
+            renderer,
             sample_rate,
             gain,
             quality,
@@ -217,6 +225,7 @@ fn run(command: &Command) -> Result<String> {
             scene,
             soundfont,
             output,
+            renderer: *renderer,
             sample_rate: *sample_rate,
             gain: *gain,
             quality: *quality,
