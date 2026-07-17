@@ -498,6 +498,37 @@ fn build_stems_are_aligned_and_sum_to_mix() {
 }
 
 #[test]
+fn build_ogg_stems_leave_no_intermediates() {
+    // Regression: encoded stems go through a `.cut.wav` intermediate inside
+    // the staging dir; it must not ship inside the renamed stems folder.
+    let dir = tempfile::tempdir().unwrap();
+    let ogg = dir.path().join("forest.ogg");
+    bin()
+        .arg("build")
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&ogg)
+        .arg("--stems")
+        .assert()
+        .success();
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["forest.ogg", "forest.meta.json", "forest.stems"],
+    );
+    assert_dir_contains_exactly(
+        &dir.path().join("forest.stems"),
+        &[
+            "01-strings.ogg",
+            "02-piano.ogg",
+            "03-bass.ogg",
+            "04-drums.ogg",
+        ],
+    );
+}
+
+#[test]
 fn build_corrupt_soundfont_leaves_no_partial_output_or_stems() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("scene.yaml");

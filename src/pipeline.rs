@@ -214,7 +214,14 @@ fn produce(
         let cut = output.with_extension("cut.wav");
         cleanup.files.push(cut.clone());
         audio::extract(raw, &cut, window)?;
-        tools::export(&cut, output, quality)
+        tools::export(&cut, output, quality)?;
+        // Remove eagerly: stem cuts live in the staging dir, which is renamed
+        // into place before the deferred Cleanup runs — the recorded path
+        // would go stale and the cut would ship inside the stems folder.
+        if !cleanup.keep {
+            let _ = std::fs::remove_file(&cut);
+        }
+        Ok(())
     }
 }
 
