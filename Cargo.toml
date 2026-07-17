@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.2", features = ["derive"] }
+hound = "3.5.1"
 midly = "0.5.3"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -14,6 +15,5 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
-hound = "3.5.1"
 predicates = "3.1.4"
 tempfile = "3.27.0"

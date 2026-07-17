@@ -329,6 +329,27 @@ fn export_missing_input_is_input_error() {
 
 // ---- build (full chain) ----
 
+/// Test-side reimplementation of the loop-length math (`midi::exact_samples`):
+/// ticks × (60_000_000 / bpm) × rate / (480 × 1_000_000), rounded.
+fn exact_samples(ticks: u64, bpm: u16, rate: u32) -> u64 {
+    let micros_per_beat = 60_000_000u64 / u64::from(bpm);
+    let num = u128::from(ticks) * u128::from(micros_per_beat) * u128::from(rate);
+    let den = 480u128 * 1_000_000u128;
+    ((num + den / 2) / den) as u64
+}
+
+/// forest.yaml: 8 bars of 4/4 at 92 BPM, PPQ 480.
+fn forest_loop_samples() -> u64 {
+    exact_samples(8 * 4 * 480, 92, 44100)
+}
+
+fn read_frames(path: &Path) -> (hound::WavSpec, Vec<i16>) {
+    let mut r = hound::WavReader::open(path).unwrap();
+    let spec = r.spec();
+    let samples = r.samples::<i16>().map(|s| s.unwrap()).collect();
+    (spec, samples)
+}
+
 #[test]
 fn build_full_chain_scene_to_ogg() {
     let dir = tempfile::tempdir().unwrap();
@@ -344,5 +365,193 @@ fn build_full_chain_scene_to_ogg() {
         .success();
     assert!(fs::metadata(&ogg).unwrap().len() > 10_000);
     // Intermediates are cleaned up unless --keep-intermediates is passed.
-    assert_dir_contains_exactly(dir.path(), &["forest.ogg"]);
+    assert_dir_contains_exactly(dir.path(), &["forest.ogg", "forest.meta.json"]);
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["loop"], true);
+    assert_eq!(meta["loop_samples"], forest_loop_samples());
+    assert_eq!(meta["audio"], "forest.ogg");
+}
+
+#[test]
+fn build_loop_wav_is_sample_exact_and_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("forest.wav");
+    bin()
+        .arg("build")
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .arg("--keep-intermediates")
+        .assert()
+        .success();
+    let l = forest_loop_samples() as usize;
+    let (spec, out) = read_frames(&wav);
+    let ch = spec.channels as usize;
+    assert_eq!(out.len(), l * ch, "loop asset must be exactly L frames");
+    // The seal guarantee, bit-exact: the window is raw[L, 2L) and its final
+    // frame equals raw[L-1], so wrap-around reproduces an adjacent-sample
+    // pair of the original continuous render.
+    let (_, raw) = read_frames(&dir.path().join("forest.raw.wav"));
+    assert_eq!(&out[..ch], &raw[l * ch..(l + 1) * ch], "out[0] == raw[L]");
+    assert_eq!(
+        &out[(l - 1) * ch..],
+        &raw[(l - 1) * ch..l * ch],
+        "out[last] == raw[L-1]"
+    );
+}
+
+#[test]
+fn build_nonloop_wav_has_exact_padded_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("sting.yaml");
+    // 2 bars of 4/4 at 120 BPM: exactly 4s of music (176400 frames),
+    // plus the default 4s decay tail = 352800 frames total.
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("sting.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .assert()
+        .success();
+    let expected = exact_samples(2 * 4 * 480, 120, 44100) + 4 * 44100;
+    assert_eq!(expected, 352_800);
+    let (spec, out) = read_frames(&wav);
+    assert_eq!(out.len() as u64, expected * u64::from(spec.channels));
+}
+
+#[test]
+fn build_stems_are_aligned_and_sum_to_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("forest.wav");
+    bin()
+        .arg("build")
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .arg("--stems")
+        .assert()
+        .success();
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["forest.wav", "forest.meta.json", "forest.stems"],
+    );
+    let stems_dir = dir.path().join("forest.stems");
+    assert_dir_contains_exactly(
+        &stems_dir,
+        &[
+            "01-strings.wav",
+            "02-piano.wav",
+            "03-bass.wav",
+            "04-drums.wav",
+        ],
+    );
+    let l = forest_loop_samples() as usize;
+    let (spec, mix) = read_frames(&wav);
+    let ch = spec.channels as usize;
+    let stems: Vec<Vec<i16>> = [
+        "01-strings.wav",
+        "02-piano.wav",
+        "03-bass.wav",
+        "04-drums.wav",
+    ]
+    .iter()
+    .map(|n| {
+        let (s, data) = read_frames(&stems_dir.join(n));
+        assert_eq!(data.len(), l * ch, "stem {n} must be exactly L frames");
+        assert_eq!(s.channels, spec.channels);
+        data
+    })
+    .collect();
+    // Stems are cut with the same linear seal, so their sample-wise sum must
+    // reconstruct the full mix (small tolerance: independent rounding plus
+    // synth mixing noise).
+    let n = mix.len();
+    let (mut diff2, mut ref2) = (0f64, 0f64);
+    for i in 0..n {
+        let s: f64 = stems.iter().map(|st| f64::from(st[i])).sum();
+        let m = f64::from(mix[i]);
+        diff2 += (s - m) * (s - m);
+        ref2 += m * m;
+    }
+    let ratio = (diff2 / ref2.max(1.0)).sqrt();
+    assert!(
+        ratio < 0.02,
+        "stems do not sum to mix: RMS ratio {ratio:.4}"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["stems"].as_array().unwrap().len(), 4);
+    assert_eq!(meta["stems"][0], "forest.stems/01-strings.wav");
+}
+
+#[test]
+fn build_corrupt_soundfont_leaves_no_partial_output_or_stems() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\nloop: true\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let fake = dir.path().join("fake.sf2");
+    let mut bytes = b"RIFF\x10\x00\x00\x00sfbk".to_vec();
+    bytes.extend_from_slice(&[0u8; 16]);
+    fs::write(&fake, bytes).unwrap();
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(&fake)
+        .arg("-o")
+        .arg(dir.path().join("out.wav"))
+        .arg("--stems")
+        .assert()
+        .code(4);
+    // No partial audio, no stems dir, no meta.json, no temp litter.
+    assert_dir_contains_exactly(dir.path(), &["scene.yaml", "fake.sf2"]);
+}
+
+// ---- export: sample-exact window ----
+
+#[test]
+fn export_seek_take_cuts_bit_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(&input, spec).unwrap();
+    for i in 0..1000i16 {
+        w.write_sample(i).unwrap();
+    }
+    w.finalize().unwrap();
+    let out = dir.path().join("out.wav");
+    bin()
+        .arg("export")
+        .arg(&input)
+        .arg("-o")
+        .arg(&out)
+        .args(["--seek-samples", "100", "--take-samples", "300"])
+        .assert()
+        .success();
+    let (_, data) = read_frames(&out);
+    assert_eq!(data.len(), 300);
+    assert_eq!(data[0], 100);
+    assert_eq!(data[299], 399);
 }

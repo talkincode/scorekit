@@ -1,6 +1,8 @@
+mod audio;
 mod composer;
 mod error;
 mod midi;
+mod pipeline;
 mod schema;
 mod tools;
 
@@ -35,6 +37,12 @@ enum Command {
         scene: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        /// Render the material N times back to back (seamless-loop workflows)
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=8))]
+        passes: u8,
+        /// Keep only the given track (0-based), preserving its mix channel
+        #[arg(long)]
+        solo: Option<usize>,
     },
     /// Render a MIDI file to WAV via FluidSynth + SoundFont
     Render {
@@ -48,7 +56,7 @@ enum Command {
         #[arg(long, default_value_t = 0.8)]
         gain: f32,
     },
-    /// Convert rendered audio to OGG/Vorbis via FFmpeg
+    /// Convert rendered audio via FFmpeg (.ogg → Vorbis, .wav → PCM)
     Export {
         input: PathBuf,
         #[arg(short, long)]
@@ -56,12 +64,19 @@ enum Command {
         /// Vorbis quality 0..=10
         #[arg(long, default_value_t = 5)]
         quality: u8,
+        /// Skip this many samples from the start
+        #[arg(long, default_value_t = 0)]
+        seek_samples: u64,
+        /// Emit exactly this many samples (trims and zero-pads as needed)
+        #[arg(long)]
+        take_samples: Option<u64>,
     },
-    /// Full chain: scene -> MIDI -> WAV -> OGG
+    /// Full chain: scene -> MIDI -> WAV -> sample-exact loop/stems + meta.json
     Build {
         scene: PathBuf,
         #[arg(long)]
         soundfont: PathBuf,
+        /// Output audio file (.ogg or .wav)
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long, default_value_t = 44100)]
@@ -70,16 +85,24 @@ enum Command {
         gain: f32,
         #[arg(long, default_value_t = 5)]
         quality: u8,
-        /// Keep the intermediate .mid and .wav next to the output
+        /// Also render one sample-aligned stem per track into `<output>.stems/`
+        #[arg(long)]
+        stems: bool,
+        /// Decay tail in seconds kept after non-loop scenes
+        #[arg(long, default_value_t = 4.0)]
+        tail: f64,
+        /// Loop-seal crossfade in milliseconds (loop scenes only)
+        #[arg(long, default_value_t = 50)]
+        crossfade_ms: u32,
+        /// Keep the intermediate .mid and .raw.wav next to the output
         #[arg(long)]
         keep_intermediates: bool,
     },
 }
 
-fn compile_midi(scene_path: &Path, output: &Path) -> Result<()> {
+fn compile_midi(scene_path: &Path, output: &Path, passes: u8, solo: Option<usize>) -> Result<()> {
     let scene = schema::load_scene(scene_path)?;
-    let ir = composer::compose(&scene);
-    let bytes = midi::to_smf_bytes(&ir);
+    let bytes = pipeline::midi_bytes(&scene, passes, solo)?;
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -103,8 +126,13 @@ fn run(command: &Command) -> Result<String> {
             ))
         }
         Command::Schema => Ok(schema::schema_json()),
-        Command::Midi { scene, output } => {
-            compile_midi(scene, output)?;
+        Command::Midi {
+            scene,
+            output,
+            passes,
+            solo,
+        } => {
+            compile_midi(scene, output, *passes, *solo)?;
             Ok(format!("wrote {}", output.display()))
         }
         Command::Render {
@@ -121,8 +149,35 @@ fn run(command: &Command) -> Result<String> {
             input,
             output,
             quality,
+            seek_samples,
+            take_samples,
         } => {
-            tools::export(input, output, *quality)?;
+            if *seek_samples > 0 || take_samples.is_some() {
+                let take = match take_samples {
+                    Some(t) => *t,
+                    None => audio::frames(input)?.saturating_sub(*seek_samples),
+                };
+                let window = audio::Window {
+                    skip: *seek_samples,
+                    take,
+                    crossfade: 0,
+                };
+                let wav_out = output
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+                if wav_out {
+                    audio::extract(input, output, window)?;
+                } else {
+                    let cut = output.with_extension("cut.wav");
+                    audio::extract(input, &cut, window)?;
+                    let result = tools::export(&cut, output, *quality);
+                    let _ = std::fs::remove_file(&cut);
+                    result?;
+                }
+            } else {
+                tools::export(input, output, *quality)?;
+            }
             Ok(format!("wrote {}", output.display()))
         }
         Command::Build {
@@ -132,20 +187,22 @@ fn run(command: &Command) -> Result<String> {
             sample_rate,
             gain,
             quality,
+            stems,
+            tail,
+            crossfade_ms,
             keep_intermediates,
-        } => {
-            let mid = output.with_extension("mid");
-            let wav = output.with_extension("wav");
-            compile_midi(scene, &mid)?;
-            let result = tools::render(&mid, soundfont, &wav, *sample_rate, *gain)
-                .and_then(|()| tools::export(&wav, output, *quality));
-            if !keep_intermediates {
-                let _ = std::fs::remove_file(&mid);
-                let _ = std::fs::remove_file(&wav);
-            }
-            result?;
-            Ok(format!("wrote {}", output.display()))
-        }
+        } => pipeline::build(&pipeline::BuildArgs {
+            scene,
+            soundfont,
+            output,
+            sample_rate: *sample_rate,
+            gain: *gain,
+            quality: *quality,
+            stems: *stems,
+            tail: *tail,
+            crossfade_ms: *crossfade_ms,
+            keep_intermediates: *keep_intermediates,
+        }),
     }
 }
 

@@ -199,3 +199,30 @@ pub fn compose(scene: &Scene) -> ScoreIr {
         tracks,
     }
 }
+
+/// Repeat the composed material `times` back to back (tick-shifted copies).
+/// Used for seamless-loop rendering: render two passes, keep the second.
+pub fn repeat(ir: &mut ScoreIr, times: u8) {
+    if times <= 1 {
+        return;
+    }
+    let base = ir.total_ticks;
+    for track in &mut ir.tracks {
+        let one = track.notes.clone();
+        for pass in 1..u32::from(times) {
+            let offset = base * pass;
+            track.notes.extend(one.iter().map(|n| NoteEvent {
+                tick: n.tick + offset,
+                ..*n
+            }));
+        }
+    }
+    ir.total_ticks = base * u32::from(times);
+}
+
+/// Keep only the track at `index`, preserving its original channel/program
+/// so a solo render is bit-compatible with its part in the full mix.
+pub fn solo(ir: &mut ScoreIr, index: usize) {
+    let track = ir.tracks.remove(index);
+    ir.tracks = vec![track];
+}

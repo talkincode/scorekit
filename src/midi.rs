@@ -72,6 +72,20 @@ fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
     events
 }
 
+/// Quarter-note duration in microseconds as written into the MIDI file.
+/// Integer truncation here is the tempo the synthesizer actually plays, so
+/// all sample math must go through this value.
+pub fn micros_per_beat(tempo: u16) -> u32 {
+    60_000_000 / u32::from(tempo)
+}
+
+/// Exact number of audio samples covering `ticks` at the quantized MIDI tempo.
+pub fn exact_samples(ticks: u32, tempo: u16, sample_rate: u32) -> u64 {
+    let num = u128::from(ticks) * u128::from(micros_per_beat(tempo)) * u128::from(sample_rate);
+    let den = u128::from(crate::composer::PPQ) * 1_000_000u128;
+    ((num + den / 2) / den) as u64
+}
+
 pub fn to_smf_bytes(ir: &ScoreIr) -> Vec<u8> {
     let header = Header::new(
         Format::Parallel,
@@ -80,7 +94,7 @@ pub fn to_smf_bytes(ir: &ScoreIr) -> Vec<u8> {
     let mut smf = Smf::new(header);
 
     let denom_pow2 = ir.ts.den.trailing_zeros() as u8;
-    let micros_per_beat = 60_000_000u32 / u32::from(ir.tempo);
+    let micros = micros_per_beat(ir.tempo);
     let conductor = vec![
         TrackEvent {
             delta: u28::new(0),
@@ -88,7 +102,7 @@ pub fn to_smf_bytes(ir: &ScoreIr) -> Vec<u8> {
         },
         TrackEvent {
             delta: u28::new(0),
-            kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(micros_per_beat))),
+            kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(micros))),
         },
         TrackEvent {
             delta: u28::new(ir.total_ticks),

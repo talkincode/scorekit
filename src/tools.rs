@@ -19,8 +19,18 @@ fn io_err(path: &Path, source: std::io::Error) -> Error {
     }
 }
 
+fn ensure_parent(output: &Path) -> Result<()> {
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
+    }
+    Ok(())
+}
+
 /// Write bytes atomically: temp sibling + rename.
 pub fn write_atomic(output: &Path, bytes: &[u8]) -> Result<()> {
+    ensure_parent(output)?;
     let tmp = tmp_sibling(output);
     std::fs::write(&tmp, bytes).map_err(|e| io_err(&tmp, e))?;
     std::fs::rename(&tmp, output).map_err(|e| {
@@ -57,11 +67,7 @@ fn run_to_file(
     build_args: impl FnOnce(&Path) -> Vec<std::ffi::OsString>,
     output: &Path,
 ) -> Result<()> {
-    if let Some(parent) = output.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
-    }
+    ensure_parent(output)?;
     let tmp = tmp_sibling(output);
     let args = build_args(&tmp);
     let result = Command::new(tool).args(&args).output();
@@ -169,13 +175,24 @@ pub fn render(
     )
 }
 
-/// Convert audio (WAV → OGG/Vorbis) via FFmpeg.
-/// Prefers `libvorbis`; falls back to the built-in `vorbis` encoder when the
-/// local FFmpeg build lacks it (quality is lower but the pipeline stays usable).
+/// Convert audio via FFmpeg. The codec follows the output extension:
+/// `.wav` → PCM s16, anything else → OGG/Vorbis, preferring `libvorbis` and
+/// falling back to the built-in `vorbis` encoder when the local FFmpeg build
+/// lacks it. Sample-exact cutting lives in `audio::extract`, not here.
 pub fn export(input: &Path, output: &Path, quality: u8) -> Result<()> {
     require_file(input, "input")?;
-    let attempts: [(&str, &[&str]); 2] =
-        [("libvorbis", &[]), ("vorbis", &["-strict", "experimental"])];
+    let wav_out = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    let attempts: &[(&str, &[&str])] = if wav_out {
+        &[("pcm_s16le", &[])]
+    } else {
+        &[
+            ("libvorbis", &["-q:a"]),
+            ("vorbis", &["-strict", "experimental", "-q:a"]),
+        ]
+    };
     let mut last: Option<Error> = None;
     for (codec, extra) in attempts {
         let result = run_to_file(
@@ -190,14 +207,15 @@ pub fn export(input: &Path, output: &Path, quality: u8) -> Result<()> {
                     "-y".into(),
                     "-i".into(),
                     input.as_os_str().to_owned(),
-                    "-c:a".into(),
-                    codec.into(),
                 ];
-                for a in extra {
+                args.push("-c:a".into());
+                args.push((*codec).into());
+                for a in *extra {
                     args.push((*a).into());
+                    if *a == "-q:a" {
+                        args.push(quality.to_string().into());
+                    }
                 }
-                args.push("-q:a".into());
-                args.push(quality.to_string().into());
                 args.push(tmp.as_os_str().to_owned());
                 args
             },
