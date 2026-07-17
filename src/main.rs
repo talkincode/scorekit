@@ -2,6 +2,7 @@ mod audio;
 mod composer;
 mod diff;
 mod error;
+mod grammar;
 mod midi;
 mod pipeline;
 mod schema;
@@ -31,8 +32,19 @@ struct Cli {
 enum Command {
     /// Validate a scene file
     Validate { scene: PathBuf },
-    /// Print the JSON Schema of the scene DSL
-    Schema,
+    /// Print the JSON Schema of the scene DSL (or the grammar DSL)
+    Schema {
+        /// Print the grammar-profile schema instead of the scene schema
+        #[arg(long)]
+        grammar: bool,
+    },
+    /// Check a scene against an aesthetic grammar profile
+    Lint {
+        scene: PathBuf,
+        /// Grammar profile (YAML); see `scorekit schema --grammar`
+        #[arg(long)]
+        grammar: PathBuf,
+    },
     /// Compile a scene to a Standard MIDI File
     Midi {
         scene: PathBuf,
@@ -187,7 +199,36 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 s.tempo
             ))
         }
-        Command::Schema => Ok(schema::schema_json()),
+        Command::Schema { grammar } => Ok(if *grammar {
+            grammar::schema_json()
+        } else {
+            schema::schema_json()
+        }),
+        Command::Lint {
+            scene,
+            grammar: profile,
+        } => {
+            let s = schema::load_scene(scene)?;
+            let g = grammar::load_grammar(profile)?;
+            let violations = grammar::check(&s, &g);
+            if violations.is_empty() {
+                Ok(format!(
+                    "ok: conforms to `{}` ({} rule(s) checked)",
+                    g.name,
+                    g.rules.active_count()
+                ))
+            } else {
+                Err(error::Error::Lint {
+                    grammar: g.name.clone(),
+                    count: violations.len(),
+                    porcelain: violations
+                        .iter()
+                        .map(grammar::Violation::porcelain)
+                        .collect(),
+                    json: violations.iter().map(grammar::Violation::to_json).collect(),
+                })
+            }
+        }
         Command::Midi {
             scene,
             output,

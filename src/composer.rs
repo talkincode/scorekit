@@ -43,6 +43,11 @@ const MINOR_SCALE: [u8; 7] = [0, 2, 3, 5, 7, 8, 10];
 const MAJOR_PROG: [usize; 4] = [0, 4, 5, 3]; // I V vi IV
 const MINOR_PROG: [usize; 4] = [0, 5, 2, 6]; // i VI III VII
 
+/// The progression used when a scene declares no `harmony`.
+pub fn default_progression(minor: bool) -> [usize; 4] {
+    if minor { MINOR_PROG } else { MAJOR_PROG }
+}
+
 fn scale(key: Key) -> [u8; 7] {
     if key.minor { MINOR_SCALE } else { MAJOR_SCALE }
 }
@@ -138,7 +143,7 @@ pub fn compose(scene: &Scene) -> ScoreIr {
     let bars = u32::from(scene.bars);
     let total_ticks = bar_ticks * bars;
     let prog: Vec<usize> = if scene.harmony.is_empty() {
-        let d = if key.minor { MINOR_PROG } else { MAJOR_PROG };
+        let d = default_progression(key.minor);
         d.to_vec()
     } else {
         scene

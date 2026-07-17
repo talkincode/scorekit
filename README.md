@@ -45,6 +45,11 @@ cargo build --release
 ./target/release/scorekit diff old.yaml new.yaml       # 语义 diff（--json 出 JSON 数组）
 ./target/release/scorekit batch a.yaml b.yaml --soundfont game.sf2 \
     --out-dir assets/   # 批量渲染；逐场景结果写 assets/report.json，失败不中断
+
+# 审美回归测试：场景是否符合项目的"音乐语法"
+./target/release/scorekit lint examples/scenes/dunes.yaml \
+    --grammar examples/grammars/grief.yaml
+./target/release/scorekit schema --grammar   # 语法档案的 JSON Schema
 ```
 
 退出码：`0` 成功 · `1` IO · `2` 输入非法 · `3` 依赖缺失 · `4` 外部工具失败。
@@ -60,7 +65,30 @@ performance:
   dynamics: { start: pp, peak: mf }  # 力度弧线，首尾同级、loop 安全
 ```
 
-场景 DSL 示例见 [examples/scenes/](examples/scenes/)：[forest.yaml](examples/scenes/forest.yaml)（单场景）、[forest_suite.yaml](examples/scenes/forest_suite.yaml)（含 motifs/sections 的组曲），以及五种风格参考——[chiptune.yaml](examples/scenes/chiptune.yaml)（8-bit 游戏）、[dance.yaml](examples/scenes/dance.yaml)（动感舞曲）、[epic.yaml](examples/scenes/epic.yaml)（轻史诗）、[ballad.yaml](examples/scenes/ballad.yaml)（3/4 抒情）、[elegy.yaml](examples/scenes/elegy.yaml)（小提琴挽歌）。一次全部渲染：
+沉淀"审美"——语法档案（grammar）把项目的风格体系写成可校验断言，`lint` 从编译后的乐谱实测（不是看 YAML 表面），违规带实测值，Agent 直接照改：
+
+```yaml
+# examples/grammars/grief.yaml — 孤独在这个项目里的样子
+name: grief
+rules:
+  tempo_max: 60                  # 悲伤不奔跑
+  pads_max: 1
+  melodic_voices_max: 2          # 同时说话的声音峰值
+  melody_rest_ratio_min: 0.35    # 每个声部自己的呼吸（逐轨实测）
+  phrase_min_beats: 5            # 不允许碎句
+  resolution: incomplete         # 结尾不落主音——问题保持敞开
+  harmony_allowed: [i, iv, v, VI, VII]
+  require_performance: true      # 必须像人演奏
+```
+
+```text
+$ scorekit lint examples/scenes/forest.yaml --grammar examples/grammars/grief.yaml
+tempo_max @ scene: measured 92, want <= 60
+require_performance @ scene: measured absent, want a `performance` block
+error[lint]: 4 grammar violation(s) against `grief`   # exit 2
+```
+
+场景 DSL 示例见 [examples/scenes/](examples/scenes/)：[forest.yaml](examples/scenes/forest.yaml)（单场景）、[forest_suite.yaml](examples/scenes/forest_suite.yaml)（含 motifs/sections 的组曲），以及六种风格参考——[chiptune.yaml](examples/scenes/chiptune.yaml)（8-bit 游戏）、[dance.yaml](examples/scenes/dance.yaml)（动感舞曲）、[epic.yaml](examples/scenes/epic.yaml)（轻史诗）、[ballad.yaml](examples/scenes/ballad.yaml)（3/4 抒情）、[elegy.yaml](examples/scenes/elegy.yaml)（小提琴挽歌）、[dunes.yaml](examples/scenes/dunes.yaml)（电影配乐：单动机对话式织体，符合 [grief 语法](examples/grammars/grief.yaml)）。一次全部渲染：
 
 ```bash
 ./target/release/scorekit batch examples/scenes/*.yaml \

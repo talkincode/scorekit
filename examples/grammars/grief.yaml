@@ -1,0 +1,18 @@
+# An aesthetic constitution, not a composition: deterministic assertions
+# the compiler can measure. The agent writes music; this file says what
+# grief is allowed to sound like in THIS project's language.
+name: grief
+description: >
+  Lonely, restrained, unresolved. Slow pulse, at most one pad, no more
+  than two melodic voices at once, every voice breathing more than a
+  third of the time, no fragmented phrases, and an ending that refuses
+  to land on the tonic.
+rules:
+  tempo_max: 60
+  pads_max: 1
+  melodic_voices_max: 2
+  melody_rest_ratio_min: 0.35
+  phrase_min_beats: 5
+  resolution: incomplete
+  harmony_allowed: [i, iv, v, VI, VII]
+  require_performance: true

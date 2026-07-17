@@ -1,0 +1,147 @@
+# Ashes Between the Dunes — the restraint cut, shipped as the reference
+# scene for the `grief` grammar (examples/grammars/grief.yaml):
+#
+#   scorekit lint examples/scenes/dunes.yaml --grammar examples/grammars/grief.yaml
+#
+# ONE five-note motif: 5-8-7-5-4 (A-D-C-A-G in D minor pentatonic).
+# A fourth leaps up, steps fall back, and it HANGS on 4 — a question.
+# Every phrase in the piece is this sentence. The voice answers it
+# exactly once (bars 17-20); the harp's last light re-asks it, so the
+# piece ENDS on the question — grief demands `resolution: incomplete`.
+#
+# Dialogue: voice asks -> cello answers (same reply both times) ->
+# violin echoes from far away. Never more than two melodic voices:
+# under the climax the cello yields the floor to the strings.
+#
+# Emotional curve, with corners: 15% -> 30% -> 70% -> cut -> 25% -> 10%.
+# The climax peaks on a SILENCE (bar 14): strings appear for four bars
+# only — the single wide shot in the film.
+title: Ashes Between the Dunes
+tempo: 54
+key: D_minor
+time_signature: 4/4
+bars: 24
+loop: false
+
+harmony: [i, i, VII, VII, VI, v]
+
+performance:
+  humanize: { timing_ms: 30, velocity: 14, seed: 94 }
+  legato: true
+  dynamics: { start: pp, peak: f }
+
+motifs:
+  voice_line:
+    # bars 1-3 (15%): the question, near, alone
+    - { degree: 5, beats: 0.75 }
+    - { degree: 8, beats: 0.75 }
+    - { degree: 7, beats: 2.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 3 } # hangs, unresolved
+    - { degree: 0, beats: 4 }
+    # bars 4-5: silence — the cello answers here
+    - { degree: 0, beats: 8 }
+    # bars 6-8 (30%): same sentence, stretched, one ornament
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 1.5 }
+    - { degree: 8, beats: 0.5 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 4 }
+    # bars 9-10: breath — the violin echoes far away
+    - { degree: 0, beats: 8 }
+    # bars 11-13 (70%): the motif an octave up, reaching one step higher
+    - { degree: 8, beats: 0.75 }
+    - { degree: 10, beats: 0.75 }
+    - { degree: 8, beats: 2.5 }
+    - { degree: 7, beats: 1 }
+    - { degree: 10, beats: 1 }
+    - { degree: 8, beats: 2 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 2 }
+    # bar 14: THE PEAK IS A SILENCE
+    - { degree: 0, beats: 4 }
+    # bars 15-16: cello takes over — voice says nothing
+    - { degree: 0, beats: 8 }
+    # bars 17-20: the question asked one last time — and answered
+    - { degree: 5, beats: 0.75 }
+    - { degree: 8, beats: 0.75 }
+    - { degree: 7, beats: 2.5 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 2 }
+    - { degree: 1, beats: 5 } # resolution, the only one
+    - { degree: 0, beats: 2 }
+    # bars 21-24: dune silence
+    - { degree: 0, beats: 16 }
+  cello_answer: # the same reply, word for word, both times
+    - { degree: 0, beats: 12 }
+    # bars 4-5: first answer, low
+    - { degree: -3, beats: 1 }
+    - { degree: -4, beats: 1 }
+    - { degree: -5, beats: 2 }
+    - { degree: -7, beats: 4 }
+    # bars 6-14: silent while the voice speaks — under the climax the
+    # cello yields the floor to the strings (never a third voice)
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 4 }
+    # bars 15-16: second answer — unchanged, like a vow
+    - { degree: -3, beats: 1 }
+    - { degree: -4, beats: 1 }
+    - { degree: -5, beats: 2 }
+    - { degree: -7, beats: 4 }
+    # bars 17-20: one long low note under the resolution
+    - { degree: -7, beats: 16 }
+    # bars 21-24
+    - { degree: 0, beats: 16 }
+  violin_far: # the far echo — high, faint, twice only
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    # bars 9-10: echo of the motif's tail, from the horizon
+    # (ends a beat early so its legato tail clears the climax entry)
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 1 }
+    - { degree: 5, beats: 5 }
+    - { degree: 0, beats: 1 }
+    # bars 11-20: silent (never a third melodic voice)
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+    # bars 21-22: last far light
+    - { degree: 8, beats: 2 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 4 }
+    - { degree: 0, beats: 8 }
+  strings_wide: # the ONE wide shot: four bars, then gone
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+    # bars 11-14
+    - { degree: 5, beats: 4 }
+    - { degree: 4, beats: 4 }
+    - { degree: 3, beats: 4 }
+    - { degree: 1, beats: 4 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+  harp_last: # three notes over the fading reverb — the question, re-asked
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+    # bars 23-24: the desert keeps the question open (hangs on 4)
+    - { degree: 8, beats: 1 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 6 }
+
+tracks:
+  - { instrument: voice, pattern: melody, motif: voice_line, intensity: 0.8 }
+  - { instrument: cello, pattern: melody, motif: cello_answer, intensity: 0.55 }
+  - { instrument: violin, pattern: melody, motif: violin_far, intensity: 0.32 }
+  - { instrument: slow_strings, pattern: melody, motif: strings_wide, intensity: 0.6 }
+  - { instrument: harp, pattern: melody, motif: harp_last, intensity: 0.42 }
+  - { instrument: choir_pad, pattern: sustain, intensity: 0.16 } # constant far wind

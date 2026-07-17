@@ -1102,6 +1102,120 @@ fn validate_rejects_bad_swing_and_bad_numeral() {
     assert!(stderr.contains("harmony[0]"), "stderr: {stderr}");
 }
 
+// ---- lint: aesthetic grammar (M6) ----
+
+/// The shipped reference pair must always agree: dunes.yaml is the
+/// living proof that the `grief` constitution is satisfiable.
+#[test]
+fn lint_shipped_scene_conforms_to_shipped_grammar() {
+    bin()
+        .arg("lint")
+        .arg(repo("examples/scenes/dunes.yaml"))
+        .arg("--grammar")
+        .arg(repo("examples/grammars/grief.yaml"))
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("ok: conforms to `grief`"));
+}
+
+/// Violations carry the measured value so the agent can fix the scene:
+/// rule name, subject, actual vs wanted — in text and in `--json`.
+#[test]
+fn lint_reports_violations_with_measured_values() {
+    let out = bin()
+        .arg("lint")
+        .arg(forest())
+        .arg("--grammar")
+        .arg(repo("examples/grammars/grief.yaml"))
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("tempo_max @ scene: measured 92, want <= 60"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("require_performance"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("grammar violation(s) against `grief`"),
+        "stderr: {stderr}"
+    );
+
+    let out = bin()
+        .args(["--json", "lint"])
+        .arg(forest())
+        .arg("--grammar")
+        .arg(repo("examples/grammars/grief.yaml"))
+        .assert()
+        .code(2);
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("stderr is one JSON object");
+    assert_eq!(v["code"], "lint");
+    let violations = v["violations"].as_array().unwrap();
+    assert!(!violations.is_empty());
+    assert!(
+        violations
+            .iter()
+            .any(|x| x["rule"] == "tempo_max" && x["measured"] == "92")
+    );
+}
+
+/// Deep rules measure the compiled IR, not the YAML surface: a melody
+/// with zero rests must be caught by `melody_rest_ratio_min`.
+#[test]
+fn lint_measures_rest_ratio_from_compiled_ir() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("busy.yaml");
+    fs::write(
+        &scene,
+        "tempo: 50\nbars: 2\nmotifs:\n  wall:\n    - { degree: 1, beats: 4 }\n    - { degree: 2, beats: 4 }\ntracks:\n  - instrument: violin\n    pattern: melody\n    motif: wall\n",
+    )
+    .unwrap();
+    let grammar = dir.path().join("g.yaml");
+    fs::write(
+        &grammar,
+        "name: sparse\nrules:\n  melody_rest_ratio_min: 0.35\n",
+    )
+    .unwrap();
+    let out = bin()
+        .arg("lint")
+        .arg(&scene)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("melody_rest_ratio_min") && stderr.contains("want >= 0.35"),
+        "stderr: {stderr}"
+    );
+}
+
+/// A grammar that asserts nothing is a config bug, not a lint pass.
+#[test]
+fn lint_rejects_grammar_without_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let grammar = dir.path().join("empty.yaml");
+    fs::write(&grammar, "name: hollow\nrules: {}\n").unwrap();
+    let out = bin()
+        .arg("lint")
+        .arg(forest())
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("at least one rule"), "stderr: {stderr}");
+}
+
+/// `schema --grammar` documents the constitution format for agents.
+#[test]
+fn schema_grammar_flag_emits_grammar_schema() {
+    let out = bin().args(["schema", "--grammar"]).assert().success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["title"], "Grammar");
+    assert!(v["properties"]["rules"].is_object());
+}
+
 // ---- export: sample-exact window ----
 
 #[test]

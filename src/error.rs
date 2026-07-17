@@ -22,6 +22,15 @@ pub enum Error {
     },
     #[error("invalid value at `{path}`: {message}")]
     Validation { path: String, message: String },
+    #[error("{count} grammar violation(s) against `{grammar}`")]
+    Lint {
+        grammar: String,
+        count: usize,
+        /// Pre-rendered porcelain lines, one per violation.
+        porcelain: Vec<String>,
+        /// Structured violations for `--json`.
+        json: Vec<serde_json::Value>,
+    },
     #[error("missing dependency `{tool}`: {hint}")]
     MissingDependency { tool: String, hint: String },
     #[error("`{tool}` failed ({status}): {stderr}")]
@@ -38,6 +47,7 @@ impl Error {
             Error::Io { .. } => "io",
             Error::Parse { .. } => "parse",
             Error::Validation { .. } => "validation",
+            Error::Lint { .. } => "lint",
             Error::MissingDependency { .. } => "missing_dependency",
             Error::ToolFailure { .. } => "tool_failure",
         }
@@ -47,7 +57,7 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::Io { .. } => 1,
-            Error::Parse { .. } | Error::Validation { .. } => 2,
+            Error::Parse { .. } | Error::Validation { .. } | Error::Lint { .. } => 2,
             Error::MissingDependency { .. } => 3,
             Error::ToolFailure { .. } => 4,
         }
@@ -55,6 +65,28 @@ impl Error {
 
     /// Print the error to stderr, machine-readable when `json` is set.
     pub fn report(&self, json: bool) {
+        if let Error::Lint {
+            porcelain,
+            json: violations,
+            ..
+        } = self
+        {
+            if json {
+                let payload = json!({
+                    "code": self.code(),
+                    "message": self.to_string(),
+                    "violations": violations,
+                    "exit_code": self.exit_code(),
+                });
+                eprintln!("{payload}");
+            } else {
+                for line in porcelain {
+                    eprintln!("{line}");
+                }
+                eprintln!("error[{}]: {self}", self.code());
+            }
+            return;
+        }
         if json {
             let location = match self {
                 Error::Parse {
