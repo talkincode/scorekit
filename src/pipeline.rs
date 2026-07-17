@@ -88,6 +88,116 @@ impl Drop for Cleanup {
     }
 }
 
+/// Batch: render many scenes in one run; per-scene failures don't abort the
+/// run, they land in a machine-readable report instead.
+pub struct BatchArgs<'a> {
+    pub scenes: &'a [PathBuf],
+    pub soundfont: &'a Path,
+    pub out_dir: &'a Path,
+    pub format: &'a str,
+    pub renderer: tools::Renderer,
+    pub sample_rate: u32,
+    pub gain: f32,
+    pub quality: u8,
+    pub stems: bool,
+    pub tail: f64,
+    pub crossfade_ms: u32,
+    pub report: Option<&'a Path>,
+}
+
+/// Build every scene into `<out-dir>/<scene-stem>.<format>` and write a
+/// report JSON. Returns the first failure (after the report is written) so
+/// the exit code reflects it; agents read the report for the full picture.
+pub fn batch(args: &BatchArgs) -> Result<String> {
+    let mut stems_seen = std::collections::BTreeMap::new();
+    for (i, scene) in args.scenes.iter().enumerate() {
+        let stem = scene
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(prev) = stems_seen.insert(stem.clone(), i) {
+            return Err(validation(
+                &format!("scenes[{i}]"),
+                format!(
+                    "duplicate scene stem `{stem}` (also scenes[{prev}]); outputs would collide"
+                ),
+            ));
+        }
+    }
+    let report_path = args
+        .report
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| args.out_dir.join("report.json"));
+
+    let mut items = Vec::new();
+    let mut first_err = None;
+    let mut succeeded = 0usize;
+    for scene in args.scenes {
+        let stem = scene
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let output = args.out_dir.join(format!("{stem}.{}", args.format));
+        let result = build(&BuildArgs {
+            scene,
+            soundfont: args.soundfont,
+            output: &output,
+            renderer: args.renderer,
+            sample_rate: args.sample_rate,
+            gain: args.gain,
+            quality: args.quality,
+            stems: args.stems,
+            tail: args.tail,
+            crossfade_ms: args.crossfade_ms,
+            keep_intermediates: false,
+        });
+        match result {
+            Ok(msg) => {
+                succeeded += 1;
+                items.push(json!({
+                    "scene": scene.display().to_string(),
+                    "ok": true,
+                    "output": output.display().to_string(),
+                    "meta": output.with_extension("meta.json").display().to_string(),
+                    "message": msg,
+                }));
+            }
+            Err(e) => {
+                items.push(json!({
+                    "scene": scene.display().to_string(),
+                    "ok": false,
+                    "error": {
+                        "code": e.code(),
+                        "message": e.to_string(),
+                        "exit_code": e.exit_code(),
+                    },
+                }));
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    let report = json!({
+        "total": args.scenes.len(),
+        "succeeded": succeeded,
+        "failed": args.scenes.len() - succeeded,
+        "items": items,
+    });
+    tools::write_atomic(
+        &report_path,
+        &serde_json::to_vec_pretty(&report).expect("report"),
+    )?;
+    match first_err {
+        None => Ok(format!(
+            "built {} scene(s), report {}",
+            succeeded,
+            report_path.display()
+        )),
+        Some(e) => Err(e),
+    }
+}
+
 /// Cut `window` out of `raw` and deliver it at `output`: a direct
 /// sample-exact WAV, or an intermediate cut encoded to OGG.
 fn produce(

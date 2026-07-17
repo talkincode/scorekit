@@ -1,5 +1,6 @@
 mod audio;
 mod composer;
+mod diff;
 mod error;
 mod midi;
 mod pipeline;
@@ -107,6 +108,40 @@ enum Command {
         #[arg(long)]
         keep_intermediates: bool,
     },
+    /// Semantic diff of two scene files (musical meaning, not text)
+    Diff { old: PathBuf, new: PathBuf },
+    /// Build many scenes into one directory; failures land in a JSON report
+    Batch {
+        /// Scene files (each becomes `<out-dir>/<scene-stem>.<format>`)
+        #[arg(required = true)]
+        scenes: Vec<PathBuf>,
+        #[arg(long)]
+        soundfont: PathBuf,
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// Output format for every scene
+        #[arg(long, default_value = "ogg", value_parser = ["ogg", "wav"])]
+        format: String,
+        /// Synthesizer backend
+        #[arg(long, value_enum, default_value_t = tools::Renderer::Fluidsynth)]
+        renderer: tools::Renderer,
+        #[arg(long, default_value_t = 44100)]
+        sample_rate: u32,
+        #[arg(long, default_value_t = 0.8)]
+        gain: f32,
+        #[arg(long, default_value_t = 5)]
+        quality: u8,
+        /// Also render sample-aligned stems for every scene
+        #[arg(long)]
+        stems: bool,
+        #[arg(long, default_value_t = 4.0)]
+        tail: f64,
+        #[arg(long, default_value_t = 50)]
+        crossfade_ms: u32,
+        /// Report path (default: `<out-dir>/report.json`)
+        #[arg(long)]
+        report: Option<PathBuf>,
+    },
 }
 
 fn compile_midi(
@@ -136,7 +171,7 @@ fn compile_midi(
     tools::write_atomic(output, &bytes)
 }
 
-fn run(command: &Command) -> Result<String> {
+fn run(command: &Command, json: bool) -> Result<String> {
     match command {
         Command::Validate { scene } => {
             let s = schema::load_scene(scene)?;
@@ -234,12 +269,54 @@ fn run(command: &Command) -> Result<String> {
             crossfade_ms: *crossfade_ms,
             keep_intermediates: *keep_intermediates,
         }),
+        Command::Diff { old, new } => {
+            let a = schema::load_scene(old)?;
+            let b = schema::load_scene(new)?;
+            let changes = diff::scenes(&a, &b);
+            if json {
+                let arr: Vec<_> = changes.iter().map(diff::Change::to_json).collect();
+                Ok(serde_json::Value::Array(arr).to_string())
+            } else {
+                Ok(changes
+                    .iter()
+                    .map(diff::Change::porcelain)
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        Command::Batch {
+            scenes,
+            soundfont,
+            out_dir,
+            format,
+            renderer,
+            sample_rate,
+            gain,
+            quality,
+            stems,
+            tail,
+            crossfade_ms,
+            report,
+        } => pipeline::batch(&pipeline::BatchArgs {
+            scenes,
+            soundfont,
+            out_dir,
+            format,
+            renderer: *renderer,
+            sample_rate: *sample_rate,
+            gain: *gain,
+            quality: *quality,
+            stems: *stems,
+            tail: *tail,
+            crossfade_ms: *crossfade_ms,
+            report: report.as_deref(),
+        }),
     }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(&cli.command) {
+    match run(&cli.command, cli.json) {
         Ok(msg) => {
             if !msg.is_empty() {
                 println!("{msg}");

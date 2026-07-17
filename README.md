@@ -2,7 +2,7 @@
 
 Agent 驱动的游戏配乐编译器：文本 DSL（YAML）→ MIDI → 可替换渲染后端（FluidSynth/TiMidity++ + SF2）→ FFmpeg 后处理 → 游戏可用音频资产（无缝 loop、分轨 stems、场景过渡）。
 
-> 状态：M0–M3 已完成（全链路 + 无缝 loop + stems + suite 段落/motif + 双渲染后端）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
+> 状态：M0–M4 全部完成（全链路 + 无缝 loop + stems + suite 段落/motif + 双渲染后端 + Agent 工作流）。项目画像、非目标（铁律）与路线图见 [docs/roadmap.md](docs/roadmap.md)。
 
 ```text
 scene.yaml ─► validate ─► midi ─► render ─► export ─► scene.ogg + stems/
@@ -40,6 +40,9 @@ cargo build --release
 # Agent 集成
 ./target/release/scorekit schema       # DSL 的 JSON Schema
 ./target/release/scorekit --json validate scene.yaml   # 机读错误（stderr JSON）
+./target/release/scorekit diff old.yaml new.yaml       # 语义 diff（--json 出 JSON 数组）
+./target/release/scorekit batch a.yaml b.yaml --soundfont game.sf2 \
+    --out-dir assets/   # 批量渲染；逐场景结果写 assets/report.json，失败不中断
 ```
 
 退出码：`0` 成功 · `1` IO · `2` 输入非法 · `3` 依赖缺失 · `4` 外部工具失败。

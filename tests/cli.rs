@@ -750,6 +750,184 @@ fn render_timidity_missing_soundfont_is_input_error() {
     assert_dir_contains_exactly(dir.path(), &["scene.mid"]);
 }
 
+// ---- diff: semantic scene comparison (M4) ----
+
+#[test]
+fn diff_reports_semantic_changes_and_ignores_formatting() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.yaml");
+    let b = dir.path().join("b.yaml");
+    fs::write(
+        &a,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    // Same music, different formatting/key order → empty diff.
+    fs::write(
+        &b,
+        "bars: 2\ntempo: 100\ntracks:\n  - {instrument: piano, pattern: sustain}\n",
+    )
+    .unwrap();
+    let out = bin().arg("diff").arg(&a).arg(&b).assert().success();
+    assert_eq!(String::from_utf8_lossy(&out.get_output().stdout).trim(), "");
+
+    let c = dir.path().join("c.yaml");
+    fs::write(
+        &c,
+        "tempo: 120\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    intensity: 0.9\n",
+    )
+    .unwrap();
+    let out = bin().arg("diff").arg(&a).arg(&c).assert().success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("~ tempo 100 -> 120"), "stdout: {text}");
+    assert!(
+        text.contains("~ tracks[0].intensity 0.6 -> 0.9"),
+        "stdout: {text}"
+    );
+
+    // --json emits the same records as a machine-readable array.
+    let out = bin()
+        .args(["--json", "diff"])
+        .arg(&a)
+        .arg(&c)
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("stdout is JSON");
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert!(arr.iter().any(|c| c["path"] == "tempo" && c["op"] == "~"));
+}
+
+#[test]
+fn diff_invalid_scene_is_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.yaml");
+    let bad = dir.path().join("bad.yaml");
+    fs::write(
+        &a,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    fs::write(&bad, "tempo: 9999\nbars: 2\ntracks: []\n").unwrap();
+    bin().arg("diff").arg(&a).arg(&bad).assert().code(2);
+}
+
+// ---- batch: many scenes, machine-readable report (M4) ----
+
+#[test]
+fn batch_builds_all_scenes_and_writes_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let s1 = dir.path().join("one.yaml");
+    let s2 = dir.path().join("two.yaml");
+    fs::write(
+        &s1,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    fs::write(
+        &s2,
+        "tempo: 140\nbars: 1\nloop: true\ntracks:\n  - instrument: strings\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out_dir = dir.path().join("out");
+    bin()
+        .arg("batch")
+        .arg(&s1)
+        .arg(&s2)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .args(["--format", "wav"])
+        .assert()
+        .success();
+    assert_dir_contains_exactly(
+        &out_dir,
+        &[
+            "one.wav",
+            "one.meta.json",
+            "two.wav",
+            "two.meta.json",
+            "report.json",
+        ],
+    );
+    // two.yaml loops: exactly L frames at 140 BPM.
+    let (spec, frames) = read_frames(&out_dir.join("two.wav"));
+    let expected = exact_samples(4 * 480, 140, 44100) * u64::from(spec.channels);
+    assert_eq!(frames.len() as u64, expected);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["total"], 2);
+    assert_eq!(report["succeeded"], 2);
+    assert_eq!(report["failed"], 0);
+    assert_eq!(report["items"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn batch_partial_failure_reports_and_exits_nonzero() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = dir.path().join("good.yaml");
+    let bad = dir.path().join("bad.yaml");
+    fs::write(
+        &good,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    fs::write(&bad, "tempo: 9999\nbars: 2\ntracks: []\n").unwrap();
+    let out_dir = dir.path().join("out");
+    bin()
+        .arg("batch")
+        .arg(&good)
+        .arg(&bad)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .args(["--format", "wav"])
+        .assert()
+        .code(2); // exit reflects the first failure
+    // The good scene still built; the failure is recorded in the report.
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["succeeded"], 1);
+    assert_eq!(report["failed"], 1);
+    let items = report["items"].as_array().unwrap();
+    assert_eq!(items[0]["ok"], true);
+    assert_eq!(items[1]["ok"], false);
+    assert_eq!(items[1]["error"]["exit_code"], 2);
+    assert!(out_dir.join("good.wav").is_file());
+    assert!(!out_dir.join("bad.wav").exists());
+}
+
+#[test]
+fn batch_duplicate_scene_stems_is_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    let a = dir.path().join("same.yaml");
+    let b = sub.join("same.yaml");
+    for p in [&a, &b] {
+        fs::write(
+            p,
+            "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        )
+        .unwrap();
+    }
+    let out_dir = dir.path().join("out");
+    bin()
+        .arg("batch")
+        .arg(&a)
+        .arg(&b)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .assert()
+        .code(2);
+    assert!(!out_dir.exists(), "nothing should be built");
+}
+
 // ---- export: sample-exact window ----
 
 #[test]
