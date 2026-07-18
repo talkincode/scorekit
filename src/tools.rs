@@ -11,6 +11,10 @@ use std::process::Command;
 pub enum Renderer {
     Fluidsynth,
     Timidity,
+    /// SFZ sampler (`sfizz_render`), driven by a renderer profile instead of
+    /// a single SF2 file — see `profile::Profile`. Renders one instrument
+    /// per pass; the pipeline mixes per-track renders into the full mix.
+    Sfizz,
 }
 
 /// Sibling temp path that keeps the target extension (needed for type sniffing).
@@ -65,16 +69,24 @@ fn tail(text: &str, lines: usize) -> String {
     all[start..].join("\n")
 }
 
+/// Captured output from a successful external tool invocation. Normal build
+/// paths discard it; diagnostic commands inspect it for warnings.
+#[derive(Debug, Clone)]
+pub struct ToolDiagnostics {
+    pub stdout: String,
+    pub stderr: String,
+}
+
 /// Run a tool that writes `output`; the tool receives a temp path which is
 /// atomically renamed on success and removed on any failure. `error_markers`
 /// catches tools (FluidSynth) that report fatal errors on stderr yet exit 0.
-fn run_to_file(
+fn run_to_file_capture(
     tool: &str,
     hint: &str,
     error_markers: &[&str],
     build_args: impl FnOnce(&Path) -> Vec<std::ffi::OsString>,
     output: &Path,
-) -> Result<()> {
+) -> Result<ToolDiagnostics> {
     ensure_parent(output)?;
     let tmp = tmp_sibling(output);
     let args = build_args(&tmp);
@@ -127,7 +139,21 @@ fn run_to_file(
     std::fs::rename(&tmp, output).map_err(|e| {
         cleanup();
         io_err(output, e)
+    })?;
+    Ok(ToolDiagnostics {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: stderr_full,
     })
+}
+
+fn run_to_file(
+    tool: &str,
+    hint: &str,
+    error_markers: &[&str],
+    build_args: impl FnOnce(&Path) -> Vec<std::ffi::OsString>,
+    output: &Path,
+) -> Result<()> {
+    run_to_file_capture(tool, hint, error_markers, build_args, output).map(|_| ())
 }
 
 /// Cheap structural check: an SF2 is a RIFF container with the `sfbk` form type.
@@ -162,6 +188,13 @@ pub fn render(
     gain: f32,
 ) -> Result<()> {
     require_file(midi, "midi")?;
+    if renderer == Renderer::Sfizz {
+        return Err(Error::Validation {
+            path: "--renderer".to_owned(),
+            message: "renderer `sfizz` is driven by --profile via `render_sfz`, not `render`"
+                .to_owned(),
+        });
+    }
     require_sf2(soundfont)?;
     let result = match renderer {
         Renderer::Fluidsynth => run_to_file(
@@ -220,6 +253,7 @@ pub fn render(
                 output,
             )
         }
+        Renderer::Sfizz => unreachable!("returned early above"),
     };
     result?;
     // Renderer-agnostic backstop: TiMidity writes a header-only WAV (zero
@@ -242,7 +276,59 @@ fn renderer_tool(renderer: Renderer) -> &'static str {
     match renderer {
         Renderer::Fluidsynth => "fluidsynth",
         Renderer::Timidity => "timidity",
+        Renderer::Sfizz => "sfizz_render",
     }
+}
+
+/// Render a MIDI file through a single SFZ instrument via `sfizz_render`.
+/// Unlike `render` (one SF2 covers every General MIDI program), `sfizz_render`
+/// plays every note through one loaded instrument — there's no bank/program
+/// concept. A scene with several instruments is therefore rendered one track
+/// at a time and mixed in-process (`audio::mix`); see `pipeline::build_one`.
+pub fn render_sfz_with_diagnostics(
+    midi: &Path,
+    sfz: &Path,
+    output: &Path,
+    sample_rate: u32,
+) -> Result<ToolDiagnostics> {
+    require_file(midi, "midi")?;
+    require_file(sfz, "--profile")?;
+    let diagnostics = run_to_file_capture(
+        "sfizz_render",
+        "install sfizz (build `sfizz_render` from https://github.com/sfztools/sfizz; no official arm64 macOS binary as of 1.2.3, build with `-DSFIZZ_RENDER=ON -DSFIZZ_JACK=OFF -DSFIZZ_TESTS=OFF`)",
+        &[],
+        |tmp| {
+            vec![
+                "--sfz".into(),
+                sfz.as_os_str().to_owned(),
+                "--midi".into(),
+                midi.as_os_str().to_owned(),
+                "--wav".into(),
+                tmp.as_os_str().to_owned(),
+                "-s".into(),
+                sample_rate.to_string().into(),
+            ]
+        },
+        output,
+    )?;
+    // Same "exit 0 but zero audio frames" backstop `render` applies below,
+    // duplicated here because this path never reaches that shared check.
+    let frames = hound::WavReader::open(output)
+        .map(|r| r.duration())
+        .unwrap_or(0);
+    if frames == 0 {
+        let _ = std::fs::remove_file(output);
+        return Err(Error::ToolFailure {
+            tool: "sfizz_render".to_owned(),
+            status: "exit 0 but zero audio frames".to_owned(),
+            stderr: String::new(),
+        });
+    }
+    Ok(diagnostics)
+}
+
+pub fn render_sfz(midi: &Path, sfz: &Path, output: &Path, sample_rate: u32) -> Result<()> {
+    render_sfz_with_diagnostics(midi, sfz, output, sample_rate).map(|_| ())
 }
 
 /// Convert audio via FFmpeg. The codec follows the output extension:

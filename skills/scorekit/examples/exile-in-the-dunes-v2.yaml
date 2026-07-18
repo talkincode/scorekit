@@ -1,0 +1,69 @@
+# v2 of exile-in-the-dunes.yaml — a revision, not a louder master.
+#
+# What changed and why (beat accounting; the motif must stay exactly 96
+# beats — `bars: 24` at 4/4 — because `pattern: melody` cycles the motif to
+# fill the scene, so a short motif would wrap and restate the opening at
+# the end):
+# - The tonic D before the rupture is deleted: the collapse line is now
+#   high D - C - A - G ... F - E and then breaks off with no resolution.
+# - The first long rest is shortened 8 -> 6 so the two silences are no
+#   longer isomorphic: one is a breath, the other is the rupture.
+# - The freed beats are redistributed, not discarded: the overreach on
+#   high D holds longer (4 -> 6), the break-note E is held (2 -> 4) before
+#   it is cut, and the rupture silence grows 8 -> 12 — the longest blank
+#   in the piece, ending exactly on the bar 17 downbeat so the
+#   continuation re-enters cleanly.
+# - The final unresolved E (8 beats) and the total length are unchanged.
+# - Dynamics/velocity are untouched: loudness targets are met in
+#   post-render mastering (FFmpeg loudnorm), never by velocity.
+title: Exile in the Dunes (v2)
+tempo: 56
+key: D_minor
+time_signature: 4/4
+bars: 24
+loop: false
+
+harmony: [i, VI, III, VII, iv, i]
+
+performance:
+  humanize: { timing_ms: 16, velocity: 8, seed: 1701 }
+  legato: true
+  dynamics: { start: pp, peak: mf }
+
+motifs:
+  exile_arc:
+    # Opening (24 beats): the five-note identity is still coherent.
+    - { degree: 0, beats: 4 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 4 }
+    - { degree: 0, beats: 2 }
+    - { degree: 1, beats: 4 }
+    - { degree: 0, beats: 4 }
+    - { degree: 3, beats: 2 }
+
+    # Collapse (40 beats): the idea overreaches, contracts, and breaks.
+    - { degree: 0, beats: 6 }  # a breath (was 8) — no longer mirrors the rupture
+    - { degree: 8, beats: 6 }  # overreach: high D held too long (was 4)
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 4 }
+    - { degree: 0, beats: 2 }  # contracted catch-breath (was 4)
+    - { degree: 3, beats: 2 }
+    - { degree: 2, beats: 4 }  # the break note, held then cut (was 2; the D after it is gone)
+    - { degree: 0, beats: 12 } # the rupture: longest silence, lands on bar 17
+
+    # Continuation (32 beats): fragments return; the final E stays unresolved.
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 4 }
+    - { degree: 0, beats: 4 }
+    - { degree: 1, beats: 8 }
+    - { degree: 0, beats: 4 }
+    - { degree: 2, beats: 8 }
+
+tracks:
+  - { instrument: violin, pattern: melody, motif: exile_arc, intensity: 0.58 }
+  - { instrument: harp, pattern: arpeggio, intensity: 0.18 }
+  - { instrument: slow_strings, pattern: sustain, intensity: 0.16 }
+  - { instrument: cello, pattern: bass, intensity: 0.2 }

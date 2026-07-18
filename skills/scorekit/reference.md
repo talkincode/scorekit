@@ -13,15 +13,17 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 
 | Command | Purpose | Flags (default) |
 | --- | --- | --- |
+| `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
-| `schema` | JSON Schema of scene DSL | `--grammar` → grammar-profile schema instead |
+| `schema` | JSON Schema of scene DSL | `--grammar` → grammar-profile schema instead; `--profile` → renderer-profile schema instead |
+| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` (44100); global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track#>`, `--section <name>` |
-| `render <mid> --soundfont <sf2> -o <out.wav>` | synthesize WAV | `--renderer fluidsynth\|timidity` (fluidsynth), `--sample-rate` (44100), `--gain` (0.8) |
+| `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` (44100), `--gain` (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> --soundfont <sf2> -o <out.ogg\|wav>` | full chain + meta.json | render/export flags plus `--stems`, `--tail` secs (4.0, non-loop), `--crossfade-ms` (50, loop seal), `--keep-intermediates` |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` secs (4.0, non-loop), `--crossfade-ms` (50, loop seal), `--keep-intermediates` |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
-| `batch <scenes...> --soundfont <sf2> --out-dir <dir>` | build many; report.json; failures don't stop the rest | `--format ogg\|wav` (ogg) + render/export flags |
+| `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export flags |
 
 All file writes are atomic (temp + rename): a failed command leaves no
 partial output.
@@ -52,6 +54,7 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` | required | melody plays the named motif, looped/truncated to fill |
 | `motif` | motif name | — | required iff `pattern: melody` |
 | `intensity` | 0.0..=1.0 | 0.6 | velocity scale |
+| `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity, selects the `.sfz` file under `--renderer sfizz --profile ...` (falls back to the instrument's `sustain` mapping if unmapped) |
 
 ### Motif note
 
@@ -98,6 +101,54 @@ duplication — loop math stays sample-exact.
 - **Winds:** `sax` (65), `oboe` (68), `english_horn` (69), `bassoon` (70), `clarinet` (71), `piccolo` (72), `flute` (73), `recorder` (74), `pan_flute` (75), `whistle` (78), `ocarina` (79)
 - **Synth:** `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
 - **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` only
+
+## Renderer profiles (`--renderer sfizz`)
+
+sfizz renders real `.sfz` sample libraries (e.g. free CC0 [VSCO 2 Community
+Edition](https://vis.versilstudios.com/vsco-community.html)) instead of a
+single GM SoundFont — one instrument per invocation; scorekit renders every
+track solo and mixes the results in-process, so stems and the full mix are
+sample-aligned by construction. Build the binary once with
+`scripts/build_sfizz.sh` (not packaged by Homebrew).
+
+A scene never names a `.sfz` file or a local path — only `instrument` +
+`articulation` (portable, shareable). A **renderer profile** (external YAML,
+`--profile <file>`, only valid with `--renderer sfizz`) is the one place that
+maps those DSL names onto real sample files on a given machine:
+
+```yaml
+name: vsco2-ce
+root: /path/to/VSCO-2-CE-1.1.0   # optional; default = the profile file's own directory
+instruments:
+  violin:
+    sustain: SViolinVib.sfz      # required — fallback for any unmapped articulation
+    pizzicato: SViolinPizz.sfz
+    tremolo: SViolinTrem.sfz
+  drums:
+    sustain: GM-StylePerc.sfz
+```
+
+Every `Instrument` used by a scene must have an entry with at least a
+`sustain` mapping; missing instruments or malformed paths fail loudly at
+build time (input error, no partial output). `.sfz` paths are relative to
+`root`, and one profile can span multiple sample libraries per-instrument
+by prefixing each `.sfz` path with the library's own subfolder name under a
+shared `root` (no per-instrument `root:` override exists or is needed). See
+`scorekit schema --profile` for the full JSON Schema,
+[examples/profiles/vsco2-ce.yaml](../../examples/profiles/vsco2-ce.yaml) for
+a complete worked mapping (including orchestral substitutions for
+synth/vocal instruments VSCO2 doesn't provide, e.g. `square_lead` → flute),
+and [examples/profiles/vsco2-vcsl.yaml](../../examples/profiles/vsco2-vcsl.yaml)
+for a hybrid that also pulls piano/harp/epiano/timpani from VCSL (a CC0
+supplement library, not a substitute for VSCO2's strings/brass/choir).
+
+Run `scorekit profile check <profile.yaml>` before using a new or changed
+profile. The check deduplicates shared patch paths, renders broad melodic or
+GM-drum probes at varied velocities twice, rejects missing and silent patches,
+captures sfizz warnings, and verifies repeatability. It writes no persistent
+audio; command-scoped probe files are removed on success and failure. Use
+`scorekit --json profile check <profile.yaml>` to retain a machine-readable
+certification report.
 
 ## Grammar profiles (`lint`)
 

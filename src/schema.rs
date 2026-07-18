@@ -62,6 +62,34 @@ pub struct Track {
     /// Dynamic level 0.0..=1.0, scales note velocities. Default: 0.6.
     #[serde(default = "default_intensity")]
     pub intensity: f32,
+    /// Playing technique used to pick samples when rendering through an SFZ
+    /// renderer profile (`--renderer sfizz`). Does not change the compiled
+    /// MIDI; SF2 backends ignore it. Default: sustain.
+    #[serde(default)]
+    pub articulation: Articulation,
+}
+
+/// Playing technique; selects which SFZ file a renderer profile maps the
+/// track to. Purely a sample-selection hint — compiled MIDI is identical
+/// across articulations.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Articulation {
+    /// Held notes (default).
+    #[default]
+    Sustain,
+    /// Short detached notes.
+    Staccato,
+    /// Bounced bow (strings).
+    Spiccato,
+    /// Plucked strings.
+    Pizzicato,
+    /// Rapid bow repetition (strings).
+    Tremolo,
+    /// Muted (brass/strings).
+    Mute,
 }
 
 /// One step of a motif, in scale degrees of the scene key.
@@ -221,7 +249,9 @@ pub enum Pattern {
     Melody,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Instrument {
     Piano,
@@ -353,6 +383,36 @@ impl Instrument {
             Drums => return None,
         })
     }
+}
+
+/// snake_case key for an `Instrument`, e.g. `slow_strings` — used by
+/// renderer profiles (`--renderer sfizz`) to look up sample mappings without
+/// duplicating the enum's serde naming.
+pub fn instrument_key(i: Instrument) -> String {
+    serde_json::to_value(i)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Parse a snake_case instrument key back into an `Instrument`; used to
+/// validate renderer-profile keys against the real enum instead of accepting
+/// arbitrary strings.
+pub fn parse_instrument_key(s: &str) -> Option<Instrument> {
+    serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
+}
+
+/// snake_case key for an `Articulation`, e.g. `spiccato`.
+pub fn articulation_key(a: Articulation) -> String {
+    serde_json::to_value(a)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Parse a snake_case articulation key back into an `Articulation`.
+pub fn parse_articulation_key(s: &str) -> Option<Articulation> {
+    serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
 }
 
 /// Parsed key: pitch class of the root (0 = C) and mode.

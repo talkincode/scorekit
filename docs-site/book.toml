@@ -1,0 +1,13 @@
+[book]
+authors = ["scorekit contributors"]
+language = "en"
+src = "src"
+title = "scorekit Documentation"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/talkincode/scorekit"
+site-url = "/scorekit/"

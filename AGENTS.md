@@ -4,7 +4,7 @@ The project profile, roadmap, and full acceptance matrix live in [docs/roadmap.m
 
 ## Core boundaries (MUST)
 
-- MUST NOT build DSP in-house (synthesis/reverb/compression); rendering and post-processing are always delegated to external tools (FluidSynth, FFmpeg, etc.).
+- MUST NOT build creative DSP in-house (synthesis, reverb, compression, EQ, resampling, time-stretch); rendering and post-processing are always delegated to external tools (FluidSynth, FFmpeg, etc.). Deterministic sample-exact PCM assembly — cutting, zero-padding, linear crossfade loop sealing, gain-applied summation (`src/audio.rs`) — is explicitly *not* DSP under this rule: it exists to uphold bit-exact invariants ("sum of stems == full mix", seamless-loop seal) that external filter pipelines cannot guarantee.
 - MUST NOT implement version-control commands (commit/merge/branch); version control is git's job, and the DSL must stay a diff-friendly, stable text format.
 - MUST guarantee determinism: the same DSL + same sound source + same tool versions produces byte-identical MIDI output.
 - The DSL schema MUST NOT introduce fields that only commercial sound sources can fulfill.

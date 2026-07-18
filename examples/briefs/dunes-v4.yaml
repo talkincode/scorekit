@@ -1,0 +1,51 @@
+# Experimental upstream artifact. scorekit does not read or validate this file.
+# Its purpose is to hold the story steady while a Composer Agent chooses the
+# concrete musical translation in examples/scenes/dunes-v4.yaml.
+title: The Exile Keeps Walking
+
+world:
+  image: An empty desert erases every footprint before nightfall.
+  truth: The landscape offers no sign that home exists.
+
+protagonist:
+  identity: An exile who has walked so long that searching has become a habit.
+  desire: Find home before the memory of it disappears.
+  wound: The exile can no longer remember the mother's full voice.
+  dramatic_question: If hope is gone, is there still a reason to continue?
+
+arc:
+  opening:
+    belief: The next horizon may still be home.
+    action: The exile repeats an old remembered sentence as proof.
+  pressure:
+    event: The remembered voice returns only in fragments.
+    action: The exile repeats the sentence more urgently and reaches too high.
+  rupture:
+    event: The sentence breaks before its final word; no answer follows.
+    realization: Home may no longer exist anywhere except in the lost memory.
+  ending:
+    choice: The exile continues walking without recovering hope.
+    change: Walking is no longer a search for a promised destination; it is a vow not to disappear.
+
+motif_contract:
+  meaning: Is home still ahead?
+  invariant: One five-part sentence with an unmistakable opening reach and falling reply.
+  opening_state: Complete, exposed, and repeated without disguise.
+  pressure_state: The same sentence reaches beyond its familiar range.
+  rupture_state: It stops before the two-part falling reply.
+  final_state: It returns with the same rhythm and opening reach but chooses a lower final word.
+  resolution: The question remains open even though the character has made a choice.
+
+audibility_contract:
+  character: One stable foreground voice owns every main statement.
+  world: The desert may surround the character but must never become the subject.
+  change: The broken and final statements must be distinguishable without reading the brief.
+  memory: The mother's response becomes shorter each time and never takes over the piece.
+  recall: A listener should be able to reproduce the five-part rhythm after one hearing.
+
+composer_freedom:
+  - pitches and key
+  - tempo and meter
+  - harmony
+  - instrumentation and register
+  - dynamics, articulation, silence, and orchestral density

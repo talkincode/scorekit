@@ -1,0 +1,52 @@
+title: Exile in the Dunes
+tempo: 56
+key: D_minor
+time_signature: 4/4
+bars: 24
+loop: false
+
+harmony: [i, VI, III, VII, iv, i]
+
+performance:
+  humanize: { timing_ms: 16, velocity: 8, seed: 1701 }
+  legato: true
+  dynamics: { start: pp, peak: mf }
+
+motifs:
+  exile_arc:
+    # Opening: the five-note identity is still coherent.
+    - { degree: 0, beats: 4 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 4 }
+    - { degree: 0, beats: 2 }
+    - { degree: 1, beats: 4 }
+    - { degree: 0, beats: 4 }
+    - { degree: 3, beats: 2 }
+
+    # Collapse: the idea rises, contracts, and falls into a long gap.
+    - { degree: 0, beats: 8 }
+    - { degree: 8, beats: 4 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 4 }
+    - { degree: 0, beats: 4 }
+    - { degree: 3, beats: 2 }
+    - { degree: 2, beats: 2 }
+    - { degree: 1, beats: 4 }
+    - { degree: 0, beats: 8 }
+
+    # Continuation: fragments return, but the final degree 2 stays unresolved.
+    - { degree: 5, beats: 2 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 4 }
+    - { degree: 0, beats: 4 }
+    - { degree: 1, beats: 8 }
+    - { degree: 0, beats: 4 }
+    - { degree: 2, beats: 8 }
+
+tracks:
+  - { instrument: violin, pattern: melody, motif: exile_arc, intensity: 0.58 }
+  - { instrument: harp, pattern: arpeggio, intensity: 0.18 }
+  - { instrument: slow_strings, pattern: sustain, intensity: 0.16 }
+  - { instrument: cello, pattern: bass, intensity: 0.2 }

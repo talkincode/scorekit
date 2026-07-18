@@ -1,0 +1,115 @@
+# Narrative-Brief experiment: a controlled alternative to dunes.yaml.
+# Upstream brief: examples/briefs/dunes-v4.yaml (not consumed by scorekit).
+#
+# Translation record:
+# - The cello is the exile and owns every main statement.
+# - The invariant is the rhythm 1-1-2-1-3 and the opening reach 5 -> 8.
+# - Bars 1-8 state the sentence twice without disguise.
+# - Bars 9-10 reach too high; bars 13-14 break before the falling reply.
+# - Bars 17-18 transpose the whole sentence down; bars 21-22 restore the
+#   original opening but choose a lower final word. The exile continues, but
+#   no longer because the horizon promises an answer.
+# - The flute is the mother's memory: complete once, then two fading fragments.
+# - Slow strings are the desert. They remain background, not protagonist.
+title: Ashes Between the Dunes - The Walker Cut
+tempo: 54
+key: D_minor
+time_signature: 4/4
+bars: 24
+loop: false
+
+# The last bar sits on v: motion remains, arrival does not.
+harmony: [i, VII, VI, v, iv, v]
+
+# Small timing variance preserves the five-part rhythmic identity.
+performance:
+  humanize: { timing_ms: 12, velocity: 6, seed: 104 }
+  legato: true
+  dynamics: { start: pp, peak: f }
+
+motifs:
+  exile_sentence:
+    # bars 1-2: the sentence alone, complete
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 3 }
+    # bars 3-4: listen for the remembered answer
+    - { degree: 0, beats: 8 }
+
+    # bars 5-6: exact repetition; identity before development
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 3 }
+    # bars 7-8
+    - { degree: 0, beats: 8 }
+
+    # bars 9-10: pressure — the sentence reaches too high
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 10, beats: 2 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 3 }
+    # bars 11-12
+    - { degree: 0, beats: 8 }
+
+    # bars 13-14: rupture — the falling reply never arrives
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 3 }
+    - { degree: 0, beats: 3 }
+    # bars 15-16: no answer
+    - { degree: 0, beats: 8 }
+
+    # bars 17-18: choice — same sentence and rhythm, carried lower
+    - { degree: 4, beats: 1 }
+    - { degree: 7, beats: 1 }
+    - { degree: 6, beats: 2 }
+    - { degree: 4, beats: 1 }
+    - { degree: 3, beats: 3 }
+    # bars 19-20
+    - { degree: 0, beats: 8 }
+
+    # bars 21-22: the old opening returns, but the final word changes
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 1 }
+    - { degree: 3, beats: 3 }
+    # bars 23-24: walking continues beyond the frame
+    - { degree: 0, beats: 8 }
+
+  mother_memory:
+    # bars 1-2
+    - { degree: 0, beats: 8 }
+    # bars 3-4: the only complete memory, answering in the same language
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 2 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 3 }
+    # bars 5-10
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+    # bars 11-12: first fragment, missing the falling reply
+    - { degree: 5, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 7, beats: 3 }
+    - { degree: 0, beats: 3 }
+    # bars 13-18
+    - { degree: 0, beats: 16 }
+    - { degree: 0, beats: 8 }
+    # bars 19-20: only the fading tail remains
+    - { degree: 8, beats: 2 }
+    - { degree: 7, beats: 3 }
+    - { degree: 0, beats: 3 }
+    # bars 21-24: the final choice receives no answer
+    - { degree: 0, beats: 16 }
+
+tracks:
+  - { instrument: cello, pattern: melody, motif: exile_sentence, intensity: 0.88 }
+  - { instrument: flute, pattern: melody, motif: mother_memory, intensity: 0.3 }
+  - { instrument: slow_strings, pattern: sustain, intensity: 0.12 }
