@@ -1886,3 +1886,98 @@ fn export_seek_take_cuts_bit_exactly() {
     assert_eq!(data[0], 100);
     assert_eq!(data[299], 399);
 }
+
+// ---- MCP stdio server (`scorekit mcp`) ----------------------------------
+
+/// Run `scorekit mcp`, feed newline-delimited JSON-RPC requests on stdin,
+/// and return the parsed response objects in order (stdin EOF ends the loop).
+fn mcp_roundtrip(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let stdin = requests
+        .iter()
+        .map(|r| format!("{r}\n"))
+        .collect::<String>();
+    let out = bin().arg("mcp").write_stdin(stdin).assert().success();
+    String::from_utf8_lossy(&out.get_output().stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("each response line is JSON"))
+        .collect()
+}
+
+#[test]
+fn mcp_initialize_lists_tools_and_validates_scene() {
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}}}),
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "validate",
+                       "arguments": {"scene": forest().to_str().unwrap()}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "schema", "arguments": {"kind": "grammar"}}}),
+    ]);
+    // The notification gets no response: 4 replies for 5 messages.
+    assert_eq!(replies.len(), 4, "replies: {replies:?}");
+
+    let init = &replies[0]["result"];
+    assert_eq!(init["serverInfo"]["name"], "scorekit");
+    assert!(init["capabilities"]["tools"].is_object());
+
+    let tools: Vec<&str> = replies[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for expected in ["doctor", "validate", "schema", "lint", "build", "diff"] {
+        assert!(
+            tools.contains(&expected),
+            "missing tool {expected}: {tools:?}"
+        );
+    }
+
+    let call = &replies[2]["result"];
+    assert_eq!(call["isError"], false);
+    let text = call["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("ok:"), "validate text: {text}");
+
+    let schema_text = replies[3]["result"]["content"][0]["text"].as_str().unwrap();
+    let schema: serde_json::Value = serde_json::from_str(schema_text).unwrap();
+    assert!(schema["$schema"].is_string(), "grammar schema: {schema}");
+}
+
+#[test]
+fn mcp_tool_failure_passes_structured_error_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 999\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "validate",
+                       "arguments": {"scene": scene.to_str().unwrap()}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "no_such_tool", "arguments": {}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "bogus/method"}),
+    ]);
+    assert_eq!(replies.len(), 3, "replies: {replies:?}");
+
+    // A failing tool is an MCP-level success with isError=true, and the text
+    // is the CLI's structured `--json` error object, passed through verbatim.
+    let call = &replies[0]["result"];
+    assert_eq!(call["isError"], true);
+    let payload: serde_json::Value =
+        serde_json::from_str(call["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(payload["code"], "validation");
+    assert_eq!(payload["exit_code"], 2);
+    assert_eq!(payload["field"], "tempo");
+
+    // Unknown tool and unknown method are JSON-RPC protocol errors.
+    assert_eq!(replies[1]["error"]["code"], -32602);
+    assert_eq!(replies[2]["error"]["code"], -32601);
+}

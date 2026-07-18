@@ -17,6 +17,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fluidsynth timidity ffmpeg
       - name: Fetch test assets
         run: ./scripts/fetch_assets.sh
+      - name: Build sfizz renderer
+        run: ./scripts/build_sfizz.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
