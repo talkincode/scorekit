@@ -17,6 +17,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `profile check <profile>` | Render probes through every mapped SFZ patch |
 | `diff <old> <new>` | Compare scene semantics |
 | `batch <scenes...> --out-dir <dir>` | Build several scenes and write a JSON report |
+| `mcp` | Serve MCP (Model Context Protocol) over stdio; each tool wraps one CLI command |
 
 Exit codes are stable: `0` success, `1` I/O failure, `2` invalid input, `3` missing dependency, and `4` external tool failure.
 

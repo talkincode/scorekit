@@ -4,6 +4,7 @@ mod diff;
 mod doctor;
 mod error;
 mod grammar;
+mod mcp;
 mod midi;
 mod pipeline;
 mod profile;
@@ -146,6 +147,8 @@ enum Command {
     },
     /// Semantic diff of two scene files (musical meaning, not text)
     Diff { old: PathBuf, new: PathBuf },
+    /// Serve MCP (Model Context Protocol) over stdio; each tool wraps one CLI command
+    Mcp,
     /// Build many scenes into one directory; failures land in a JSON report
     Batch {
         /// Scene files (each becomes `<out-dir>/<scene-stem>.<format>`)
@@ -427,6 +430,10 @@ fn run(command: &Command, json: bool) -> Result<String> {
                     .collect::<Vec<_>>()
                     .join("\n"))
             }
+        }
+        Command::Mcp => {
+            mcp::serve()?;
+            Ok(String::new())
         }
         Command::Batch {
             scenes,

@@ -1,0 +1,12 @@
+target
+out
+assets
+docs-site/book
+.git
+.github
+skills
+docs
+examples
+tests
+scripts/build_sfizz.sh
+scripts/fetch_assets.sh
