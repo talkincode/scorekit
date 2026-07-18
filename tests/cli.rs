@@ -6,6 +6,9 @@ use assert_cmd::Command;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn bin() -> Command {
     Command::cargo_bin("scorekit").expect("binary builds")
 }
@@ -24,8 +27,104 @@ fn sf2() -> PathBuf {
     p
 }
 
+fn write_default_soundfont_library(dir: &Path) -> PathBuf {
+    let root = dir.join("sound-library");
+    let sf2_dir = root.join("sf2");
+    fs::create_dir_all(&sf2_dir).unwrap();
+    fs::copy(sf2(), sf2_dir.join("MuseScore_General.sf2")).unwrap();
+    root
+}
+
 fn forest() -> PathBuf {
     repo("examples/scenes/forest.yaml")
+}
+
+/// `sfizz_render` isn't in Homebrew and has no arm64 macOS release binary;
+/// `scripts/build_sfizz.sh` builds it from source into `assets/bin/`.
+fn sfizz_render_bin() -> PathBuf {
+    let p = repo("assets/bin/sfizz_render");
+    assert!(
+        p.is_file(),
+        "missing sfizz_render binary {} — run scripts/build_sfizz.sh first",
+        p.display()
+    );
+    p
+}
+
+/// Prepend `assets/bin` to PATH so the CLI's `sfizz_render` lookup succeeds,
+/// without requiring it to be installed system-wide.
+fn sfizz_path_env() -> std::ffi::OsString {
+    let bin_dir = sfizz_render_bin().parent().unwrap().to_path_buf();
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![bin_dir];
+    paths.extend(std::env::split_paths(&existing));
+    std::env::join_paths(paths).unwrap()
+}
+
+/// A tiny, self-contained SFZ instrument (one region, one synthetic sine
+/// sample) generated on the fly — no committed binary fixture, no external
+/// sample library needed for the sfizz test suite to run anywhere.
+fn write_sine_sfz(dir: &Path) -> PathBuf {
+    let wav_path = dir.join("sine.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+    for i in 0..4410u32 {
+        let t = f64::from(i) / 44100.0;
+        let v = (3000.0 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as i16;
+        writer.write_sample(v).unwrap();
+    }
+    writer.finalize().unwrap();
+
+    let sfz_path = dir.join("mini.sfz");
+    fs::write(&sfz_path, "<region>\nsample=sine.wav\nlokey=0\nhikey=127\n").unwrap();
+    sfz_path
+}
+
+/// Renderer profile mapping `violin`/`cello` (used by the tiny sfizz test
+/// scenes below) to the synthetic sine instrument.
+fn write_test_profile(dir: &Path) -> PathBuf {
+    write_sine_sfz(dir);
+    let profile_path = dir.join("profile.yaml");
+    fs::write(
+        &profile_path,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n  cello:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    profile_path
+}
+
+fn tiny_sfizz_scene(dir: &Path) -> PathBuf {
+    let scene = dir.join("duo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: cello\n    pattern: sustain\n",
+    )
+    .unwrap();
+    scene
+}
+
+/// A short single-track MIDI (2 bars @ 120 BPM, ~4s) — deliberately not
+/// `make_midi(forest())`'s full 4-track scene, which would push hundreds of
+/// simultaneous notes through one tiny single-cycle sine region and take
+/// minutes to render.
+fn make_tiny_midi(dir: &Path) -> PathBuf {
+    let scene = tiny_sfizz_scene(dir);
+    let mid = dir.join("scene.mid");
+    bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&mid)
+        .arg("--solo")
+        .arg("0")
+        .assert()
+        .success();
+    mid
 }
 
 /// Only the files we placed may remain: failures must not leak temp/partial output.
@@ -38,6 +137,91 @@ fn assert_dir_contains_exactly(dir: &Path, expected: &[&str]) {
     let mut expected: Vec<String> = expected.iter().map(|s| (*s).to_owned()).collect();
     expected.sort();
     assert_eq!(names, expected, "unexpected files in {}", dir.display());
+}
+
+#[cfg(unix)]
+fn write_fake_tool(dir: &Path, name: &str, version: &str) {
+    let path = dir.join(name);
+    fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{version}'\n")).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+// ---- environment diagnostics ----
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_platform_and_ready_toolchain_as_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let sound_library = write_default_soundfont_library(dir.path());
+    write_fake_tool(dir.path(), "ffmpeg", "ffmpeg test 1.0");
+    write_fake_tool(dir.path(), "fluidsynth", "FluidSynth test 1.0");
+    write_fake_tool(dir.path(), "timidity", "TiMidity++ test 1.0");
+    write_fake_tool(dir.path(), "sfizz_render", "sfizz test 1.0");
+
+    let out = bin()
+        .args(["--json", "doctor"])
+        .env("PATH", dir.path())
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &sound_library)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["ready"], true);
+    assert_eq!(report["platform"]["os"], std::env::consts::OS);
+    assert_eq!(report["platform"]["arch"], std::env::consts::ARCH);
+    assert!(
+        report["platform"]["release_asset"]
+            .as_str()
+            .unwrap()
+            .contains(std::env::consts::ARCH)
+    );
+    assert_eq!(report["tools"].as_array().unwrap().len(), 4);
+    assert!(
+        report["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["status"] == "ok")
+    );
+    assert_eq!(report["sound_library"]["default_soundfont"]["status"], "ok");
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "ffmpeg",
+            "fluidsynth",
+            "sfizz_render",
+            "sound-library",
+            "timidity",
+        ],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_renderer_returns_dependency_report_and_arch_help() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_tool(dir.path(), "ffmpeg", "ffmpeg test 1.0");
+
+    let out = bin()
+        .args(["--json", "doctor"])
+        .env("PATH", dir.path())
+        .assert()
+        .code(3);
+    let payload: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(payload["code"], "doctor");
+    assert_eq!(payload["exit_code"], 3);
+    assert_eq!(payload["report"]["ready"], false);
+    assert_eq!(payload["report"]["requirements"]["ffmpeg"], true);
+    assert_eq!(payload["report"]["requirements"]["renderer"], false);
+    assert!(
+        payload["report"]["hints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hint| hint.as_str().unwrap().contains(std::env::consts::ARCH))
+    );
+    assert_dir_contains_exactly(dir.path(), &["ffmpeg"]);
 }
 
 // ---- validate / schema ----
@@ -61,6 +245,17 @@ fn all_shipped_examples_validate() {
         }
     }
     assert!(count >= 7, "expected shipped examples, found {count}");
+}
+
+#[test]
+fn skill_narrative_worked_example_validates() {
+    for example in ["exile-in-the-dunes.yaml", "exile-in-the-dunes-v2.yaml"] {
+        bin()
+            .arg("validate")
+            .arg(repo("skills/scorekit/examples").join(example))
+            .assert()
+            .success();
+    }
 }
 
 #[test]
@@ -226,6 +421,130 @@ fn render_happy_path_produces_exact_rate_wav() {
         "render shorter than the music: {secs:.2}s < {musical:.2}s"
     );
     assert!(secs <= musical + 15.0, "unreasonably long tail: {secs:.2}s");
+}
+
+#[test]
+fn render_uses_musescore_general_from_default_sound_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = write_default_soundfont_library(dir.path());
+    let mid = make_tiny_midi(dir.path());
+    let wav = dir.path().join("default.wav");
+    bin()
+        .arg("render")
+        .arg(&mid)
+        .arg("-o")
+        .arg(&wav)
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &library)
+        .assert()
+        .success();
+    assert!(fs::metadata(wav).unwrap().len() > 1_000);
+}
+
+/// `build` with `--soundfont` omitted resolves MuseScore General from the
+/// configured sound library, same as `render`.
+#[test]
+fn build_uses_musescore_general_from_default_sound_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = write_default_soundfont_library(dir.path());
+    let scene = dir.path().join("solo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("solo.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&wav)
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &library)
+        .assert()
+        .success();
+    assert!(fs::metadata(&wav).unwrap().len() > 1_000);
+    assert!(dir.path().join("solo.meta.json").is_file());
+}
+
+/// `batch` with `--soundfont` omitted resolves the same default; the check
+/// runs once up front, so an empty library fails before any file is written.
+#[test]
+fn batch_uses_musescore_general_from_default_sound_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = write_default_soundfont_library(dir.path());
+    let scene = dir.path().join("solo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out_dir = dir.path().join("out");
+    bin()
+        .arg("batch")
+        .arg(&scene)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .args(["--format", "wav"])
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &library)
+        .assert()
+        .success();
+    assert!(fs::metadata(out_dir.join("solo.wav")).unwrap().len() > 1_000);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["succeeded"], 1);
+}
+
+#[test]
+fn batch_missing_default_soundfont_fails_before_writing_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("empty-library");
+    fs::create_dir(&library).unwrap();
+    let scene = dir.path().join("solo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out_dir = dir.path().join("out");
+    let out = bin()
+        .args(["--json", "batch"])
+        .arg(&scene)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .args(["--format", "wav"])
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &library)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "--soundfont");
+    assert!(!out_dir.exists(), "no out-dir may be created on failure");
+}
+
+#[test]
+fn render_missing_default_soundfont_is_structured_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = dir.path().join("empty-library");
+    fs::create_dir(&library).unwrap();
+    let mid = make_tiny_midi(dir.path());
+    let wav = dir.path().join("default.wav");
+    let out = bin()
+        .args(["--json", "render"])
+        .arg(&mid)
+        .arg("-o")
+        .arg(&wav)
+        .env("SCOREKIT_SOUND_LIBRARY_DIR", &library)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "--soundfont");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("MuseScore_General.sf2")
+    );
+    assert!(!wav.exists());
 }
 
 #[test]
@@ -797,6 +1116,318 @@ fn render_timidity_missing_soundfont_is_input_error() {
     assert_dir_contains_exactly(dir.path(), &["scene.mid"]);
 }
 
+// ---- sfizz renderer + renderer profiles (M5) ----
+
+/// Happy path: sfizz renders each track solo and mixes them in-process;
+/// stems must sum back to the full mix, same invariant as the SF2 backends.
+#[test]
+fn build_sfizz_happy_path_produces_stems_and_sums_to_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let profile = write_test_profile(dir.path());
+    let wav = dir.path().join("duo.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(&wav)
+        .arg("--stems")
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+    let stems_dir = dir.path().join("duo.stems");
+    assert_dir_contains_exactly(&stems_dir, &["01-violin.wav", "02-cello.wav"]);
+    let (spec, mix) = read_frames(&wav);
+    assert_eq!(spec.sample_rate, 44100);
+    assert!(mix.iter().any(|&s| s.abs() > 50), "mix is silent");
+    let ch = spec.channels as usize;
+    let stems: Vec<Vec<i16>> = ["01-violin.wav", "02-cello.wav"]
+        .iter()
+        .map(|n| {
+            let (s, data) = read_frames(&stems_dir.join(n));
+            assert_eq!(s.channels, spec.channels);
+            assert_eq!(data.len(), mix.len(), "stem {n} must match mix length");
+            data
+        })
+        .collect();
+    let n = mix.len();
+    let (mut diff2, mut ref2) = (0f64, 0f64);
+    for i in 0..n {
+        let s: f64 = stems.iter().map(|st| f64::from(st[i])).sum();
+        let m = f64::from(mix[i]);
+        diff2 += (s - m) * (s - m);
+        ref2 += m * m;
+    }
+    let ratio = (diff2 / ref2.max(1.0)).sqrt();
+    assert!(
+        ratio < 0.02,
+        "sfizz stems do not sum to mix: RMS ratio {ratio:.4}"
+    );
+    let _ = ch;
+}
+
+#[test]
+fn build_sfizz_missing_profile_is_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+    assert_dir_contains_exactly(dir.path(), &["duo.yaml"]);
+}
+
+#[test]
+fn build_sfizz_rejects_soundfont_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let profile = write_test_profile(dir.path());
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    // Profile only maps `violin`; the scene's `cello` track has no mapping.
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+    );
+}
+
+#[test]
+fn build_sfizz_missing_binary_is_dependency_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let profile = write_test_profile(dir.path());
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", "")
+        .assert()
+        .code(3);
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+    );
+}
+
+/// Malformed `.sfz` content: `sfizz_render` exits non-zero; must not leave a
+/// partial WAV or intermediate staging directory behind.
+#[test]
+fn build_sfizz_corrupt_sfz_fails_without_partial_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    fs::write(dir.path().join("mini.sfz"), "<region sample=").unwrap();
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n  cello:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(4);
+    assert_dir_contains_exactly(dir.path(), &["duo.yaml", "mini.sfz", "profile.yaml"]);
+}
+
+/// Low-level single-instrument path: `render --renderer sfizz --sfz ...`,
+/// distinct from the profile-driven multi-instrument `build` path.
+#[test]
+fn render_sfizz_happy_path_produces_exact_rate_wav() {
+    let dir = tempfile::tempdir().unwrap();
+    let mid = make_tiny_midi(dir.path());
+    let sfz = write_sine_sfz(dir.path());
+    let wav = dir.path().join("scene.wav");
+    bin()
+        .arg("render")
+        .arg(&mid)
+        .args(["--renderer", "sfizz"])
+        .arg("--sfz")
+        .arg(&sfz)
+        .arg("-o")
+        .arg(&wav)
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+    let (spec, out) = read_frames(&wav);
+    assert_eq!(spec.sample_rate, 44100);
+    assert!(out.iter().any(|&s| s.abs() > 50), "sfizz render is silent");
+}
+
+#[test]
+fn render_sfizz_requires_sfz_not_soundfont() {
+    let dir = tempfile::tempdir().unwrap();
+    let mid = make_midi(dir.path());
+    bin()
+        .arg("render")
+        .arg(&mid)
+        .args(["--renderer", "sfizz"])
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(dir.path().join("scene.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+}
+
+// ---- renderer profile health check ----
+
+#[test]
+fn profile_check_renders_unique_patches_and_reports_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = write_test_profile(dir.path());
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", sfizz_path_env())
+        .env("TMPDIR", dir.path())
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("stdout is one JSON report");
+    assert_eq!(v["profile"], "test-profile");
+    assert_eq!(v["mappings"], 2);
+    assert_eq!(v["unique_patches"], 1);
+    assert_eq!(v["passed"], 1);
+    assert_eq!(v["failed"], 0);
+    let patches = v["patches"].as_array().unwrap();
+    assert_eq!(patches.len(), 1);
+    assert_eq!(patches[0]["status"], "ok");
+    assert_eq!(patches[0]["deterministic"], true);
+    assert!(patches[0]["peak_abs"].as_u64().unwrap() > 50);
+    assert_dir_contains_exactly(dir.path(), &["mini.sfz", "profile.yaml", "sine.wav"]);
+}
+
+#[test]
+fn profile_check_missing_patch_is_structured_and_leaves_no_temp_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: missing-patch\ninstruments:\n  violin:\n    sustain: absent.sfz\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", sfizz_path_env())
+        .env("TMPDIR", dir.path())
+        .assert()
+        .code(2);
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("stderr is one JSON object");
+    assert_eq!(v["code"], "profile_check");
+    assert_eq!(v["report"]["failed"], 1);
+    assert_eq!(v["report"]["patches"][0]["status"], "missing");
+    assert_dir_contains_exactly(dir.path(), &["profile.yaml"]);
+}
+
+#[test]
+fn profile_check_rejects_silent_patch_and_leaves_no_temp_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("silence.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+    for _ in 0..4410 {
+        writer.write_sample(0i16).unwrap();
+    }
+    writer.finalize().unwrap();
+    fs::write(
+        dir.path().join("silent.sfz"),
+        "<region>\nsample=silence.wav\nlokey=0\nhikey=127\n",
+    )
+    .unwrap();
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: silent-patch\ninstruments:\n  violin:\n    sustain: silent.sfz\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", sfizz_path_env())
+        .env("TMPDIR", dir.path())
+        .assert()
+        .code(2);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(v["report"]["patches"][0]["status"], "silent");
+    assert_dir_contains_exactly(dir.path(), &["profile.yaml", "silence.wav", "silent.sfz"]);
+}
+
+#[test]
+fn profile_check_missing_sfizz_is_dependency_error_without_residue() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = write_test_profile(dir.path());
+    bin()
+        .args(["profile", "check"])
+        .arg(&profile)
+        .env("PATH", "")
+        .env("TMPDIR", dir.path())
+        .assert()
+        .code(3);
+    assert_dir_contains_exactly(dir.path(), &["mini.sfz", "profile.yaml", "sine.wav"]);
+}
+
 // ---- diff: semantic scene comparison (M4) ----
 
 #[test]
@@ -1214,6 +1845,14 @@ fn schema_grammar_flag_emits_grammar_schema() {
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
     assert_eq!(v["title"], "Grammar");
     assert!(v["properties"]["rules"].is_object());
+}
+
+#[test]
+fn schema_profile_flag_emits_renderer_profile_schema() {
+    let out = bin().args(["schema", "--profile"]).assert().success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["title"], "Profile");
+    assert!(v["properties"]["instruments"].is_object());
 }
 
 // ---- export: sample-exact window ----

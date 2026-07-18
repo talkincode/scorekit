@@ -1,11 +1,15 @@
 mod audio;
 mod composer;
 mod diff;
+mod doctor;
 mod error;
 mod grammar;
 mod midi;
 mod pipeline;
+mod profile;
+mod profile_check;
 mod schema;
+mod soundfont;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -30,13 +34,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check platform support and external audio dependencies
+    Doctor,
     /// Validate a scene file
     Validate { scene: PathBuf },
-    /// Print the JSON Schema of the scene DSL (or the grammar DSL)
+    /// Print the JSON Schema of the scene DSL (or the grammar/renderer-profile DSL)
     Schema {
         /// Print the grammar-profile schema instead of the scene schema
         #[arg(long)]
         grammar: bool,
+        /// Print the renderer-profile schema (--renderer sfizz) instead of the scene schema
+        #[arg(long)]
+        profile: bool,
     },
     /// Check a scene against an aesthetic grammar profile
     Lint {
@@ -44,6 +53,11 @@ enum Command {
         /// Grammar profile (YAML); see `scorekit schema --grammar`
         #[arg(long)]
         grammar: PathBuf,
+    },
+    /// Inspect every SFZ mapping in a renderer profile
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
     },
     /// Compile a scene to a Standard MIDI File
     Midi {
@@ -60,11 +74,16 @@ enum Command {
         #[arg(long)]
         section: Option<String>,
     },
-    /// Render a MIDI file to WAV via a synthesizer backend + SoundFont
+    /// Render a MIDI file to WAV via a synthesizer backend + SoundFont (or `--sfz` for sfizz)
     Render {
         midi: PathBuf,
+        /// SF2 SoundFont; defaults to MuseScore_General.sf2 in the scorekit sound library
         #[arg(long)]
-        soundfont: PathBuf,
+        soundfont: Option<PathBuf>,
+        /// Single `.sfz` instrument; only valid with --renderer sfizz. For
+        /// multi-instrument scenes use `scorekit build --renderer sfizz --profile ...`.
+        #[arg(long)]
+        sfz: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         /// Synthesizer backend
@@ -93,8 +112,13 @@ enum Command {
     /// Full chain: scene -> MIDI -> WAV -> sample-exact loop/stems + meta.json
     Build {
         scene: PathBuf,
+        /// SF2 SoundFont; defaults to MuseScore_General.sf2 unless --renderer sfizz
         #[arg(long)]
-        soundfont: PathBuf,
+        soundfont: Option<PathBuf>,
+        /// Renderer profile mapping instruments to `.sfz` files; only valid
+        /// with --renderer sfizz. See `scorekit schema --profile`.
+        #[arg(long)]
+        profile: Option<PathBuf>,
         /// Output audio file (.ogg or .wav)
         #[arg(short, long)]
         output: PathBuf,
@@ -127,8 +151,13 @@ enum Command {
         /// Scene files (each becomes `<out-dir>/<scene-stem>.<format>`)
         #[arg(required = true)]
         scenes: Vec<PathBuf>,
+        /// SF2 SoundFont; defaults to MuseScore_General.sf2 unless --renderer sfizz
         #[arg(long)]
-        soundfont: PathBuf,
+        soundfont: Option<PathBuf>,
+        /// Renderer profile mapping instruments to `.sfz` files; only valid
+        /// with --renderer sfizz. See `scorekit schema --profile`.
+        #[arg(long)]
+        profile: Option<PathBuf>,
         #[arg(long)]
         out_dir: PathBuf,
         /// Output format for every scene
@@ -153,6 +182,16 @@ enum Command {
         /// Report path (default: `<out-dir>/report.json`)
         #[arg(long)]
         report: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// Render probe MIDI through every unique patch and verify determinism
+    Check {
+        profile: PathBuf,
+        #[arg(long, default_value_t = 44100)]
+        sample_rate: u32,
     },
 }
 
@@ -185,6 +224,20 @@ fn compile_midi(
 
 fn run(command: &Command, json: bool) -> Result<String> {
     match command {
+        Command::Doctor => {
+            let report = doctor::check();
+            if !report.ready {
+                return Err(error::Error::Doctor {
+                    porcelain: report.human().lines().map(str::to_owned).collect(),
+                    report: report.to_json(),
+                });
+            }
+            if json {
+                Ok(report.to_json().to_string())
+            } else {
+                Ok(report.human())
+            }
+        }
         Command::Validate { scene } => {
             let s = schema::load_scene(scene)?;
             let sections = if s.sections.is_empty() {
@@ -199,8 +252,10 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 s.tempo
             ))
         }
-        Command::Schema { grammar } => Ok(if *grammar {
+        Command::Schema { grammar, profile } => Ok(if *grammar {
             grammar::schema_json()
+        } else if *profile {
+            crate::profile::schema_json()
         } else {
             schema::schema_json()
         }),
@@ -229,6 +284,20 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 })
             }
         }
+        Command::Profile {
+            command:
+                ProfileCommand::Check {
+                    profile,
+                    sample_rate,
+                },
+        } => {
+            let report = profile_check::check(profile, *sample_rate)?;
+            if json {
+                Ok(report.to_json().to_string())
+            } else {
+                Ok(report.summary())
+            }
+        }
         Command::Midi {
             scene,
             output,
@@ -242,12 +311,41 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Render {
             midi,
             soundfont,
+            sfz,
             output,
             renderer,
             sample_rate,
             gain,
         } => {
-            tools::render(*renderer, midi, soundfont, output, *sample_rate, *gain)?;
+            match renderer {
+                tools::Renderer::Sfizz => {
+                    let sfz = sfz.as_deref().ok_or_else(|| error::Error::Validation {
+                        path: "--sfz".to_owned(),
+                        message: "renderer `sfizz` requires --sfz (a single .sfz instrument); for multi-instrument scenes use `scorekit build --profile`"
+                            .to_owned(),
+                    })?;
+                    if soundfont.is_some() {
+                        return Err(error::Error::Validation {
+                            path: "--soundfont".to_owned(),
+                            message:
+                                "renderer `sfizz` does not use --soundfont; pass --sfz instead"
+                                    .to_owned(),
+                        });
+                    }
+                    tools::render_sfz(midi, sfz, output, *sample_rate)?;
+                }
+                tools::Renderer::Fluidsynth | tools::Renderer::Timidity => {
+                    if sfz.is_some() {
+                        return Err(error::Error::Validation {
+                            path: "--sfz".to_owned(),
+                            message: "this renderer does not use --sfz; pass --soundfont instead"
+                                .to_owned(),
+                        });
+                    }
+                    let soundfont = soundfont::resolve(soundfont.as_deref())?;
+                    tools::render(*renderer, midi, &soundfont, output, *sample_rate, *gain)?;
+                }
+            }
             Ok(format!("wrote {}", output.display()))
         }
         Command::Export {
@@ -288,6 +386,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Build {
             scene,
             soundfont,
+            profile,
             output,
             renderer,
             sample_rate,
@@ -297,19 +396,23 @@ fn run(command: &Command, json: bool) -> Result<String> {
             tail,
             crossfade_ms,
             keep_intermediates,
-        } => pipeline::build(&pipeline::BuildArgs {
-            scene,
-            soundfont,
-            output,
-            renderer: *renderer,
-            sample_rate: *sample_rate,
-            gain: *gain,
-            quality: *quality,
-            stems: *stems,
-            tail: *tail,
-            crossfade_ms: *crossfade_ms,
-            keep_intermediates: *keep_intermediates,
-        }),
+        } => {
+            let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
+            pipeline::build(&pipeline::BuildArgs {
+                scene,
+                soundfont: soundfont.as_deref(),
+                profile: profile.as_deref(),
+                output,
+                renderer: *renderer,
+                sample_rate: *sample_rate,
+                gain: *gain,
+                quality: *quality,
+                stems: *stems,
+                tail: *tail,
+                crossfade_ms: *crossfade_ms,
+                keep_intermediates: *keep_intermediates,
+            })
+        }
         Command::Diff { old, new } => {
             let a = schema::load_scene(old)?;
             let b = schema::load_scene(new)?;
@@ -328,6 +431,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Batch {
             scenes,
             soundfont,
+            profile,
             out_dir,
             format,
             renderer,
@@ -338,20 +442,24 @@ fn run(command: &Command, json: bool) -> Result<String> {
             tail,
             crossfade_ms,
             report,
-        } => pipeline::batch(&pipeline::BatchArgs {
-            scenes,
-            soundfont,
-            out_dir,
-            format,
-            renderer: *renderer,
-            sample_rate: *sample_rate,
-            gain: *gain,
-            quality: *quality,
-            stems: *stems,
-            tail: *tail,
-            crossfade_ms: *crossfade_ms,
-            report: report.as_deref(),
-        }),
+        } => {
+            let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
+            pipeline::batch(&pipeline::BatchArgs {
+                scenes,
+                soundfont: soundfont.as_deref(),
+                profile: profile.as_deref(),
+                out_dir,
+                format,
+                renderer: *renderer,
+                sample_rate: *sample_rate,
+                gain: *gain,
+                quality: *quality,
+                stems: *stems,
+                tail: *tail,
+                crossfade_ms: *crossfade_ms,
+                report: report.as_deref(),
+            })
+        }
     }
 }
 

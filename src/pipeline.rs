@@ -19,7 +19,12 @@ use std::path::{Path, PathBuf};
 
 pub struct BuildArgs<'a> {
     pub scene: &'a Path,
-    pub soundfont: &'a Path,
+    /// SF2 SoundFont path. Required for `Renderer::Fluidsynth`/`Timidity`,
+    /// must be `None` for `Renderer::Sfizz` (see `profile` instead).
+    pub soundfont: Option<&'a Path>,
+    /// Renderer profile path (maps instruments to `.sfz` files). Required
+    /// for `Renderer::Sfizz`, must be `None` for the SF2 backends.
+    pub profile: Option<&'a Path>,
     pub output: &'a Path,
     pub renderer: tools::Renderer,
     pub sample_rate: u32,
@@ -31,6 +36,60 @@ pub struct BuildArgs<'a> {
     /// Loop-seal crossfade length in milliseconds.
     pub crossfade_ms: u32,
     pub keep_intermediates: bool,
+}
+
+/// A validated renderer backend: exactly the input the selected renderer
+/// consumes, so downstream code matches on this instead of re-checking
+/// `soundfont`/`profile` optionality.
+enum Backend<'a> {
+    /// SF2-consuming renderers (FluidSynth, TiMidity++).
+    Sf2 { soundfont: &'a Path },
+    /// `sfizz_render`, driven by a renderer profile mapping instruments to `.sfz`.
+    Sfizz { profile: &'a Path },
+}
+
+/// Exactly one of `soundfont`/`profile` must be set, matching what the
+/// selected renderer actually consumes — this is checked once up front so
+/// every scene in a batch fails the same clear way instead of partway
+/// through a long run.
+fn require_backend<'a>(
+    renderer: tools::Renderer,
+    soundfont: Option<&'a Path>,
+    profile: Option<&'a Path>,
+) -> Result<Backend<'a>> {
+    match renderer {
+        tools::Renderer::Sfizz => {
+            let Some(profile) = profile else {
+                return Err(validation(
+                    "--profile",
+                    "renderer `sfizz` requires --profile (maps instruments to .sfz files); see `scorekit schema --profile`"
+                        .to_owned(),
+                ));
+            };
+            if soundfont.is_some() {
+                return Err(validation(
+                    "--soundfont",
+                    "renderer `sfizz` does not use --soundfont; pass --profile instead".to_owned(),
+                ));
+            }
+            Ok(Backend::Sfizz { profile })
+        }
+        tools::Renderer::Fluidsynth | tools::Renderer::Timidity => {
+            let Some(soundfont) = soundfont else {
+                return Err(validation(
+                    "--soundfont",
+                    "this renderer requires --soundfont".to_owned(),
+                ));
+            };
+            if profile.is_some() {
+                return Err(validation(
+                    "--profile",
+                    "this renderer does not use --profile; pass --soundfont instead".to_owned(),
+                ));
+            }
+            Ok(Backend::Sf2 { soundfont })
+        }
+    }
 }
 
 fn validation(path: &str, message: String) -> Error {
@@ -92,7 +151,8 @@ impl Drop for Cleanup {
 /// run, they land in a machine-readable report instead.
 pub struct BatchArgs<'a> {
     pub scenes: &'a [PathBuf],
-    pub soundfont: &'a Path,
+    pub soundfont: Option<&'a Path>,
+    pub profile: Option<&'a Path>,
     pub out_dir: &'a Path,
     pub format: &'a str,
     pub renderer: tools::Renderer,
@@ -109,6 +169,7 @@ pub struct BatchArgs<'a> {
 /// report JSON. Returns the first failure (after the report is written) so
 /// the exit code reflects it; agents read the report for the full picture.
 pub fn batch(args: &BatchArgs) -> Result<String> {
+    require_backend(args.renderer, args.soundfont, args.profile)?;
     let mut stems_seen = std::collections::BTreeMap::new();
     for (i, scene) in args.scenes.iter().enumerate() {
         let stem = scene
@@ -141,6 +202,7 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
         let result = build(&BuildArgs {
             scene,
             soundfont: args.soundfont,
+            profile: args.profile,
             output: &output,
             renderer: args.renderer,
             sample_rate: args.sample_rate,
@@ -226,6 +288,7 @@ fn produce(
 }
 
 pub fn build(args: &BuildArgs) -> Result<String> {
+    require_backend(args.renderer, args.soundfont, args.profile)?;
     let ext = args
         .output
         .extension()
@@ -331,69 +394,150 @@ fn build_one(
         dirs: Vec::new(),
         keep: args.keep_intermediates,
     };
-
-    // Full mix: render, cut sample-exactly in-process, then encode if needed.
-    tools::write_atomic(&mid, &midi_bytes(scene, passes, None)?)?;
-    tools::render(
-        args.renderer,
-        &mid,
-        args.soundfont,
-        &raw,
-        args.sample_rate,
-        args.gain,
-    )?;
-    produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
-
-    // Stems: staged in a temp dir, swapped in only when every track rendered.
     let mut stem_rel: Vec<String> = Vec::new();
-    if args.stems {
-        let stems_dir = output.with_extension("stems");
-        let staging = output.with_extension(format!("stems.tmp-{}", std::process::id()));
-        std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
-            path: staging.display().to_string(),
-            source: e,
-        })?;
-        cleanup.dirs.push(staging.clone());
-        for (i, track) in scene.tracks.iter().enumerate() {
-            let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
-            let mid_i = staging.join(format!("{:02}.mid", i + 1));
-            let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
-            tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
+
+    match require_backend(args.renderer, args.soundfont, args.profile)? {
+        Backend::Sfizz {
+            profile: profile_path,
+        } => {
+            // sfizz_render only ever plays one instrument: render every track
+            // solo (the same per-track pass `--stems` needs anyway), then mix
+            // them in-process into the full-mix raw. "Sum of stems == full mix"
+            // therefore holds by construction, same as the SF2 backends.
+            let profile = crate::profile::load_profile(profile_path)?;
+            let profile_dir = profile_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+
+            let staging = output.with_extension(format!("sfizz.tmp-{}", std::process::id()));
+            std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
+                path: staging.display().to_string(),
+                source: e,
+            })?;
+            cleanup.dirs.push(staging.clone());
+
+            let mut track_raws: Vec<PathBuf> = Vec::with_capacity(scene.tracks.len());
+            for (i, track) in scene.tracks.iter().enumerate() {
+                let sfz = profile.resolve(&profile_dir, track.instrument, track.articulation)?;
+                let mid_i = staging.join(format!("{:02}.mid", i + 1));
+                let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
+                tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
+                // sfizz_render has no gain flag (unlike fluidsynth -g / timidity
+                // -A), so gain is applied here in-process instead — on each
+                // track individually, so stems and the mixed-down full track
+                // carry the same gain and still sum correctly.
+                tools::render_sfz(&mid_i, &sfz, &raw_i, args.sample_rate)?;
+                let raw_i_gain = staging.join(format!("{:02}.gain.wav", i + 1));
+                audio::mix(std::slice::from_ref(&raw_i), &raw_i_gain, args.gain)?;
+                track_raws.push(raw_i_gain);
+            }
+            // Gain is already baked into each track above; mix at unity here.
+            audio::mix(&track_raws, &raw, 1.0)?;
+            produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
+
+            if args.stems {
+                let stems_dir = output.with_extension("stems");
+                let stems_staging =
+                    output.with_extension(format!("stems.tmp-{}", std::process::id()));
+                std::fs::create_dir_all(&stems_staging).map_err(|e| Error::Io {
+                    path: stems_staging.display().to_string(),
+                    source: e,
+                })?;
+                cleanup.dirs.push(stems_staging.clone());
+                for (i, track) in scene.tracks.iter().enumerate() {
+                    let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
+                    produce(
+                        &track_raws[i],
+                        &stems_staging.join(&name),
+                        ext,
+                        args.quality,
+                        window,
+                        &mut cleanup,
+                    )?;
+                    let dir_name = stems_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    stem_rel.push(format!("{dir_name}/{name}"));
+                }
+                if stems_dir.exists() {
+                    std::fs::remove_dir_all(&stems_dir).map_err(|e| Error::Io {
+                        path: stems_dir.display().to_string(),
+                        source: e,
+                    })?;
+                }
+                std::fs::rename(&stems_staging, &stems_dir).map_err(|e| Error::Io {
+                    path: stems_dir.display().to_string(),
+                    source: e,
+                })?;
+                cleanup.dirs.retain(|d| d != &stems_staging);
+            }
+        }
+        Backend::Sf2 { soundfont } => {
+            // Full mix: render, cut sample-exactly in-process, then encode if needed.
+            tools::write_atomic(&mid, &midi_bytes(scene, passes, None)?)?;
             tools::render(
                 args.renderer,
-                &mid_i,
-                args.soundfont,
-                &raw_i,
+                &mid,
+                soundfont,
+                &raw,
                 args.sample_rate,
                 args.gain,
             )?;
-            produce(
-                &raw_i,
-                &staging.join(&name),
-                ext,
-                args.quality,
-                window,
-                &mut cleanup,
-            )?;
-            let _ = std::fs::remove_file(&mid_i);
-            let _ = std::fs::remove_file(&raw_i);
-            let dir_name = stems_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            stem_rel.push(format!("{dir_name}/{name}"));
+            produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
+
+            // Stems: staged in a temp dir, swapped in only when every track rendered.
+            if args.stems {
+                let stems_dir = output.with_extension("stems");
+                let staging = output.with_extension(format!("stems.tmp-{}", std::process::id()));
+                std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
+                    path: staging.display().to_string(),
+                    source: e,
+                })?;
+                cleanup.dirs.push(staging.clone());
+                for (i, track) in scene.tracks.iter().enumerate() {
+                    let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
+                    let mid_i = staging.join(format!("{:02}.mid", i + 1));
+                    let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
+                    tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
+                    tools::render(
+                        args.renderer,
+                        &mid_i,
+                        soundfont,
+                        &raw_i,
+                        args.sample_rate,
+                        args.gain,
+                    )?;
+                    produce(
+                        &raw_i,
+                        &staging.join(&name),
+                        ext,
+                        args.quality,
+                        window,
+                        &mut cleanup,
+                    )?;
+                    let _ = std::fs::remove_file(&mid_i);
+                    let _ = std::fs::remove_file(&raw_i);
+                    let dir_name = stems_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    stem_rel.push(format!("{dir_name}/{name}"));
+                }
+                if stems_dir.exists() {
+                    std::fs::remove_dir_all(&stems_dir).map_err(|e| Error::Io {
+                        path: stems_dir.display().to_string(),
+                        source: e,
+                    })?;
+                }
+                std::fs::rename(&staging, &stems_dir).map_err(|e| Error::Io {
+                    path: stems_dir.display().to_string(),
+                    source: e,
+                })?;
+                cleanup.dirs.clear();
+            }
         }
-        if stems_dir.exists() {
-            std::fs::remove_dir_all(&stems_dir).map_err(|e| Error::Io {
-                path: stems_dir.display().to_string(),
-                source: e,
-            })?;
-        }
-        std::fs::rename(&staging, &stems_dir).map_err(|e| Error::Io {
-            path: stems_dir.display().to_string(),
-            source: e,
-        })?;
-        cleanup.dirs.clear();
     }
 
     // Machine-readable metadata for game engines and agent pipelines.

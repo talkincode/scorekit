@@ -1,0 +1,100 @@
+# Renderer profile for VSCO 2 Community Edition (CC0 orchestral samples),
+# for `scorekit build/batch --renderer sfizz --profile examples/profiles/vsco2-ce.yaml`.
+#
+# Get the library: https://vis.versilstudios.com/vsco-community.html (~3GB,
+# CC0, no attribution required). Get `sfizz_render`: `scripts/build_sfizz.sh`.
+#
+# `root` is left unset on purpose: it defaults to this file's own directory,
+# so this checked-in example never bakes in anyone's local disk layout (the
+# whole reason renderer profiles exist — see docs/roadmap.md M7). To use it:
+#   1. Copy this file (don't edit the shipped one) next to your own scenes.
+#   2. Add a `root:` line pointing at wherever you extracted VSCO-2-CE, e.g.
+#      root: /path/to/VSCO-2-CE-1.1.0
+#   3. Or skip `root:` entirely and drop VSCO-2-CE's *.sfz + samples directly
+#      beside your copy of this file.
+#
+# VSCO 2 CE is acoustic/orchestral-only — it has no synth or vocal patches.
+# Instruments the DSL supports but VSCO2 doesn't provide a natural sample
+# for are mapped to an orchestral substitute (noted per entry below); this
+# keeps every example in examples/scenes/ renderable through one free
+# library instead of leaving some scenes without an sfizz path.
+name: vsco2-ce
+description: >-
+  VSCO 2 Community Edition (CC0 orchestral samples) — see
+  https://vis.versilstudios.com/vsco-community.html
+instruments:
+  piano:
+    sustain: UprightPiano.sfz
+  # No electric piano in VSCO2 CE; substituted with the same upright piano.
+  epiano:
+    sustain: UprightPiano.sfz
+  violin:
+    sustain: SViolinVib.sfz # solo violin, vibrato
+    staccato: SViolinSpic.sfz # spiccato is the closest short articulation
+    spiccato: SViolinSpic.sfz
+    pizzicato: SViolinPizz.sfz
+    tremolo: SViolinTrem.sfz
+  cello:
+    sustain: CelloEnsSusVib.sfz # cello section (VSCO2 CE has no solo cello)
+    staccato: CelloEnsSpic.sfz
+    spiccato: CelloEnsSpic.sfz
+    pizzicato: CelloEnsPizz.sfz
+    tremolo: CelloEnsTrem.sfz
+  contrabass:
+    sustain: ContrabassSusVB.sfz
+    staccato: ContrabassSpic.sfz
+    spiccato: ContrabassSpic.sfz
+    pizzicato: ContrabassPizz.sfz
+    tremolo: ContrabassTrem.sfz
+  bass:
+    sustain: ContrabassSusVB.sfz
+    staccato: ContrabassSpic.sfz
+    spiccato: ContrabassSpic.sfz
+    pizzicato: ContrabassPizz.sfz
+    tremolo: ContrabassTrem.sfz
+  # No synth bass in VSCO2 CE; substituted with pizzicato low strings.
+  synth_bass:
+    sustain: ContrabassPizz.sfz
+    pizzicato: ContrabassPizz.sfz
+  strings:
+    sustain: ViolinEnsSusVib.sfz # full violin section as the generic string bed
+    staccato: ViolinEnsSpic.sfz
+    spiccato: ViolinEnsSpic.sfz
+    pizzicato: ViolinEnsPizz.sfz
+    tremolo: ViolinEnsTrem.sfz
+  slow_strings:
+    sustain: ViolinEnsSusVib-Quiet.sfz # quiet/soft section sustain
+  # No synth pad in VSCO2 CE; substituted with the same soft string bed.
+  pad:
+    sustain: ViolinEnsSusVib-Quiet.sfz
+  # No choir/vocal samples in VSCO2 CE; substituted with a sustained organ,
+  # the closest "long breathy tone" this library ships.
+  choir:
+    sustain: OrganQuiet.sfz
+  choir_pad:
+    sustain: OrganQuiet.sfz
+  voice:
+    sustain: OrganQuiet.sfz
+  # No square-wave synth lead in VSCO2 CE; substituted with flute.
+  square_lead:
+    sustain: FluteSusVib.sfz
+    staccato: FluteStac.sfz
+  # No sawtooth synth lead in VSCO2 CE; substituted with harmon-muted
+  # trumpet, the closest buzzy/nasal timbre this library ships.
+  saw_lead:
+    sustain: TrumpetHarmonMuteSus.sfz
+    staccato: TrumpetStac.sfz
+  flute:
+    sustain: FluteSusVib.sfz
+    staccato: FluteStac.sfz
+  harp:
+    sustain: Harp.sfz
+  horn:
+    sustain: FHornSus.sfz
+    staccato: FHornStac.sfz
+    mute: FHornMute.sfz
+  timpani:
+    sustain: Timpani.sfz
+    tremolo: TimpaniRolls.sfz
+  drums:
+    sustain: GM-StylePerc.sfz

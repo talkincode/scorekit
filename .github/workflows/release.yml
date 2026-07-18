@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            builder: cargo
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            builder: cross
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            builder: cargo
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            builder: cargo
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            builder: cargo
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        uses: taiki-e/install-action@cross
+      - name: Build release binary
+        shell: bash
+        run: ${{ matrix.builder }} build --locked --release --target ${{ matrix.target }}
+      - name: Smoke test native binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: target/${{ matrix.target }}/release/scorekit${{ matrix.archive == 'zip' && '.exe' || '' }} --version
+      - name: Package Unix release
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          package="scorekit-${{ matrix.target }}"
+          mkdir -p "staging/${package}" dist
+          cp "target/${{ matrix.target }}/release/scorekit" "staging/${package}/"
+          cp README.md LICENSE "staging/${package}/"
+          cp -R skills "staging/${package}/"
+          tar -C staging -czf "dist/${package}.tar.gz" "${package}"
+      - name: Package Windows release
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $package = "scorekit-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "staging/$package", dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/scorekit.exe" "staging/$package/"
+          Copy-Item README.md, LICENSE "staging/$package/"
+          Copy-Item -Recurse skills "staging/$package/skills"
+          Compress-Archive -Path "staging/$package" -DestinationPath "dist/$package.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scorekit-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches Cargo package version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum scorekit-* > SHA256SUMS
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/scorekit-*
+            dist/SHA256SUMS

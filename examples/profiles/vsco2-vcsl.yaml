@@ -1,0 +1,101 @@
+# Hybrid renderer profile: VSCO 2 Community Edition (strings/brass/winds) +
+# Versilian Community Sample Library (piano/harp/timpani), for
+# `scorekit build/batch --renderer sfizz --profile examples/profiles/vsco2-vcsl.yaml`.
+#
+# Why two libraries: VCSL is explicitly a CC0 *supplement* to VSCO 2 CE, not
+# a replacement — it ships almost no orchestral strings/brass/choir, but its
+# piano, harp and timpani recordings are noticeably better than VSCO 2 CE's
+# (richer grand piano vs. a single close-mic'd upright, a fuller concert
+# harp, real multi-round-robin timpani hits). This profile takes the best
+# of each rather than picking one library wholesale.
+#
+# Get the libraries (both free, CC0, no attribution required):
+#   VSCO 2 CE: https://vis.versilstudios.com/vsco-community.html (~3GB)
+#   VCSL:      https://github.com/sgossner/VCSL (~4GB)
+# Get `sfizz_render`: `scripts/build_sfizz.sh`.
+#
+# `root` is left unset on purpose (defaults to this file's own directory) so
+# this checked-in example never bakes in anyone's local disk layout — see
+# examples/profiles/vsco2-ce.yaml for the full rationale. To use it:
+#   1. Copy this file (don't edit the shipped one) next to your own scenes.
+#   2. Set up ONE directory with both libraries as subfolders (symlinks are
+#      fine), matching the relative paths used below:
+#        <your-dir>/vsco2-ce/...   (VSCO-2-CE-1.1.0's contents)
+#        <your-dir>/vcsl/...       (VCSL-1.2.2-RC's contents)
+#   3. Add `root: /path/to/your-dir` to your copy.
+name: vsco2-vcsl
+description: >-
+  VSCO 2 Community Edition (strings/brass/winds) + Versilian Community
+  Sample Library (piano/harp/timpani) — both CC0.
+instruments:
+  # VCSL — better piano/harp/timpani than VSCO2 CE provides.
+  piano:
+    sustain: "vcsl/Chordophones/Zithers/Grand Piano, Steinway B.sfz"
+  # No electric piano in either library; VCSL's FM synth piano patch reads
+  # closer to an "epiano" than VSCO2's upright.
+  epiano:
+    sustain: "vcsl/Electrophones/TX81Z - FM Piano.sfz"
+  harp:
+    sustain: "vcsl/Chordophones/Composite Chordophones/Concert Harp.sfz"
+  timpani:
+    sustain: "vcsl/Membranophones/Struck Membranophones/Timpani 1 - Hit.sfz"
+    tremolo: "vcsl/Membranophones/Struck Membranophones/Timpani 1 - Roll.sfz"
+  # VSCO2 CE — everything VCSL doesn't cover (strings/brass/winds/choir).
+  violin:
+    sustain: vsco2-ce/SViolinVib.sfz
+    staccato: vsco2-ce/SViolinSpic.sfz
+    spiccato: vsco2-ce/SViolinSpic.sfz
+    pizzicato: vsco2-ce/SViolinPizz.sfz
+    tremolo: vsco2-ce/SViolinTrem.sfz
+  cello:
+    sustain: vsco2-ce/CelloEnsSusVib.sfz
+    staccato: vsco2-ce/CelloEnsSpic.sfz
+    spiccato: vsco2-ce/CelloEnsSpic.sfz
+    pizzicato: vsco2-ce/CelloEnsPizz.sfz
+    tremolo: vsco2-ce/CelloEnsTrem.sfz
+  contrabass:
+    sustain: vsco2-ce/ContrabassSusVB.sfz
+    staccato: vsco2-ce/ContrabassSpic.sfz
+    spiccato: vsco2-ce/ContrabassSpic.sfz
+    pizzicato: vsco2-ce/ContrabassPizz.sfz
+    tremolo: vsco2-ce/ContrabassTrem.sfz
+  bass:
+    sustain: vsco2-ce/ContrabassSusVB.sfz
+    staccato: vsco2-ce/ContrabassSpic.sfz
+    spiccato: vsco2-ce/ContrabassSpic.sfz
+    pizzicato: vsco2-ce/ContrabassPizz.sfz
+    tremolo: vsco2-ce/ContrabassTrem.sfz
+  synth_bass:
+    sustain: vsco2-ce/ContrabassPizz.sfz
+    pizzicato: vsco2-ce/ContrabassPizz.sfz
+  strings:
+    sustain: vsco2-ce/ViolinEnsSusVib.sfz
+    staccato: vsco2-ce/ViolinEnsSpic.sfz
+    spiccato: vsco2-ce/ViolinEnsSpic.sfz
+    pizzicato: vsco2-ce/ViolinEnsPizz.sfz
+    tremolo: vsco2-ce/ViolinEnsTrem.sfz
+  slow_strings:
+    sustain: vsco2-ce/ViolinEnsSusVib-Quiet.sfz
+  pad:
+    sustain: vsco2-ce/ViolinEnsSusVib-Quiet.sfz
+  choir:
+    sustain: vsco2-ce/OrganQuiet.sfz
+  choir_pad:
+    sustain: vsco2-ce/OrganQuiet.sfz
+  voice:
+    sustain: vsco2-ce/OrganQuiet.sfz
+  square_lead:
+    sustain: vsco2-ce/FluteSusVib.sfz
+    staccato: vsco2-ce/FluteStac.sfz
+  saw_lead:
+    sustain: vsco2-ce/TrumpetHarmonMuteSus.sfz
+    staccato: vsco2-ce/TrumpetStac.sfz
+  flute:
+    sustain: vsco2-ce/FluteSusVib.sfz
+    staccato: vsco2-ce/FluteStac.sfz
+  horn:
+    sustain: vsco2-ce/FHornSus.sfz
+    staccato: vsco2-ce/FHornStac.sfz
+    mute: vsco2-ce/FHornMute.sfz
+  drums:
+    sustain: vsco2-ce/GM-StylePerc.sfz

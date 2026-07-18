@@ -102,6 +102,75 @@ pub fn extract(input: &Path, output: &Path, window: Window) -> Result<()> {
     tools::write_atomic(output, &cursor.into_inner())
 }
 
+/// Mix same-spec 16-bit PCM WAVs into one, applying `gain` and clamping.
+/// Deterministic float summation (position-only, no filtering), zero-pads
+/// shorter inputs to the longest track's length. Used by the `sfizz`
+/// renderer backend, which can only render one instrument (one SFZ file)
+/// per pass: the "full mix" is built by rendering every track solo and
+/// mixing here, so it's bit-for-bit `sum of stems` by construction — the
+/// same invariant the single-pass FluidSynth/TiMidity mix already gives us.
+pub fn mix(inputs: &[std::path::PathBuf], output: &Path, gain: f32) -> Result<()> {
+    if inputs.is_empty() {
+        return Err(Error::Validation {
+            path: "mix".to_owned(),
+            message: "no inputs to mix".to_owned(),
+        });
+    }
+    let mut spec: Option<hound::WavSpec> = None;
+    let mut tracks: Vec<Vec<i16>> = Vec::with_capacity(inputs.len());
+    for p in inputs {
+        let mut reader = hound::WavReader::open(p).map_err(|e| wav_err(p, e))?;
+        let s = reader.spec();
+        if s.bits_per_sample != 16 || s.sample_format != hound::SampleFormat::Int {
+            return Err(Error::Validation {
+                path: p.display().to_string(),
+                message: format!(
+                    "expected 16-bit integer PCM, got {}-bit {:?}",
+                    s.bits_per_sample, s.sample_format
+                ),
+            });
+        }
+        match spec {
+            None => spec = Some(s),
+            Some(sp) if sp.channels == s.channels && sp.sample_rate == s.sample_rate => {}
+            Some(sp) => {
+                return Err(Error::Validation {
+                    path: p.display().to_string(),
+                    message: format!(
+                        "spec mismatch: expected {}ch@{}Hz, got {}ch@{}Hz",
+                        sp.channels, sp.sample_rate, s.channels, s.sample_rate
+                    ),
+                });
+            }
+        }
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|e| wav_err(p, e))?;
+        tracks.push(samples);
+    }
+    let spec = spec.expect("checked inputs is non-empty above");
+    let max_len = tracks.iter().map(Vec::len).max().unwrap_or(0);
+    let g = f64::from(gain);
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(&mut cursor, spec).map_err(|e| wav_err(output, e))?;
+    for i in 0..max_len {
+        let mut sum = 0.0f64;
+        for t in &tracks {
+            if let Some(&s) = t.get(i) {
+                sum += f64::from(s);
+            }
+        }
+        let v = (sum * g)
+            .round()
+            .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+        writer.write_sample(v).map_err(|e| wav_err(output, e))?;
+    }
+    writer.finalize().map_err(|e| wav_err(output, e))?;
+    tools::write_atomic(output, &cursor.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +224,54 @@ mod tests {
         assert_eq!(out[9], 900);
         // fade ramps toward pre-window values: out[6] = in[16] + (in[6]-in[16])*1/4
         assert_eq!(out[6], (1600.0f64 + (600.0 - 1600.0) * 0.25).round() as i16);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mix_sums_tracks_zero_pads_and_clamps() {
+        let dir = std::env::temp_dir().join(format!("sk-audio-mix-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.wav");
+        let b = dir.join("b.wav");
+        let out = dir.join("mix.wav");
+        write_wav(&a, &[100, 200, 300]);
+        write_wav(&b, &[50, 60]); // shorter: zero-padded past its end
+        mix(&[a.clone(), b.clone()], &out, 1.0).unwrap();
+        let mixed = read_wav(&out);
+        assert_eq!(mixed, vec![150, 260, 300]);
+
+        // Overflow clamps to i16::MAX instead of wrapping.
+        let c = dir.join("c.wav");
+        let d = dir.join("d.wav");
+        let out2 = dir.join("mix2.wav");
+        write_wav(&c, &[30000]);
+        write_wav(&d, &[30000]);
+        mix(&[c, d], &out2, 1.0).unwrap();
+        assert_eq!(read_wav(&out2), vec![i16::MAX]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mix_rejects_mismatched_specs() {
+        let dir = std::env::temp_dir().join(format!("sk-audio-mix-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.wav");
+        let stereo = dir.join("stereo.wav");
+        write_wav(&a, &[1, 2, 3]);
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&stereo, spec).unwrap();
+        w.write_sample(1i16).unwrap();
+        w.write_sample(1i16).unwrap();
+        w.finalize().unwrap();
+        let out = dir.join("mix.wav");
+        let err = mix(&[a, stereo], &out, 1.0).unwrap_err();
+        assert!(err.to_string().contains("spec mismatch"), "{err}");
+        assert!(!out.exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -28,3 +28,10 @@ target
 # Test/dev assets (fetched by scripts/fetch_assets.sh)
 /assets/
 *.sf2
+
+# Rendered audio output (build artifacts, not source)
+/out/
+/docs-site/book/
+
+# macOS Finder metadata
+.DS_Store

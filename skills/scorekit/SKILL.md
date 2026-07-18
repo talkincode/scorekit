@@ -23,21 +23,27 @@ Pipeline: `scene.yaml → validate → (lint) → build → .ogg/.wav + meta.jso
 ## Setup check
 
 ```bash
-scorekit --help || ~/scorekit/target/release/scorekit --help
+scorekit doctor || ~/scorekit/target/release/scorekit doctor
 ```
 
 If missing, install (Rust toolchain required):
 
 ```bash
 git clone https://github.com/talkincode/scorekit && cd scorekit
-cargo build --release            # binary: target/release/scorekit
+make install                     # tools + skill + MuseScore General + sound dirs
 # external tools (macOS: brew / Debian: apt)
 brew install fluid-synth ffmpeg  # timidity optional (second backend)
-./scripts/fetch_assets.sh        # downloads assets/TimGM6mb.sf2 (GM SoundFont)
 ```
 
 Any GM-compatible `.sf2` works via `--soundfont`. Exit code 3 = missing
-external tool; the error message names it.
+external tool; `scorekit --json doctor` returns the complete dependency and
+platform report, including architecture-specific installation help.
+The default user-managed sound root is `~/.local/share/scorekit/sounds/`
+(`sf2/`, `sfz/`, `profiles/`). FluidSynth and TiMidity use
+`sf2/MuseScore_General.sf2` by default; sfizz requires an explicit `--profile`.
+Override the install location with `SCOREKIT_SOUND_LIBRARY_DIR`.
+The default SF2 is `sf2/MuseScore_General.sf2`; omit `--soundfont` to use it,
+or pass an explicit file to override it.
 
 ## Core workflow
 
@@ -52,7 +58,7 @@ external tool; the error message names it.
    report measured vs wanted values; edit the scene until it conforms.
 5. **Build:**
    ```bash
-   scorekit build scene.yaml --soundfont assets/TimGM6mb.sf2 -o out/scene.ogg
+   scorekit build scene.yaml -o out/scene.ogg
    ```
    Add `--stems` for per-track files in `out/scene.ogg.stems/` (adaptive
    game audio), `--renderer timidity` for the alternate backend. Non-loop
@@ -61,8 +67,18 @@ external tool; the error message names it.
    scene under version control — `scorekit diff old.yaml new.yaml` shows
    semantic changes only.
 
-Batch many scenes: `scorekit batch a.yaml b.yaml --soundfont X.sf2
---out-dir assets/` → per-scene results in `assets/report.json`, one failure
+When the request begins as a story, character, or film scene rather than a
+scene YAML, read [examples/narrative-film-score.md](examples/narrative-film-score.md).
+Use its prompt-to-brief mapping: keep narrative language in the creative brief,
+then translate only deterministic musical decisions into the DSL. The worked
+artifact is [examples/exile-in-the-dunes.yaml](examples/exile-in-the-dunes.yaml).
+
+Completion gate: `doctor` is ready, the scene passes `validate`, any requested
+grammar passes `lint`, `build` succeeds, and the response names the scene,
+audio, metadata, and stem paths plus the motif/orchestration choices made.
+
+Batch many scenes: `scorekit batch a.yaml b.yaml --out-dir assets/` →
+per-scene results in `assets/report.json`, one failure
 doesn't stop the rest.
 
 Exit codes: `0` ok · `1` io · `2` invalid input / lint violations ·
