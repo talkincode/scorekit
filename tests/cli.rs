@@ -1733,6 +1733,159 @@ fn validate_rejects_bad_swing_and_bad_numeral() {
     assert!(stderr.contains("harmony[0]"), "stderr: {stderr}");
 }
 
+// ---- spatial performance fields (M10) ----
+
+fn spatial_yaml(with_spatial: bool) -> String {
+    let spatial = if with_spatial {
+        "    glide: 0.4\n    pan: 0.25\n    reverb: 0.8\n"
+    } else {
+        ""
+    };
+    format!(
+        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nmotifs:\n  line:\n    - {{ degree: 1, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\n    - {{ degree: 3, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\ntracks:\n  - instrument: violin\n    pattern: melody\n    motif: line\n{spatial}  - instrument: cello\n    pattern: sustain\n    intensity: 0.5\n"
+    )
+}
+
+/// Collect (controller, value) and pitch-bend values across all MIDI tracks.
+fn midi_controls(bytes: &[u8]) -> (Vec<(u8, u8)>, Vec<u16>) {
+    let smf = midly::Smf::parse(bytes).expect("produced MIDI parses");
+    let mut ccs = Vec::new();
+    let mut bends = Vec::new();
+    for track in &smf.tracks {
+        for event in track {
+            if let midly::TrackEventKind::Midi { message, .. } = event.kind {
+                match message {
+                    midly::MidiMessage::Controller { controller, value } => {
+                        ccs.push((controller.as_int(), value.as_int()));
+                    }
+                    midly::MidiMessage::PitchBend { bend } => {
+                        bends.push(bend.0.as_int());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (ccs, bends)
+}
+
+#[test]
+fn spatial_fields_emit_cc_and_pitch_bend_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("spatial.yaml");
+    fs::write(&scene, spatial_yaml(true)).unwrap();
+    let (a, b) = (dir.path().join("a.mid"), dir.path().join("b.mid"));
+    for out in [&a, &b] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(out)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&a).unwrap();
+    assert_eq!(
+        bytes,
+        fs::read(&b).unwrap(),
+        "spatial fields must compile deterministically"
+    );
+
+    let (ccs, bends) = midi_controls(&bytes);
+    assert!(
+        ccs.contains(&(10, 32)),
+        "pan 0.25 must emit CC10 = 32, got {ccs:?}"
+    );
+    assert!(
+        ccs.contains(&(91, 102)),
+        "reverb 0.8 must emit CC91 = 102, got {ccs:?}"
+    );
+    assert!(
+        bends.iter().any(|&v| v != 8192),
+        "glide must emit off-center pitch bends"
+    );
+    assert!(
+        bends.contains(&8192),
+        "every glide must reset the bend to center at the next onset"
+    );
+
+    let plain = dir.path().join("plain.yaml");
+    fs::write(&plain, spatial_yaml(false)).unwrap();
+    let p = dir.path().join("p.mid");
+    bin()
+        .arg("midi")
+        .arg(&plain)
+        .arg("-o")
+        .arg(&p)
+        .assert()
+        .success();
+    let plain_bytes = fs::read(&p).unwrap();
+    assert_ne!(bytes, plain_bytes, "spatial fields must change the MIDI");
+    let (plain_ccs, plain_bends) = midi_controls(&plain_bytes);
+    assert!(
+        plain_ccs.is_empty() && plain_bends.is_empty(),
+        "a scene without spatial fields must emit no controllers or bends"
+    );
+}
+
+#[test]
+fn spatial_build_keeps_loop_sample_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("spatial.yaml");
+    fs::write(&scene, spatial_yaml(true)).unwrap();
+    let wav = dir.path().join("spatial.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .assert()
+        .success();
+    let want = exact_samples(2 * 4 * 480, 92, 44100);
+    let (spec, frames) = read_frames(&wav);
+    assert_eq!(
+        frames.len() as u64 / u64::from(spec.channels),
+        want,
+        "pan/reverb/glide must not disturb the sample-exact loop length"
+    );
+}
+
+#[test]
+fn validate_rejects_bad_pan_and_glide_on_non_melody() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 92\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    pan: 1.5\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("tracks[0].pan"), "stderr: {stderr}");
+
+    fs::write(
+        &scene,
+        "tempo: 92\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    glide: 0.3\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("tracks[0].glide") && stderr.contains("melody"),
+        "stderr: {stderr}"
+    );
+}
+
 // ---- lint: aesthetic grammar (M6) ----
 
 /// The shipped reference pair must always agree: dunes.yaml is the
