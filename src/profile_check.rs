@@ -194,7 +194,10 @@ fn probe_midi(drum_channel: bool) -> Vec<u8> {
         tracks: vec![TrackIr {
             channel: if drum_channel { 9 } else { 0 },
             program: None,
+            pan: None,
+            reverb: None,
             notes,
+            bends: Vec::new(),
         }],
     })
 }

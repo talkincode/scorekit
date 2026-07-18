@@ -55,6 +55,13 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `motif` | motif name | — | required iff `pattern: melody` |
 | `intensity` | 0.0..=1.0 | 0.6 | velocity scale |
 | `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity, selects the `.sfz` file under `--renderer sfizz --profile ...` (falls back to the instrument's `sustain` mapping if unmapped) |
+| `pan` | 0.0..=1.0 | — | stereo position → CC10 (`0` left, `0.5` center, `1` right); omitted = renderer default |
+| `reverb` | 0.0..=1.0 | — | reverb send → CC91; omitted = renderer default |
+| `glide` | 0.0..=1.0 | — | melody-only tail portamento: the last `glide` fraction of each note pitch-bends toward the next pitch (clamped ±2 semitones); loops bend last→first, seam-safe |
+
+`pan`/`reverb`/`glide` compile to deterministic MIDI (CC10/CC91/pitch-bend).
+fluidsynth/timidity honor all three; sfizz honors pitch bend, but CC10/91
+only take effect if the `.sfz` maps those CCs.
 
 ### Motif note
 

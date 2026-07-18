@@ -1,24 +1,30 @@
 //! IR → Standard MIDI File bytes. Output must be byte-stable for identical input.
 
 use crate::composer::{ScoreIr, TrackIr};
-use midly::num::{u4, u7, u15, u24, u28};
-use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
+use midly::num::{u4, u7, u14, u15, u24, u28};
+use midly::{
+    Format, Header, MetaMessage, MidiMessage, PitchBend, Smf, Timing, TrackEvent, TrackEventKind,
+};
 
 /// Absolute-time event before delta encoding.
 struct AbsEvent {
     tick: u32,
-    /// Sort rank at equal tick: note-offs (0) before note-ons (1) to avoid retriggering.
+    /// Sort rank at equal tick: note-offs (0) before pitch bends (1) before
+    /// note-ons (2), so retriggers are avoided and a glide's bend reset takes
+    /// effect before the next note sounds.
     rank: u8,
+    /// Note key, or the bend's 7-bit MSB for rank-1 events.
     key: u8,
+    /// Note velocity, or the bend's 7-bit LSB for rank-1 events.
     vel: u8,
 }
 
 fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
-    let mut abs: Vec<AbsEvent> = Vec::with_capacity(track.notes.len() * 2);
+    let mut abs: Vec<AbsEvent> = Vec::with_capacity(track.notes.len() * 2 + track.bends.len());
     for n in &track.notes {
         abs.push(AbsEvent {
             tick: n.tick,
-            rank: 1,
+            rank: 2,
             key: n.key,
             vel: n.vel,
         });
@@ -29,10 +35,18 @@ fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
             vel: 0,
         });
     }
+    for b in &track.bends {
+        abs.push(AbsEvent {
+            tick: b.tick,
+            rank: 1,
+            key: (b.value >> 7) as u8,
+            vel: (b.value & 0x7F) as u8,
+        });
+    }
     abs.sort_by_key(|e| (e.tick, e.rank, e.key));
 
     let channel = u4::new(track.channel);
-    let mut events = Vec::with_capacity(abs.len() + 2);
+    let mut events = Vec::with_capacity(abs.len() + 4);
     let mut cursor = 0u32;
     if let Some(program) = track.program {
         events.push(TrackEvent {
@@ -45,19 +59,35 @@ fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
             },
         });
     }
+    for (controller, value) in [(10u8, track.pan), (91u8, track.reverb)] {
+        if let Some(value) = value {
+            events.push(TrackEvent {
+                delta: u28::new(0),
+                kind: TrackEventKind::Midi {
+                    channel,
+                    message: MidiMessage::Controller {
+                        controller: u7::new(controller),
+                        value: u7::new(value),
+                    },
+                },
+            });
+        }
+    }
     for e in abs {
         let delta = e.tick - cursor;
         cursor = e.tick;
-        let message = if e.rank == 1 {
-            MidiMessage::NoteOn {
+        let message = match e.rank {
+            2 => MidiMessage::NoteOn {
                 key: u7::new(e.key),
                 vel: u7::new(e.vel),
-            }
-        } else {
-            MidiMessage::NoteOff {
+            },
+            1 => MidiMessage::PitchBend {
+                bend: PitchBend(u14::new((u16::from(e.key) << 7) | u16::from(e.vel))),
+            },
+            _ => MidiMessage::NoteOff {
                 key: u7::new(e.key),
                 vel: u7::new(0),
-            }
+            },
         };
         events.push(TrackEvent {
             delta: u28::new(delta),

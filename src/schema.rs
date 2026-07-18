@@ -67,6 +67,24 @@ pub struct Track {
     /// MIDI; SF2 backends ignore it. Default: sustain.
     #[serde(default)]
     pub articulation: Articulation,
+    /// Stereo position 0.0 (hard left)..=1.0 (hard right), 0.5 = center.
+    /// Compiled to MIDI CC10 at the start of the track. Absent: no CC10 is
+    /// emitted and the synth default (center) applies.
+    #[serde(default)]
+    pub pan: Option<f32>,
+    /// Reverb send 0.0..=1.0, compiled to MIDI CC91 at the start of the
+    /// track — spatial depth (near/far). Absent: no CC91 is emitted.
+    /// SFZ instruments respond only if the `.sfz` maps these controllers.
+    #[serde(default)]
+    pub reverb: Option<f32>,
+    /// Tail portamento, only with pattern `melody`: during the final `glide`
+    /// fraction of each note, pitch bends deterministically toward the next
+    /// note (clamped to the GM ±2-semitone bend range), resetting exactly at
+    /// the next onset. In loop scenes the last note glides toward the first
+    /// note's pitch, so the gesture carries across the loop seam. Range:
+    /// 0.0..=1.0. Absent or 0: no pitch-bend events are emitted.
+    #[serde(default)]
+    pub glide: Option<f32>,
 }
 
 /// Playing technique; selects which SFZ file a renderer profile maps the
@@ -522,6 +540,36 @@ impl Scene {
                     &format!("tracks[{i}].intensity"),
                     format!("{} out of range 0.0..=1.0", t.intensity),
                 );
+            }
+            if let Some(pan) = t.pan
+                && !(0.0..=1.0).contains(&pan)
+            {
+                return fail(
+                    &format!("tracks[{i}].pan"),
+                    format!("{pan} out of range 0.0..=1.0"),
+                );
+            }
+            if let Some(reverb) = t.reverb
+                && !(0.0..=1.0).contains(&reverb)
+            {
+                return fail(
+                    &format!("tracks[{i}].reverb"),
+                    format!("{reverb} out of range 0.0..=1.0"),
+                );
+            }
+            if let Some(glide) = t.glide {
+                if !(0.0..=1.0).contains(&glide) {
+                    return fail(
+                        &format!("tracks[{i}].glide"),
+                        format!("{glide} out of range 0.0..=1.0"),
+                    );
+                }
+                if t.pattern != Pattern::Melody {
+                    return fail(
+                        &format!("tracks[{i}].glide"),
+                        "`glide` is only valid with pattern `melody`".to_owned(),
+                    );
+                }
             }
             match (
                 t.instrument == Instrument::Drums,

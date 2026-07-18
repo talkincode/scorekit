@@ -21,12 +21,25 @@ pub struct NoteEvent {
     pub vel: u8,
 }
 
+/// One pitch-bend event; `value` is the 14-bit MIDI bend (8192 = center).
+#[derive(Debug, Clone, Copy)]
+pub struct BendEvent {
+    pub tick: u32,
+    pub value: u16,
+}
+
 #[derive(Debug)]
 pub struct TrackIr {
     pub channel: u8,
     /// GM program; `None` on the drum channel.
     pub program: Option<u8>,
+    /// CC10 value at track start; `None` emits no controller.
+    pub pan: Option<u8>,
+    /// CC91 value at track start; `None` emits no controller.
+    pub reverb: Option<u8>,
     pub notes: Vec<NoteEvent>,
+    /// Tail-portamento pitch bends (`glide`), tick-sorted by construction.
+    pub bends: Vec<BendEvent>,
 }
 
 #[derive(Debug)]
@@ -273,12 +286,25 @@ pub fn compose(scene: &Scene) -> ScoreIr {
         tracks.push(TrackIr {
             channel,
             program: track.instrument.gm_program(),
+            pan: track.pan.map(|p| (p * 127.0).round() as u8),
+            reverb: track.reverb.map(|r| (r * 127.0).round() as u8),
             notes,
+            bends: Vec::new(),
         });
     }
 
     if let Some(p) = &scene.performance {
         apply_performance(&mut tracks, p, scene.tempo, beat_ticks, total_ticks);
+    }
+
+    // Glide reads final note positions, so it runs after every performance
+    // transform and before the loop `repeat` (bends copy with their notes).
+    for (track, spec) in tracks.iter_mut().zip(&scene.tracks) {
+        if let Some(glide) = spec.glide
+            && glide > 0.0
+        {
+            track.bends = glide_bends(&track.notes, glide, scene.r#loop, total_ticks);
+        }
     }
 
     ScoreIr {
@@ -364,6 +390,70 @@ fn apply_performance(
     }
 }
 
+/// Center value of the 14-bit pitch-bend range.
+const BEND_CENTER: i32 = 8192;
+/// GM default bend range in semitones; glide targets clamp to it.
+const BEND_RANGE_SEMIS: i32 = 2;
+/// Bend-curve sampling grid in ticks (PPQ/8 = a 32nd note).
+const BEND_GRID: u32 = PPQ / 8;
+
+/// Deterministic tail portamento for a monophonic melody track.
+///
+/// For each consecutive note pair (vector order = motif order), the final
+/// `glide` fraction of the note — capped at the next onset so legato overlap
+/// glides *into* the new note — ramps the channel pitch bend linearly from
+/// center toward the next pitch (clamped to ±2 semitones), then resets to
+/// center exactly at the next onset. In loop scenes the last note glides
+/// toward the first note's pitch with the reset pinned to `total_ticks`, so
+/// the gesture stays continuous across the loop seam. Pure position math;
+/// same input, same bytes.
+fn glide_bends(notes: &[NoteEvent], glide: f32, looping: bool, total_ticks: u32) -> Vec<BendEvent> {
+    let mut bends = Vec::new();
+    if notes.is_empty() {
+        return bends;
+    }
+    let mut push_pair = |cur: &NoteEvent, next_key: u8, next_onset: u32| {
+        let delta =
+            (i32::from(next_key) - i32::from(cur.key)).clamp(-BEND_RANGE_SEMIS, BEND_RANGE_SEMIS);
+        if delta == 0 {
+            return;
+        }
+        let end = (cur.tick + cur.dur).min(next_onset);
+        let window = (f64::from(cur.dur) * f64::from(glide)).round() as u32;
+        let window = window.min(end.saturating_sub(cur.tick));
+        if window == 0 {
+            return;
+        }
+        let start = end - window;
+        if next_onset <= start {
+            // Humanized onsets can reorder; a degenerate window emits nothing.
+            return;
+        }
+        let mut t = start;
+        while t < end {
+            let frac = f64::from(t - start) / f64::from(window);
+            let offset = (frac * f64::from(delta) * 4096.0).round() as i32;
+            bends.push(BendEvent {
+                tick: t,
+                value: (BEND_CENTER + offset).clamp(0, 16383) as u16,
+            });
+            t += BEND_GRID;
+        }
+        bends.push(BendEvent {
+            tick: next_onset,
+            value: BEND_CENTER as u16,
+        });
+    };
+    for pair in notes.windows(2) {
+        push_pair(&pair[0], pair[1].key, pair[1].tick);
+    }
+    if looping && notes.len() > 1 {
+        let last = notes[notes.len() - 1];
+        push_pair(&last, notes[0].key, total_ticks);
+    }
+    bends
+}
+
 /// Repeat the composed material `times` back to back (tick-shifted copies).
 /// Used for seamless-loop rendering: render two passes, keep the second.
 pub fn repeat(ir: &mut ScoreIr, times: u8) {
@@ -373,11 +463,16 @@ pub fn repeat(ir: &mut ScoreIr, times: u8) {
     let base = ir.total_ticks;
     for track in &mut ir.tracks {
         let one = track.notes.clone();
+        let one_bends = track.bends.clone();
         for pass in 1..u32::from(times) {
             let offset = base * pass;
             track.notes.extend(one.iter().map(|n| NoteEvent {
                 tick: n.tick + offset,
                 ..*n
+            }));
+            track.bends.extend(one_bends.iter().map(|b| BendEvent {
+                tick: b.tick + offset,
+                ..*b
             }));
         }
     }
