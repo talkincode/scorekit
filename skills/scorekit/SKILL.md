@@ -89,6 +89,8 @@ turns every error into one structured JSON object on stderr.
 
 ```yaml
 title: Forest at Dusk          # optional
+story: Safe exploration loop   # optional narrative brief; informational only,
+                               # echoed into meta.json for later agent review
 tempo: 92                      # 20..=300 BPM
 key: D_minor                   # <Note>_<major|minor>, e.g. C_major, F#_minor, Eb_major
 time_signature: 4/4            # numerator 1..=12

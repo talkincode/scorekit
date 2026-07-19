@@ -167,6 +167,7 @@ fn doctor_reports_platform_and_ready_toolchain_as_json() {
         .assert()
         .success();
     let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["scorekit_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(report["ready"], true);
     assert_eq!(report["platform"]["os"], std::env::consts::OS);
     assert_eq!(report["platform"]["arch"], std::env::consts::ARCH);
@@ -212,6 +213,10 @@ fn doctor_missing_renderer_returns_dependency_report_and_arch_help() {
     assert_eq!(payload["code"], "doctor");
     assert_eq!(payload["exit_code"], 3);
     assert_eq!(payload["report"]["ready"], false);
+    assert_eq!(
+        payload["report"]["scorekit_version"],
+        env!("CARGO_PKG_VERSION")
+    );
     assert_eq!(payload["report"]["requirements"]["ffmpeg"], true);
     assert_eq!(payload["report"]["requirements"]["renderer"], false);
     assert!(
@@ -317,6 +322,64 @@ fn schema_emits_json_schema() {
         v["properties"]["tracks"].is_object(),
         "schema has tracks: {v}"
     );
+    assert!(
+        v["properties"]["story"].is_object(),
+        "schema has story: {v}"
+    );
+}
+
+#[test]
+fn story_is_informational_and_never_affects_midi_bytes() {
+    // `story` is an annotation for downstream agent review; the protocol
+    // guarantees it never changes compiled output. Same scene with and
+    // without a story must validate and produce byte-identical MIDI.
+    let dir = tempfile::tempdir().unwrap();
+    let base = "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n";
+    let plain = dir.path().join("plain.yaml");
+    let storied = dir.path().join("storied.yaml");
+    fs::write(&plain, base).unwrap();
+    fs::write(
+        &storied,
+        format!("story: A quiet dawn over the ruined citadel.\n{base}"),
+    )
+    .unwrap();
+    bin().arg("validate").arg(&storied).assert().success();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    bin()
+        .arg("midi")
+        .arg(&plain)
+        .arg("-o")
+        .arg(&a)
+        .assert()
+        .success();
+    bin()
+        .arg("midi")
+        .arg(&storied)
+        .arg("-o")
+        .arg(&b)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(&a).unwrap(),
+        fs::read(&b).unwrap(),
+        "story must not change compiled MIDI bytes"
+    );
+}
+
+#[test]
+fn validate_rejects_non_string_story_with_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "story: { mood: 0.9 }\ntempo: 100\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin().arg("validate").arg(&scene).assert().code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("story"), "stderr: {stderr}");
+    assert!(stderr.contains("line"), "expected line info, got: {stderr}");
 }
 
 // ---- midi ----
@@ -706,6 +769,11 @@ fn build_full_chain_scene_to_ogg() {
     assert_eq!(meta["loop"], true);
     assert_eq!(meta["loop_samples"], forest_loop_samples());
     assert_eq!(meta["audio"], "forest.ogg");
+    // The scene's story annotation is echoed for downstream agent review.
+    assert!(
+        meta["story"].as_str().unwrap().contains("forest"),
+        "meta.json carries story: {meta}"
+    );
 }
 
 #[test]
