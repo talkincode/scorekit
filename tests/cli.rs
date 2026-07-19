@@ -167,6 +167,7 @@ fn doctor_reports_platform_and_ready_toolchain_as_json() {
         .assert()
         .success();
     let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["scorekit_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(report["ready"], true);
     assert_eq!(report["platform"]["os"], std::env::consts::OS);
     assert_eq!(report["platform"]["arch"], std::env::consts::ARCH);
@@ -212,6 +213,10 @@ fn doctor_missing_renderer_returns_dependency_report_and_arch_help() {
     assert_eq!(payload["code"], "doctor");
     assert_eq!(payload["exit_code"], 3);
     assert_eq!(payload["report"]["ready"], false);
+    assert_eq!(
+        payload["report"]["scorekit_version"],
+        env!("CARGO_PKG_VERSION")
+    );
     assert_eq!(payload["report"]["requirements"]["ffmpeg"], true);
     assert_eq!(payload["report"]["requirements"]["renderer"], false);
     assert!(
