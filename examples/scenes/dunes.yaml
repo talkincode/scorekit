@@ -5,11 +5,11 @@
 #
 # ONE five-note motif: 5-8-7-5-4 (A-D-C-A-G in D minor pentatonic).
 # A fourth leaps up, steps fall back, and it HANGS on 4 — a question.
-# Every phrase in the piece is this sentence. The voice answers it
+# Every phrase in the piece is this sentence. The lead answers it
 # exactly once (bars 17-20); the harp's last light re-asks it, so the
 # piece ENDS on the question — grief demands `resolution: incomplete`.
 #
-# Dialogue: voice asks -> cello answers (same reply both times) ->
+# Dialogue: lead asks -> cello answers (same reply both times) ->
 # violin echoes from far away. Never more than two melodic voices:
 # under the climax the cello yields the floor to the strings.
 #
@@ -62,7 +62,7 @@ motifs:
     - { degree: 5, beats: 2 }
     # bar 14: THE PEAK IS A SILENCE
     - { degree: 0, beats: 4 }
-    # bars 15-16: cello takes over — voice says nothing
+    # bars 15-16: cello takes over — lead says nothing
     - { degree: 0, beats: 8 }
     # bars 17-20: the question asked one last time — and answered
     - { degree: 5, beats: 0.75 }
@@ -82,7 +82,7 @@ motifs:
     - { degree: -4, beats: 1 }
     - { degree: -5, beats: 2 }
     - { degree: -7, beats: 4 }
-    # bars 6-14: silent while the voice speaks — under the climax the
+    # bars 6-14: silent while the lead speaks — under the climax the
     # cello yields the floor to the strings (never a third voice)
     - { degree: 0, beats: 16 }
     - { degree: 0, beats: 16 }
@@ -139,7 +139,9 @@ motifs:
     - { degree: 4, beats: 6 }
 
 tracks:
-  - { instrument: voice, pattern: melody, motif: voice_line, intensity: 0.8 }
+  # scoredata-open has no `voice` mapping; violin preserves the exposed,
+  # lyrical lead role while remaining supported by the renderer profile.
+  - { instrument: violin, pattern: melody, motif: voice_line, intensity: 0.8 }
   - { instrument: cello, pattern: melody, motif: cello_answer, intensity: 0.55 }
   - { instrument: violin, pattern: melody, motif: violin_far, intensity: 0.32 }
   - { instrument: slow_strings, pattern: melody, motif: strings_wide, intensity: 0.6 }

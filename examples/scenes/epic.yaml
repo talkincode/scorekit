@@ -1,4 +1,4 @@
-# Light epic — heroic horn fanfare over strings, choir and timpani.
+# Light epic — heroic horn fanfare over strings, choir pad and timpani.
 # Orchestral but airborne, not grimdark: an overworld banner theme.
 title: Banner in the Wind
 tempo: 104
@@ -30,7 +30,7 @@ tracks:
   - instrument: strings # 1: orchestral bed
     pattern: sustain
     intensity: 0.55
-  - instrument: choir # 2: halo above the strings
+  - instrument: choir_pad # 2: supported halo above the strings
     pattern: sustain
     intensity: 0.35
   - instrument: harp # 3: glinting motion

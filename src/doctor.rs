@@ -49,6 +49,7 @@ pub struct SoundLibraryReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
+    pub scorekit_version: String,
     pub ready: bool,
     pub platform: PlatformReport,
     pub requirements: RequirementsReport,
@@ -64,7 +65,7 @@ impl Report {
 
     pub fn human(&self) -> String {
         let mut lines = vec![
-            "scorekit doctor".to_owned(),
+            format!("scorekit doctor (scorekit {})", self.scorekit_version),
             format!(
                 "platform: {}/{} ({})",
                 self.platform.os, self.platform.arch, self.platform.target
@@ -315,6 +316,7 @@ pub fn check() -> Report {
         "missing"
     };
     Report {
+        scorekit_version: env!("CARGO_PKG_VERSION").to_owned(),
         ready: ffmpeg && renderer,
         requirements: RequirementsReport { ffmpeg, renderer },
         hints: hints(&platform),
