@@ -4,6 +4,7 @@
 - [Installation](installation.md)
 - [Quick Start](quick-start.md)
 - [Scene Protocol](scene-protocol.md)
+- [Best Practices](best-practices.md)
 - [Command Reference](commands.md)
 - [Rendering and Dependencies](rendering.md)
 - [SFZ Renderer Profiles](profiles.md)
