@@ -2,6 +2,10 @@
 # theme (motif), key and instrumentation — intro / explore loop / combat
 # loop / victory sting. Transitions are just short non-loop sections.
 title: Forest Suite
+story: >-
+  One forest, one theme, four dramatic states: a hushed intro, a wandering
+  exploration loop, combat that sharpens the same motif, and a victory sting
+  that resolves it. Every section must stay recognizably the same place.
 tempo: 92
 key: D_minor
 time_signature: 4/4

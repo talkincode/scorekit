@@ -49,6 +49,7 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | Field | Type / range | Default | Compile semantic |
 | --- | --- | --- | --- |
 | `title` | string | — | informational only; never affects output |
+| `story` | string | — | informational only; never affects output — freeform narrative brief (theme, mood, dramatic intent) carried into `meta.json` so review agents can audit the music against its story |
 | `tempo` | int, 20..=300 | required | BPM; sets the SMF tempo meta event |
 | `key` | `<Note>_<major\|minor>` (`C_major`, `F#_minor`, `Eb_major`, …) | `C_major` | root + scale for all degree/numeral resolution |
 | `time_signature` | `N/D`, N 1..=12, D ∈ {2,4,8,16} | `4/4` | bar length in ticks; drives pattern shapes |

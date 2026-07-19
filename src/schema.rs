@@ -13,6 +13,13 @@ pub struct Scene {
     /// Optional human-readable title (informational only).
     #[serde(default)]
     pub title: Option<String>,
+    /// Optional narrative description of the scene — theme, mood, dramatic
+    /// intent. Informational only: never affects compiled output. Carried
+    /// into `meta.json` so downstream agents can review the music against
+    /// its intended story. (Freeform prose, unlike the rejected semantic
+    /// story/character fields — see docs/roadmap.md.)
+    #[serde(default)]
+    pub story: Option<String>,
     /// Tempo in BPM. Range: 20..=300.
     pub tempo: u16,
     /// Key, e.g. `C_major`, `D_minor`, `F#_minor`, `Eb_major`. Default: C_major.

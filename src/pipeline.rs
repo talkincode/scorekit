@@ -337,6 +337,7 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     }
     let manifest = json!({
         "title": scene.title,
+        "story": scene.story,
         "suite": true,
         "tempo": scene.tempo,
         "key": scene.key,
@@ -547,6 +548,7 @@ fn build_one(
         .unwrap_or_default();
     Ok(json!({
         "title": scene.title,
+        "story": scene.story,
         "loop": scene.r#loop,
         "tempo": scene.tempo,
         "key": scene.key,

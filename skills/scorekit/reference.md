@@ -37,6 +37,7 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | Field | Type / range | Default | Notes |
 | --- | --- | --- | --- |
 | `title` | string | — | optional |
+| `story` | string | — | optional; freeform narrative brief (theme, mood, intent) — informational only, echoed into `meta.json` for later agent review |
 | `tempo` | 20..=300 | required | BPM |
 | `key` | `<Note>_<major\|minor>` | `C_major` | `C_major`, `D_minor`, `F#_minor`, `Eb_major`, … |
 | `time_signature` | `N/D`, N 1..=12 | `4/4` | |
@@ -188,7 +189,7 @@ Single scene (`build`):
 
 ```json
 {
-  "title": "...", "loop": true, "tempo": 92, "key": "D_minor",
+  "title": "...", "story": "...", "loop": true, "tempo": 92, "key": "D_minor",
   "time_signature": "4/4", "bars": 16, "sample_rate": 44100,
   "loop_samples": 1841216, "total_samples": 1841216,
   "crossfade_samples": 2205, "seconds": 41.75,

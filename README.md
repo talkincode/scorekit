@@ -46,6 +46,7 @@ This is a complete scene — a calm 8-bar forest loop with four instruments:
 ```yaml
 # forest.yaml
 title: Forest Theme
+story: Calm nocturnal forest for the exploration loop — safe, unhurried.
 tempo: 92
 key: D_minor
 time_signature: "4/4"
