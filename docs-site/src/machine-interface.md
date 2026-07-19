@@ -7,6 +7,7 @@ The scorekit CLI **is** the SDK. Every command completes in a single invocation,
 The machine interface follows semantic versioning. Within a major version, the following are stable and safe to program against:
 
 - Command names and documented flags in the [Command Reference](commands.md).
+- The scene DSL itself, specified normatively in [Scene Protocol](scene-protocol.md) — field semantics, additive-only evolution, and byte-identical compilation for existing scenes.
 - Exit codes: `0` success · `1` I/O failure · `2` invalid input · `3` missing dependency · `4` external tool failure.
 - The `--json` error object shape on stderr (below).
 - The JSON Schemas exported by `scorekit schema`, `schema --grammar`, and `schema --profile` (fields are added, not removed or repurposed).
