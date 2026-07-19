@@ -21,7 +21,16 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 
 ## Install
 
-Prebuilt archives for Linux, macOS (Intel & Apple Silicon), and Windows are on [GitHub Releases](https://github.com/talkincode/scorekit/releases). From a source checkout:
+On macOS or Linux with Homebrew:
+
+```bash
+brew install talkincode/tap/scorekit
+scorekit doctor
+```
+
+Homebrew installs the prebuilt `scorekit` binary, FFmpeg, FluidSynth, the bundled Agent skill under Homebrew's package share directory, and the default MuseScore General SoundFont used by the wrapper.
+
+Prebuilt archives for Linux, macOS (Intel & Apple Silicon), and Windows are also on [GitHub Releases](https://github.com/talkincode/scorekit/releases). From a source checkout:
 
 ```bash
 make install        # binary + Agent skill + a free orchestral SoundFont + sound directories

@@ -113,3 +113,137 @@ jobs:
           files: |
             dist/scorekit-*
             dist/SHA256SUMS
+
+  homebrew:
+    name: Update Homebrew tap
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    env:
+      # Set HOMEBREW_TAP_TOKEN to a fine-grained PAT with push access to the
+      # tap repository. Without it this job no-ops, so fork releases and early
+      # releases before the secret exists do not fail.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      HOMEBREW_TAP_REPO: talkincode/homebrew-tap
+    steps:
+      - name: Download release artifacts
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scorekit-*
+          path: dist-artifacts
+          merge-multiple: true
+
+      - name: Render and push formula
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          CHECKSUMS="dist-artifacts/SHA256SUMS"
+
+          (cd dist-artifacts && sha256sum scorekit-*.tar.gz > SHA256SUMS)
+
+          sha() {
+            local hash
+            hash="$(awk -v f="$1" '$2 == f { print $1; exit }' "$CHECKSUMS")"
+            [ -n "$hash" ] || { echo "missing checksum for $1" >&2; exit 1; }
+            echo "$hash"
+          }
+
+          DARWIN_ARM64_SHA="$(sha scorekit-aarch64-apple-darwin.tar.gz)"
+          DARWIN_X86_64_SHA="$(sha scorekit-x86_64-apple-darwin.tar.gz)"
+          LINUX_ARM64_SHA="$(sha scorekit-aarch64-unknown-linux-gnu.tar.gz)"
+          LINUX_X86_64_SHA="$(sha scorekit-x86_64-unknown-linux-gnu.tar.gz)"
+
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+
+          cat > tap/Formula/scorekit.rb <<EOF
+          class Scorekit < Formula
+            desc "Agent-oriented music compiler for game-ready loops and stems"
+            homepage "https://github.com/talkincode/scorekit"
+            version "${VERSION}"
+            license "MIT"
+
+            depends_on "ffmpeg"
+            depends_on "fluid-synth"
+
+            resource "musescore_general_soundfont" do
+              url "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf2"
+              sha256 "ee51d2c4b1525e70f19a45909c4fd7a2e26d91d115fa89dbf5a6bc413d8b9bf3"
+            end
+
+            resource "musescore_general_license" do
+              url "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General_License.md"
+              sha256 "5ad8d737e13c7f01f5b9674872a82a92b4ba253603e8ed14b9db12293550b4b9"
+            end
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/scorekit-aarch64-apple-darwin.tar.gz"
+                sha256 "${DARWIN_ARM64_SHA}"
+              else
+                url "${BASE_URL}/scorekit-x86_64-apple-darwin.tar.gz"
+                sha256 "${DARWIN_X86_64_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/scorekit-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${LINUX_ARM64_SHA}"
+              else
+                url "${BASE_URL}/scorekit-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${LINUX_X86_64_SHA}"
+              end
+            end
+
+            def install
+              package_dir = Dir["scorekit-*"].first
+              libexec.install "#{package_dir}/scorekit"
+              bin.write_env_script libexec/"scorekit",
+                                   SCOREKIT_SOUND_LIBRARY_DIR: (pkgshare/"sounds").to_s
+
+              pkgshare.install "#{package_dir}/skills" if File.directory?("#{package_dir}/skills")
+              resource("musescore_general_soundfont").stage do
+                (pkgshare/"sounds/sf2").install "MuseScore_General.sf2"
+              end
+              resource("musescore_general_license").stage do
+                (pkgshare/"sounds/sf2").install "MuseScore_General_License.md"
+              end
+            end
+
+            def caveats
+              <<~EOS
+                The bundled Agent skill is installed under:
+                  #{pkgshare}/skills/scorekit
+
+                The scorekit wrapper sets SCOREKIT_SOUND_LIBRARY_DIR to:
+                  #{pkgshare}/sounds
+
+                Set SCOREKIT_SOUND_LIBRARY_DIR yourself or pass --soundfont to use a
+                project-managed sound library instead.
+              EOS
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/scorekit --version")
+              assert_match "scorekit_version", shell_output("#{bin}/scorekit --json doctor")
+            end
+          end
+          EOF
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/scorekit.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date for ${VERSION}"
+          else
+            git commit -m "scorekit ${VERSION}"
+            git push
+          fi

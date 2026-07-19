@@ -12,6 +12,17 @@ GitHub Releases publish these archives:
 
 Each release also includes `SHA256SUMS`. Extract the matching archive and place `scorekit` or `scorekit.exe` on `PATH`.
 
+## Homebrew
+
+On macOS or Linux:
+
+```bash
+brew install talkincode/tap/scorekit
+scorekit doctor
+```
+
+The Homebrew formula is updated automatically on tagged releases. It installs the matching prebuilt archive, FFmpeg, FluidSynth, the Agent skill under Homebrew's package share directory, and the default MuseScore General SoundFont. The installed wrapper sets `SCOREKIT_SOUND_LIBRARY_DIR` to that package-managed sound library. Set `SCOREKIT_SOUND_LIBRARY_DIR` yourself or pass `--soundfont` when you want a project-managed sound library instead.
+
 ## Install from a source checkout
 
 Rust is required for a source build.
