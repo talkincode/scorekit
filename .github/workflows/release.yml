@@ -205,10 +205,12 @@ jobs:
             end
 
             def install
-              package_dir = Dir["scorekit-*"].first
+              # Homebrew strips a sole top-level directory during staging, so the
+              # binary may be either at the stage root or under scorekit-<target>/.
+              package_dir = Dir["scorekit-*"].first || "."
               libexec.install "#{package_dir}/scorekit"
-              bin.write_env_script libexec/"scorekit",
-                                   SCOREKIT_SOUND_LIBRARY_DIR: (pkgshare/"sounds").to_s
+              (bin/"scorekit").write_env_script libexec/"scorekit",
+                                                SCOREKIT_SOUND_LIBRARY_DIR: (pkgshare/"sounds").to_s
 
               pkgshare.install "#{package_dir}/skills" if File.directory?("#{package_dir}/skills")
               resource("musescore_general_soundfont").stage do
