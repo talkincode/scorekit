@@ -21,23 +21,31 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 
 ## Install
 
-On macOS or Linux with Homebrew:
+### Recommended (macOS/Linux): Homebrew
 
 ```bash
 brew install talkincode/tap/scorekit
+# Optional: SFZ backend for `--renderer sfizz`
+brew install talkincode/tap/scorekit-sfizz
+scorekit --version
 scorekit doctor
 ```
 
-Homebrew installs the prebuilt `scorekit` binary, FFmpeg, FluidSynth, the bundled Agent skill under Homebrew's package share directory, and the default MuseScore General SoundFont used by the wrapper.
+Homebrew is the easiest path: `scorekit` installs the prebuilt CLI, FFmpeg, FluidSynth, the bundled Agent skill, and the default MuseScore General SoundFont. Install `scorekit-sfizz` when you also need SFZ rendering (`--renderer sfizz`). If `scorekit doctor` reports all green, you're ready to build scenes.
 
-Prebuilt archives for Linux, macOS (Intel & Apple Silicon), and Windows are also on [GitHub Releases](https://github.com/talkincode/scorekit/releases). From a source checkout:
+### Other install options
+
+Prebuilt archives for Linux, macOS (Intel & Apple Silicon), and Windows are on [GitHub Releases](https://github.com/talkincode/scorekit/releases).
+
+From a source checkout:
 
 ```bash
-make install        # binary + Agent skill + a free orchestral SoundFont + sound directories
-scorekit doctor     # checks that FluidSynth / FFmpeg are ready, tells you what to install if not
+make install
+scorekit --version
+scorekit doctor
 ```
 
-You'll need [FluidSynth](https://www.fluidsynth.org/) (`brew install fluid-synth` / `apt install fluidsynth`) and [FFmpeg](https://ffmpeg.org/). `make install` downloads the MIT-licensed MuseScore General SoundFont, so rendering works out of the box. Full details: [Installation manual](https://talkincode.github.io/scorekit/installation.html).
+For source installs you'll need [FluidSynth](https://www.fluidsynth.org/) and [FFmpeg](https://ffmpeg.org/) available on your machine (`brew install fluid-synth ffmpeg` or `apt install fluidsynth ffmpeg`). `make install` downloads the MIT-licensed MuseScore General SoundFont automatically. Full details: [Installation manual](https://talkincode.github.io/scorekit/installation.html).
 
 ## Your first track
 

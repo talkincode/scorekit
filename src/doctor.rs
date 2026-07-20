@@ -248,10 +248,9 @@ fn hints(platform: &PlatformReport) -> Vec<String> {
                 "Install the standard toolchain with `brew install fluid-synth timidity ffmpeg`."
                     .to_owned(),
             );
+            hints.push("Install optional SFZ rendering with `brew install talkincode/tap/scorekit-sfizz` or build from source with `make sfizz`.".to_owned());
             if platform.arch == "aarch64" {
-                hints.push("Apple Silicon: sfizz has no native Homebrew formula or official arm64 renderer; from a scorekit source checkout run `make sfizz`.".to_owned());
-            } else {
-                hints.push("Intel macOS: install the upstream sfizz x86_64 renderer or build it from a scorekit source checkout with `make sfizz`.".to_owned());
+                hints.push("Apple Silicon: scorekit-sfizz builds sfizz_render from source because upstream macOS binaries are x86_64-only.".to_owned());
             }
         }
         "linux" => {
@@ -259,7 +258,7 @@ fn hints(platform: &PlatformReport) -> Vec<String> {
                 "Debian/Ubuntu: `sudo apt-get install fluidsynth timidity ffmpeg`.".to_owned(),
             );
             hints.push(format!(
-                "Linux {}: build sfizz_render from source with `make sfizz` when SFZ rendering is required.",
+                "Linux {}: install optional SFZ rendering with `brew install talkincode/tap/scorekit-sfizz` or build sfizz_render from source with `make sfizz`.",
                 platform.arch
             ));
         }

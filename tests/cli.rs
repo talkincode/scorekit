@@ -39,8 +39,8 @@ fn forest() -> PathBuf {
     repo("examples/scenes/forest.yaml")
 }
 
-/// `sfizz_render` isn't in Homebrew and has no arm64 macOS release binary;
-/// `scripts/build_sfizz.sh` builds it from source into `assets/bin/`.
+/// Tests use a local `assets/bin/sfizz_render` binary so SFZ E2E coverage does
+/// not depend on any system-wide installation.
 fn sfizz_render_bin() -> PathBuf {
     let p = repo("assets/bin/sfizz_render");
     assert!(

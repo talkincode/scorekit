@@ -295,7 +295,7 @@ pub fn render_sfz_with_diagnostics(
     require_file(sfz, "--profile")?;
     let diagnostics = run_to_file_capture(
         "sfizz_render",
-        "install sfizz (build `sfizz_render` from https://github.com/sfztools/sfizz; no official arm64 macOS binary as of 1.2.3, build with `-DSFIZZ_RENDER=ON -DSFIZZ_JACK=OFF -DSFIZZ_TESTS=OFF`)",
+        "install `sfizz_render` (Homebrew: `brew install talkincode/tap/scorekit-sfizz`; source build: https://github.com/sfztools/sfizz with `-DSFIZZ_RENDER=ON -DSFIZZ_JACK=OFF -DSFIZZ_TESTS=OFF`)",
         &[],
         |tmp| {
             vec![

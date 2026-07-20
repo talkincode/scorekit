@@ -143,6 +143,8 @@ jobs:
           VERSION="${TAG#v}"
           BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           CHECKSUMS="dist-artifacts/SHA256SUMS"
+          SFIZZ_VERSION="1.2.3"
+          SFIZZ_SHA256="fc1d7864516546e237e7c6115dc76d187924af32ec8eafb97b03a7efec9aa49d"
 
           (cd dist-artifacts && sha256sum scorekit-*.tar.gz > SHA256SUMS)
 
@@ -237,10 +239,54 @@ jobs:
           end
           EOF
 
+          cat > tap/Formula/scorekit-sfizz.rb <<EOF
+          class ScorekitSfizz < Formula
+            desc "Offline SFZ renderer backend for scorekit (--renderer sfizz)"
+            homepage "https://github.com/talkincode/scorekit"
+            url "https://github.com/sfztools/sfizz/archive/refs/tags/${SFIZZ_VERSION}.tar.gz"
+            sha256 "${SFIZZ_SHA256}"
+            license "BSD-2-Clause"
+
+            depends_on "cmake" => :build
+            depends_on "scorekit"
+
+            def install
+              # Keep sfizz's 32-bit ARM flags from matching arm64 (Apple Silicon).
+              inreplace "cmake/SfizzConfig.cmake",
+                        'PROJECT_SYSTEM_PROCESSOR MATCHES "(arm.*)"',
+                        'PROJECT_SYSTEM_PROCESSOR MATCHES "(arm(v[0-9].*)?)\$"'
+              # Newer clang rejects these non-dependent `template` disambiguators.
+              inreplace "external/atomic_queue/include/atomic_queue/atomic_queue.h" do |s|
+                s.gsub!("Base::template do_pop_any", "Base::do_pop_any")
+                s.gsub!("Base::template do_push_any", "Base::do_push_any")
+              end
+
+              args = std_cmake_args + %W[
+                -DSFIZZ_JACK=OFF
+                -DSFIZZ_RENDER=ON
+                -DSFIZZ_SHARED=OFF
+                -DSFIZZ_TESTS=OFF
+                -DSFIZZ_DEMOS=OFF
+                -DSFIZZ_BENCHMARKS=OFF
+              ]
+              system "cmake", "-S", ".", "-B", "build", *args
+              system "cmake", "--build", "build", "--target", "sfizz_render"
+
+              renderer = Dir["build/**/sfizz_render"].find { |path| File.executable?(path) }
+              odie "sfizz_render build artifact not found" if renderer.nil?
+              bin.install renderer => "sfizz_render"
+            end
+
+            test do
+              assert_match "sfizz", shell_output("#{bin}/sfizz_render --help")
+            end
+          end
+          EOF
+
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/scorekit.rb
+          git add Formula/scorekit.rb Formula/scorekit-sfizz.rb
           if git diff --cached --quiet; then
             echo "Formula already up to date for ${VERSION}"
           else
