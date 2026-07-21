@@ -9,6 +9,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `schema` | Print the scene JSON Schema |
 | `schema --grammar` | Print the grammar-profile schema |
 | `schema --profile` | Print the renderer-profile schema |
+| `schema --texture-profile` | Print the texture-source profile schema |
 | `lint <scene> --grammar <file>` | Check compiled music against measurable style rules |
 | `midi <scene> -o <file>` | Compile deterministic Standard MIDI |
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
@@ -22,3 +23,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 Exit codes are stable: `0` success, `1` I/O failure, `2` invalid input, `3` missing dependency, and `4` external tool failure.
 
 Run `scorekit <command> --help` for the complete flag list shipped by the installed binary.
+
+Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
+flag is independent of the musical renderer: it works alongside either an
+SF2 `--soundfont` or an sfizz `--profile`.

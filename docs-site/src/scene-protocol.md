@@ -58,6 +58,7 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `harmony` | `[numeral, …]`, diatonic `i`..`vii` (case per quality) | major `I-V-vi-IV`, minor `i-VI-III-VII` | one triad per bar, cycled to fill; sustain/arpeggio/bass derive from it |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies referenced by `pattern: melody` tracks; map is order-insensitive (sorted for determinism) |
 | `performance` | object | absent | deterministic humanization (below); absent = exact mechanical rendering |
+| `textures` | `[texture, …]`, ≤16 | `[]` | deterministic ambience/SFX layers; source names bind through `--texture-profile` at build time and never affect MIDI |
 | `tracks` | `[track, …]`, 1..=16 | required | ≤15 melodic + ≤1 drums |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite; one output asset per section |
 
@@ -73,6 +74,30 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `pan` | 0.0..=1.0 | absent | CC10 = `round(v·127)` once at tick 0; absent = no CC10 emitted |
 | `reverb` | 0.0..=1.0 | absent | CC91 = `round(v·127)` once at tick 0; absent = no CC91 emitted |
 | `glide` | 0.0..=1.0, melody-only | absent | tail portamento via pitch bend, clamped ±2 semitones (GM default bend range); loops glide last note → first note, seam-continuous |
+
+## Texture track
+
+Texture tracks are score-timeline material: field recordings, ambience, and
+sound effects used as part of the composition. They do not model runtime
+world audio such as distance attenuation, weather state, or engine RPM.
+
+| Field | Type / range | Default | Compile semantic |
+| --- | --- | --- | --- |
+| `source` | `[a-z][a-z0-9_-]{0,63}` | required | portable key resolved by `--texture-profile`; scene files never contain audio paths |
+| `mode` | `loop` \| `one_shot` | required | continuous source repetition or one full source playback at each trigger |
+| `start_beat` | quarter-note beat ≥0 | 0 | loop-only start position; must be 0 when the scene or any section loops |
+| `at` | `[beat, …]`, 1..=64 entries | `[]` | one-shot-only trigger positions; the same schedule repeats in every scene-loop pass |
+| `gain` | 0.0..=1.0 | 1.0 | linear gain applied to the arranged texture stem before summation |
+
+Beat positions are quantized to the nearest PPQ-480 tick, then converted to
+sample frames using the same quantized MIDI tempo as musical tracks. Loop
+textures run continuously across the two render passes; the normal loop seal
+therefore joins adjacent source frames even when the source duration does not
+divide the scene duration. The recording itself should be prepared as a
+loop-ready asset because scorekit does not conceal clicks inside the source.
+For a looping scene, a one-shot source must not be longer than one complete
+scene pass; this guarantees that one prior pass contains all tail material
+needed at the loop boundary.
 
 ### Motif note
 
@@ -92,7 +117,7 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `mute` | `[track index, …]` | `[]` | 0-based; muting every track is rejected |
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on each track's intensity |
 
-Sections inherit the scene's key, tracks (including spatial fields), motifs, harmony, and performance.
+Sections inherit the scene's key, tracks (including spatial fields), textures, motifs, harmony, and performance.
 
 ### Performance
 
@@ -125,6 +150,13 @@ These are observable guarantees an integration may rely on; changing any of them
 
 **Harmony.** One numeral per bar, cycled. Numerals resolve to diatonic triads of the scene key; sustain/arpeggio/bass all read the same per-bar chord, which is what keeps multi-track scenes harmonically coherent by construction.
 
+**Texture assembly.** FFmpeg first normalizes every referenced recording to
+stereo signed 16-bit PCM at the requested build sample rate. scorekit then
+performs only deterministic cutting, repetition, zero-padding, placement,
+linear gain, and summation. Texture stems use the same exact output window and
+loop seal as instrument stems, so every stem stays sample-aligned and sums
+back to the full mix within the existing rounding tolerance.
+
 ## Error contract
 
 Protocol violations follow the machine-interface error shape: exit 2, and with `--json` a single structured object on stderr carrying `location` (parse) or `field` (semantic). The `field` path grammar is stable: `tracks[i].pan`, `sections[i].mute[j]`, `harmony[i]`, `performance.swing`. An agent is expected to repair a scene from `field` + `message` alone; that expectation is part of the protocol's design, not a nicety.
@@ -132,5 +164,5 @@ Protocol violations follow the machine-interface error shape: exit 2, and with `
 ## What the protocol will not carry
 
 - **No mood/state/intent fields** (`emotion`, `danger`, `avoid`) — no deterministic compile semantic exists for them; they live in the agent's brief.
-- **No renderer paths** (`.sf2`/`.sfz` locations) — sound sources are bound at invocation time (`--soundfont`, `--profile`), so a scene never bakes in one machine's disk layout.
+- **No renderer or recording paths** (`.sf2`/`.sfz`/audio locations) — sound sources are bound at invocation time (`--soundfont`, `--profile`, `--texture-profile`), so a scene never bakes in one machine's disk layout.
 - **No embedded version negotiation, includes, or macros** — one file, one scene, strict fields. Composition happens in the agent, not in a template engine.

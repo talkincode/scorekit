@@ -47,8 +47,9 @@ or pass an explicit file to override it.
 
 ## Core workflow
 
-1. **Ask the schema, never guess:** `scorekit schema` (scene DSL) and
-   `scorekit schema --grammar` (grammar profiles) print JSON Schema.
+1. **Ask the schema, never guess:** `scorekit schema` (scene DSL),
+   `scorekit schema --grammar` (grammar profiles), and
+   `scorekit schema --texture-profile` (ambience/SFX source mappings) print JSON Schema.
 2. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
 3. **Validate:** `scorekit --json validate scene.yaml` — errors are
    machine-readable on stderr with `field` paths and line numbers. Fix and
@@ -62,7 +63,8 @@ or pass an explicit file to override it.
    ```
    Add `--stems` for per-track files in `out/scene.ogg.stems/` (adaptive
    game audio), `--renderer timidity` for the alternate backend. Non-loop
-   scenes get a reverb tail (`--tail`, default 4s).
+   scenes get a reverb tail (`--tail`, default 4s). A scene declaring
+   `textures` also needs `--texture-profile <file>`.
 6. **Iterate by ear:** play the file for the user; when revising, keep the
    scene under version control — `scorekit diff old.yaml new.yaml` shows
    semantic changes only.
@@ -118,6 +120,10 @@ tracks:
   - { instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
   - { instrument: cello,  pattern: bass, intensity: 0.35 }
   - { instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
+
+textures:                     # optional field recordings / ambience / SFX
+  - { source: river, mode: loop, gain: 0.25 }
+  - { source: birds, mode: one_shot, at: [2, 10], gain: 0.5 }
 ```
 
 Patterns: `melody` (plays its `motif`) · `sustain` (whole-bar chords) ·
@@ -126,6 +132,17 @@ instrument only). ~57 GM instruments in snake_case (`piano`, `epiano`,
 `music_box`, `slow_strings`, `choir`, `voice`, `pan_flute`, `square_lead`,
 `warm_pad`, `choir_pad`, …) — full table in [reference.md](reference.md).
 `choir`/`voice`/`choir_pad` are sampled vowels (ahh/ooh), not lyrics.
+
+Texture `source` names are portable keys, never paths. Bind them externally:
+
+```yaml
+name: forest
+root: /path/to/recordings
+sources: { river: river.flac, birds: birds.wav }
+```
+
+`loop` repeats continuously; `one_shot` triggers at quarter-note beats. Keep
+runtime/world-driven audio (distance, weather, RPM) in the game engine.
 
 Suites (multi-section pieces sharing motifs — intro/explore/combat/victory)
 use `sections:`; see [reference.md](reference.md).
@@ -182,7 +199,7 @@ new scene against it — the aesthetic then survives model changes.
 
 - `build` writes `meta.json` next to the audio: exact sample counts, loop
   points, stem listing — feed it to the game engine.
-- `--stems` gives per-track, sample-aligned files for adaptive mixing
+- `--stems` gives per-track and per-texture sample-aligned files for adaptive mixing
   (drop drums when calm, add brass in combat).
 - One suite file per game area (shared motifs = one identity), sections for
   states: `scorekit midi scene.yaml -o x.mid --section combat` compiles one

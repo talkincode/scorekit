@@ -386,3 +386,53 @@ pub fn export(input: &Path, output: &Path, quality: u8) -> Result<()> {
     }
     Err(last.expect("at least one attempt ran"))
 }
+
+/// Normalize an arbitrary audio recording to the pipeline's deterministic
+/// interchange format. Resampling/channel conversion stays delegated to
+/// FFmpeg; scorekit only performs sample-exact placement after this step.
+pub fn normalize_texture(input: &Path, output: &Path, sample_rate: u32) -> Result<()> {
+    require_file(input, "--texture-profile")?;
+    run_to_file(
+        "ffmpeg",
+        "install FFmpeg (e.g. `brew install ffmpeg` or `apt install ffmpeg`)",
+        &[],
+        |tmp| {
+            vec![
+                "-hide_banner".into(),
+                "-loglevel".into(),
+                "error".into(),
+                "-y".into(),
+                "-i".into(),
+                input.as_os_str().to_owned(),
+                "-vn".into(),
+                "-ac".into(),
+                "2".into(),
+                "-ar".into(),
+                sample_rate.to_string().into(),
+                "-c:a".into(),
+                "pcm_s16le".into(),
+                tmp.as_os_str().to_owned(),
+            ]
+        },
+        output,
+    )?;
+    let reader = hound::WavReader::open(output).map_err(|e| Error::Validation {
+        path: output.display().to_string(),
+        message: format!("FFmpeg produced an unusable texture WAV: {e}"),
+    })?;
+    let spec = reader.spec();
+    if reader.duration() == 0
+        || spec.channels != 2
+        || spec.sample_rate != sample_rate
+        || spec.bits_per_sample != 16
+        || spec.sample_format != hound::SampleFormat::Int
+    {
+        let _ = std::fs::remove_file(output);
+        return Err(Error::ToolFailure {
+            tool: "ffmpeg".to_owned(),
+            status: "texture normalization produced an invalid WAV".to_owned(),
+            stderr: String::new(),
+        });
+    }
+    Ok(())
+}

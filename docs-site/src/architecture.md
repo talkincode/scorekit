@@ -18,7 +18,7 @@ YAML scene
 - Loop and stem lengths are derived from quantized musical time.
 - File-writing commands stage output and publish it atomically.
 - JSON Schema and structured errors expose the same contract used by the CLI.
-- Renderer profiles are external data, so scenes remain portable.
+- Renderer and texture-source profiles are external data, so scenes remain portable.
 
 ## Deliberate boundaries
 

@@ -47,6 +47,11 @@ pub struct Scene {
     /// legato. Absent means the exact mechanical rendering (byte-stable).
     #[serde(default)]
     pub performance: Option<Performance>,
+    /// Deterministically scheduled field recordings, ambience and sound
+    /// effects. Logical source names are bound to audio files by a separate
+    /// texture profile at build time; paths never enter the scene protocol.
+    #[serde(default)]
+    pub textures: Vec<TextureTrack>,
     /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one drums.
     pub tracks: Vec<Track>,
     /// Suite sections. When present, `build` emits one asset per section
@@ -54,6 +59,37 @@ pub struct Scene {
     /// tracks, motifs and key.
     #[serde(default)]
     pub sections: Vec<Section>,
+}
+
+/// A non-instrument audio layer. `loop` repeats one source from `start_beat`;
+/// `one_shot` places the source once at every entry in `at`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TextureTrack {
+    /// Portable source name resolved through `--texture-profile`.
+    pub source: String,
+    /// Continuous ambience or beat-scheduled one-shot events.
+    pub mode: TextureMode,
+    /// Start in quarter-note beats, valid only for `mode: loop`. Default: 0.
+    #[serde(default)]
+    pub start_beat: Option<f64>,
+    /// Trigger positions in quarter-note beats, required for `mode: one_shot`.
+    #[serde(default)]
+    pub at: Vec<f64>,
+    /// Linear amplitude multiplier applied before summation. Default: 1.
+    #[serde(default = "default_texture_gain")]
+    pub gain: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureMode {
+    Loop,
+    OneShot,
+}
+
+fn default_texture_gain() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -519,10 +555,99 @@ impl Scene {
             path: "key".to_owned(),
             message: m,
         })?;
-        parse_time_signature(&self.time_signature).map_err(|m| Error::Validation {
-            path: "time_signature".to_owned(),
-            message: m,
-        })?;
+        let time_sig =
+            parse_time_signature(&self.time_signature).map_err(|m| Error::Validation {
+                path: "time_signature".to_owned(),
+                message: m,
+            })?;
+        if self.textures.len() > 16 {
+            return fail(
+                "textures",
+                format!(
+                    "{} texture tracks exceed the limit of 16",
+                    self.textures.len()
+                ),
+            );
+        }
+        let max_bars = self
+            .sections
+            .iter()
+            .map(|s| s.bars)
+            .chain(std::iter::once(self.bars))
+            .max()
+            .unwrap_or(self.bars);
+        let max_beats =
+            f64::from(max_bars) * f64::from(time_sig.num) * 4.0 / f64::from(time_sig.den);
+        let has_loop_section = self.r#loop || self.sections.iter().any(|s| s.r#loop);
+        for (i, texture) in self.textures.iter().enumerate() {
+            if !crate::texture::valid_source_name(&texture.source) {
+                return fail(
+                    &format!("textures[{i}].source"),
+                    format!(
+                        "`{}` must match [a-z][a-z0-9_-]{{0,63}} (portable source name)",
+                        texture.source
+                    ),
+                );
+            }
+            if !texture.gain.is_finite() || !(0.0..=1.0).contains(&texture.gain) {
+                return fail(
+                    &format!("textures[{i}].gain"),
+                    format!("{} out of range 0.0..=1.0", texture.gain),
+                );
+            }
+            match texture.mode {
+                TextureMode::Loop => {
+                    if !texture.at.is_empty() {
+                        return fail(
+                            &format!("textures[{i}].at"),
+                            "`at` is only valid with mode `one_shot`".to_owned(),
+                        );
+                    }
+                    let start = texture.start_beat.unwrap_or(0.0);
+                    if !start.is_finite() || !(0.0..max_beats).contains(&start) {
+                        return fail(
+                            &format!("textures[{i}].start_beat"),
+                            format!("{start} out of range 0.0..{max_beats}"),
+                        );
+                    }
+                    if has_loop_section && start != 0.0 {
+                        return fail(
+                            &format!("textures[{i}].start_beat"),
+                            "loop textures must start at beat 0 when the scene or any section loops"
+                                .to_owned(),
+                        );
+                    }
+                }
+                TextureMode::OneShot => {
+                    if texture.start_beat.is_some() {
+                        return fail(
+                            &format!("textures[{i}].start_beat"),
+                            "`start_beat` is only valid with mode `loop`".to_owned(),
+                        );
+                    }
+                    if texture.at.is_empty() {
+                        return fail(
+                            &format!("textures[{i}].at"),
+                            "mode `one_shot` requires at least one trigger beat".to_owned(),
+                        );
+                    }
+                    if texture.at.len() > 64 {
+                        return fail(
+                            &format!("textures[{i}].at"),
+                            format!("{} trigger beats exceed the limit of 64", texture.at.len()),
+                        );
+                    }
+                    for (j, at) in texture.at.iter().enumerate() {
+                        if !at.is_finite() || !(0.0..max_beats).contains(at) {
+                            return fail(
+                                &format!("textures[{i}].at[{j}]"),
+                                format!("{at} out of range 0.0..{max_beats}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         if self.tracks.is_empty() {
             return fail("tracks", "at least one track is required".to_owned());
         }

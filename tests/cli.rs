@@ -326,6 +326,18 @@ fn schema_emits_json_schema() {
         v["properties"]["story"].is_object(),
         "schema has story: {v}"
     );
+    assert!(
+        v["properties"]["textures"].is_object(),
+        "schema has textures: {v}"
+    );
+
+    let out = bin()
+        .args(["schema", "--texture-profile"])
+        .assert()
+        .success();
+    let profile: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("valid profile schema");
+    assert!(profile["properties"]["sources"].is_object());
 }
 
 #[test]
@@ -365,6 +377,58 @@ fn story_is_informational_and_never_affects_midi_bytes() {
         fs::read(&b).unwrap(),
         "story must not change compiled MIDI bytes"
     );
+}
+
+#[test]
+fn textures_do_not_change_midi_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = "tempo: 120\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n";
+    let plain = dir.path().join("plain.yaml");
+    let textured = dir.path().join("textured.yaml");
+    fs::write(&plain, base).unwrap();
+    fs::write(
+        &textured,
+        format!(
+            "textures:\n  - {{ source: river, mode: loop, gain: 0.25 }}\n  - {{ source: birds, mode: one_shot, at: [1, 5] }}\n{base}"
+        ),
+    )
+    .unwrap();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    bin()
+        .arg("midi")
+        .arg(&plain)
+        .arg("-o")
+        .arg(&a)
+        .assert()
+        .success();
+    bin()
+        .arg("midi")
+        .arg(&textured)
+        .arg("-o")
+        .arg(&b)
+        .assert()
+        .success();
+    assert_eq!(fs::read(a).unwrap(), fs::read(b).unwrap());
+}
+
+#[test]
+fn validate_rejects_ambiguous_texture_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    start_beat: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("structured validation error");
+    assert_eq!(error["field"], "textures[0].start_beat");
 }
 
 #[test]
@@ -748,6 +812,25 @@ fn read_frames(path: &Path) -> (hound::WavSpec, Vec<i16>) {
     (spec, samples)
 }
 
+fn write_texture_wave(path: &Path, frequency: f64, seconds: f64) {
+    // Deliberately mono/22.05 kHz: the E2E proves FFmpeg normalization is
+    // part of the texture boundary rather than an undocumented input rule.
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 22_050,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    let frames = (seconds * f64::from(spec.sample_rate)).round() as u32;
+    for i in 0..frames {
+        let t = f64::from(i) / f64::from(spec.sample_rate);
+        let sample = (2500.0 * (2.0 * std::f64::consts::PI * frequency * t).sin()) as i16;
+        writer.write_sample(sample).unwrap();
+    }
+    writer.finalize().unwrap();
+}
+
 #[test]
 fn build_full_chain_scene_to_ogg() {
     let dir = tempfile::tempdir().unwrap();
@@ -901,6 +984,127 @@ fn build_stems_are_aligned_and_sum_to_mix() {
 }
 
 #[test]
+fn build_textures_normalizes_places_mixes_and_emits_stems() {
+    let dir = tempfile::tempdir().unwrap();
+    let river = dir.path().join("river.wav");
+    let birds = dir.path().join("birds.wav");
+    write_texture_wave(&river, 137.0, 0.2);
+    write_texture_wave(&birds, 733.0, 0.08);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(
+        &profile,
+        "name: field-recordings\nsources:\n  river: river.wav\n  birds: birds.wav\n",
+    )
+    .unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    gain: 0.25\n  - source: birds\n    mode: one_shot\n    at: [1, 5]\n    gain: 0.5\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let output = dir.path().join("scene.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .arg("--stems")
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .success();
+
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "birds.wav",
+            "river.wav",
+            "scene.meta.json",
+            "scene.stems",
+            "scene.wav",
+            "scene.yaml",
+            "textures.yaml",
+        ],
+    );
+    let stems_dir = dir.path().join("scene.stems");
+    let stem_names = [
+        "01-piano.wav",
+        "02-texture-river.wav",
+        "03-texture-birds.wav",
+    ];
+    assert_dir_contains_exactly(&stems_dir, &stem_names);
+    let expected_frames = exact_samples(2 * 4 * 480, 120, 44_100);
+    let (spec, mix) = read_frames(&output);
+    assert_eq!(spec.channels, 2, "texture normalization targets stereo");
+    assert_eq!(spec.sample_rate, 44_100);
+    assert_eq!(mix.len() as u64, expected_frames * 2);
+    let stems: Vec<Vec<i16>> = stem_names
+        .iter()
+        .map(|name| {
+            let (stem_spec, samples) = read_frames(&stems_dir.join(name));
+            assert_eq!(stem_spec, spec);
+            assert_eq!(samples.len(), mix.len());
+            samples
+        })
+        .collect();
+    assert!(
+        stems[1].iter().any(|&sample| sample != 0),
+        "loop texture stem is audible"
+    );
+    assert!(
+        stems[2].iter().any(|&sample| sample != 0),
+        "one-shot texture stem is audible"
+    );
+    let (mut diff2, mut reference2) = (0.0f64, 0.0f64);
+    for i in 0..mix.len() {
+        let stem_sum: f64 = stems.iter().map(|stem| f64::from(stem[i])).sum();
+        let full = f64::from(mix[i]);
+        diff2 += (stem_sum - full).powi(2);
+        reference2 += full.powi(2);
+    }
+    let ratio = (diff2 / reference2.max(1.0)).sqrt();
+    assert!(ratio < 0.02, "texture stems do not sum to mix: {ratio:.4}");
+
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("scene.meta.json")).unwrap()).unwrap();
+    assert_eq!(metadata["textures"].as_array().unwrap().len(), 2);
+    assert_eq!(metadata["textures"][0]["source"], "river");
+    assert_eq!(metadata["stems"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn build_missing_texture_source_leaves_no_partial_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntextures:\n  - { source: river, mode: loop }\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let profile = dir.path().join("textures.yaml");
+    fs::write(
+        &profile,
+        "name: missing-source\nsources:\n  river: missing.wav\n",
+    )
+    .unwrap();
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .arg("--stems")
+        .arg("-o")
+        .arg(dir.path().join("scene.wav"))
+        .assert()
+        .code(2);
+    assert_dir_contains_exactly(dir.path(), &["scene.yaml", "textures.yaml"]);
+}
+
+#[test]
 fn build_ogg_stems_leave_no_intermediates() {
     // Regression: encoded stems go through a `.cut.wav` intermediate inside
     // the staging dir; it must not ship inside the renamed stems folder.
@@ -984,6 +1188,7 @@ fn build_suite_emits_per_section_assets_with_exact_lengths() {
         dir.path(),
         &[
             "suite.yaml",
+            "suite.wav",
             "suite-explore.wav",
             "suite-sting.wav",
             "suite.meta.json",
@@ -997,10 +1202,25 @@ fn build_suite_emits_per_section_assets_with_exact_lengths() {
     let l_sting = exact_samples(4 * 480, 140, 44100) + 4 * 44100;
     let (spec, sting) = read_frames(&dir.path().join("suite-sting.wav"));
     assert_eq!(sting.len() as u64, l_sting * u64::from(spec.channels));
-    // manifest describes the whole suite
+    // main playback file: all sections concatenated in order, sample-exactly
+    let (spec, main) = read_frames(&out);
+    assert_eq!(
+        main.len() as u64,
+        (l_explore + l_sting) * u64::from(spec.channels)
+    );
+    assert_eq!(
+        &main[..explore.len()],
+        &explore[..],
+        "main starts with explore"
+    );
+    assert_eq!(&main[explore.len()..], &sting[..], "main ends with sting");
+    // manifest describes the whole suite, main file included
     let meta: serde_json::Value =
         serde_json::from_slice(&fs::read(dir.path().join("suite.meta.json")).unwrap()).unwrap();
     assert_eq!(meta["suite"], true);
+    assert_eq!(meta["audio"], "suite.wav");
+    assert_eq!(meta["loop"], false);
+    assert_eq!(meta["total_samples"], l_explore + l_sting);
     let sections = meta["sections"].as_array().unwrap();
     assert_eq!(sections.len(), 2);
     assert_eq!(sections[0]["name"], "explore");
@@ -1010,6 +1230,41 @@ fn build_suite_emits_per_section_assets_with_exact_lengths() {
     assert_eq!(sections[1]["tempo"], 140);
     // muted track dropped from the sting section
     assert_eq!(sections[1]["tracks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn build_suite_to_ogg_emits_main_file_without_leftover_cuts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(&scene, suite_yaml()).unwrap();
+    let out = dir.path().join("suite.ogg");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    // The intermediate section/main `.cut.wav` files must not survive.
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "suite.yaml",
+            "suite.ogg",
+            "suite-explore.ogg",
+            "suite-sting.ogg",
+            "suite.meta.json",
+        ],
+    );
+    assert!(fs::metadata(&out).unwrap().len() > 10_000);
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("suite.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["audio"], "suite.ogg");
+    let l_explore = exact_samples(2 * 4 * 480, 120, 44100);
+    let l_sting = exact_samples(4 * 480, 140, 44100) + 4 * 44100;
+    assert_eq!(meta["total_samples"], l_explore + l_sting);
 }
 
 #[test]
@@ -2138,9 +2393,11 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
                        "arguments": {"scene": forest().to_str().unwrap()}}}),
         serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": {"name": "schema", "arguments": {"kind": "grammar"}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": {"name": "schema", "arguments": {"kind": "texture_profile"}}}),
     ]);
-    // The notification gets no response: 4 replies for 5 messages.
-    assert_eq!(replies.len(), 4, "replies: {replies:?}");
+    // The notification gets no response: 5 replies for 6 messages.
+    assert_eq!(replies.len(), 5, "replies: {replies:?}");
 
     let init = &replies[0]["result"];
     assert_eq!(init["serverInfo"]["name"], "scorekit");
@@ -2167,6 +2424,13 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
     let schema_text = replies[3]["result"]["content"][0]["text"].as_str().unwrap();
     let schema: serde_json::Value = serde_json::from_str(schema_text).unwrap();
     assert!(schema["$schema"].is_string(), "grammar schema: {schema}");
+
+    let texture_schema_text = replies[4]["result"]["content"][0]["text"].as_str().unwrap();
+    let texture_schema: serde_json::Value = serde_json::from_str(texture_schema_text).unwrap();
+    assert!(
+        texture_schema["properties"]["sources"].is_object(),
+        "texture profile schema: {texture_schema}"
+    );
 }
 
 #[test]

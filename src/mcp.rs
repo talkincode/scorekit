@@ -43,14 +43,14 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "schema",
-            description: "Print the JSON Schema of the scene DSL, the grammar-profile DSL, \
-                          or the renderer-profile DSL.",
+            description: "Print the JSON Schema of the scene DSL, grammar profile, \
+                          renderer profile, or texture-source profile.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["scene", "grammar", "profile"],
+                        "enum": ["scene", "grammar", "profile", "texture_profile"],
                         "description": "Which schema to print (default: scene)"
                     }
                 },
@@ -87,7 +87,8 @@ fn tools() -> Vec<Tool> {
                     },
                     "soundfont": { "type": "string", "description": "SF2 SoundFont path (fluidsynth/timidity)" },
                     "profile": { "type": "string", "description": "Renderer profile path (sfizz only)" },
-                    "stems": { "type": "boolean", "description": "Also render one sample-aligned stem per track" }
+                    "texture_profile": { "type": "string", "description": "Texture-source profile path when the scene declares textures" },
+                    "stems": { "type": "boolean", "description": "Also render sample-aligned instrument and texture stems" }
                 },
                 "required": ["scene", "output"],
                 "additionalProperties": false
@@ -131,6 +132,7 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
                 None | Some("scene") => {}
                 Some("grammar") => argv.push("--grammar".into()),
                 Some("profile") => argv.push("--profile".into()),
+                Some("texture_profile") => argv.push("--texture-profile".into()),
                 Some(other) => return Err(format!("unknown schema kind `{other}`")),
             }
         }
@@ -155,6 +157,10 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             }
             if let Some(profile) = args.get("profile").and_then(Value::as_str) {
                 argv.push("--profile".into());
+                argv.push(profile.to_owned());
+            }
+            if let Some(profile) = args.get("texture_profile").and_then(Value::as_str) {
+                argv.push("--texture-profile".into());
                 argv.push(profile.to_owned());
             }
             if args.get("stems").and_then(Value::as_bool) == Some(true) {
