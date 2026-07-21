@@ -16,6 +16,7 @@
 //! stem individually preserves "sum of stems == full mix" up to rounding.
 
 use crate::error::{Error, Result};
+use crate::schema::TextureMode;
 use crate::tools;
 use std::path::Path;
 
@@ -102,18 +103,17 @@ pub fn extract(input: &Path, output: &Path, window: Window) -> Result<()> {
     tools::write_atomic(output, &cursor.into_inner())
 }
 
-/// Mix same-spec 16-bit PCM WAVs into one, applying `gain` and clamping.
-/// Deterministic float summation (position-only, no filtering), zero-pads
-/// shorter inputs to the longest track's length. Used by the `sfizz`
-/// renderer backend, which can only render one instrument (one SFZ file)
-/// per pass: the "full mix" is built by rendering every track solo and
-/// mixing here, so it's bit-for-bit `sum of stems` by construction — the
-/// same invariant the single-pass FluidSynth/TiMidity mix already gives us.
-pub fn mix(inputs: &[std::path::PathBuf], output: &Path, gain: f32) -> Result<()> {
+/// Read same-spec 16-bit PCM WAVs fully into memory, validating that every
+/// input matches the first one's channel count and sample rate. `op` names
+/// the caller for the empty-input error.
+fn read_same_spec(
+    inputs: &[std::path::PathBuf],
+    op: &str,
+) -> Result<(hound::WavSpec, Vec<Vec<i16>>)> {
     if inputs.is_empty() {
         return Err(Error::Validation {
-            path: "mix".to_owned(),
-            message: "no inputs to mix".to_owned(),
+            path: op.to_owned(),
+            message: format!("no inputs to {op}"),
         });
     }
     let mut spec: Option<hound::WavSpec> = None;
@@ -149,7 +149,18 @@ pub fn mix(inputs: &[std::path::PathBuf], output: &Path, gain: f32) -> Result<()
             .map_err(|e| wav_err(p, e))?;
         tracks.push(samples);
     }
-    let spec = spec.expect("checked inputs is non-empty above");
+    Ok((spec.expect("checked inputs is non-empty above"), tracks))
+}
+
+/// Mix same-spec 16-bit PCM WAVs into one, applying `gain` and clamping.
+/// Deterministic float summation (position-only, no filtering), zero-pads
+/// shorter inputs to the longest track's length. Used by the `sfizz`
+/// renderer backend, which can only render one instrument (one SFZ file)
+/// per pass: the "full mix" is built by rendering every track solo and
+/// mixing here, so it's bit-for-bit `sum of stems` by construction — the
+/// same invariant the single-pass FluidSynth/TiMidity mix already gives us.
+pub fn mix(inputs: &[std::path::PathBuf], output: &Path, gain: f32) -> Result<()> {
+    let (spec, tracks) = read_same_spec(inputs, "mix")?;
     let max_len = tracks.iter().map(Vec::len).max().unwrap_or(0);
     let g = f64::from(gain);
 
@@ -166,6 +177,154 @@ pub fn mix(inputs: &[std::path::PathBuf], output: &Path, gain: f32) -> Result<()
             .round()
             .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
         writer.write_sample(v).map_err(|e| wav_err(output, e))?;
+    }
+    writer.finalize().map_err(|e| wav_err(output, e))?;
+    tools::write_atomic(output, &cursor.into_inner())
+}
+
+/// Concatenate same-spec 16-bit PCM WAVs back to back into one, written
+/// atomically. Used by suite builds to assemble the main playback file from
+/// the per-section sample-exact cuts — pure ordering, no resampling or
+/// overlap, so the result stays deterministic and sample-exact.
+pub fn concat(inputs: &[std::path::PathBuf], output: &Path) -> Result<()> {
+    let (spec, parts) = read_same_spec(inputs, "concatenate")?;
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(&mut cursor, spec).map_err(|e| wav_err(output, e))?;
+    for part in &parts {
+        for &sample in part {
+            writer
+                .write_sample(sample)
+                .map_err(|e| wav_err(output, e))?;
+        }
+    }
+    writer.finalize().map_err(|e| wav_err(output, e))?;
+    tools::write_atomic(output, &cursor.into_inner())
+}
+
+/// Arrange one normalized PCM source into an exact-length texture stem.
+///
+/// Loop mode repeats the source continuously. When a looping scene uses more
+/// than one pass, continuity deliberately spans pass boundaries; the later
+/// `extract` seal then joins adjacent source frames regardless of source
+/// period. One-shot mode repeats the same trigger schedule in every pass and
+/// allows each source tail to spill naturally into the following pass/tail.
+pub struct TextureArrangement<'a> {
+    pub mode: TextureMode,
+    pub start_frame: u64,
+    pub trigger_frames: &'a [u64],
+    pub pass_frames: u64,
+    pub passes: u8,
+    pub total_frames: u64,
+    pub gain: f32,
+}
+
+pub fn arrange_texture(
+    input: &Path,
+    output: &Path,
+    arrangement: TextureArrangement<'_>,
+) -> Result<()> {
+    let TextureArrangement {
+        mode,
+        start_frame,
+        trigger_frames,
+        pass_frames,
+        passes,
+        total_frames,
+        gain,
+    } = arrangement;
+    let mut reader = hound::WavReader::open(input).map_err(|e| wav_err(input, e))?;
+    let spec = reader.spec();
+    if spec.bits_per_sample != 16 || spec.sample_format != hound::SampleFormat::Int {
+        return Err(Error::Validation {
+            path: input.display().to_string(),
+            message: format!(
+                "expected normalized 16-bit integer PCM, got {}-bit {:?}",
+                spec.bits_per_sample, spec.sample_format
+            ),
+        });
+    }
+    let channels = usize::from(spec.channels.max(1));
+    let source: Vec<i16> = reader
+        .samples::<i16>()
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| wav_err(input, e))?;
+    let source_frames = source.len() / channels;
+    if source_frames == 0 {
+        return Err(Error::Validation {
+            path: input.display().to_string(),
+            message: "texture source has zero audio frames".to_owned(),
+        });
+    }
+    if mode == TextureMode::OneShot && passes > 1 && source_frames as u64 > pass_frames {
+        return Err(Error::Validation {
+            path: input.display().to_string(),
+            message: format!(
+                "one-shot source is {} frames, longer than the {}-frame loop; use a shorter source",
+                source_frames, pass_frames
+            ),
+        });
+    }
+    let sample_count = usize::try_from(total_frames)
+        .ok()
+        .and_then(|n| n.checked_mul(channels))
+        .ok_or_else(|| Error::Validation {
+            path: "textures".to_owned(),
+            message: "arranged texture is too large for this platform".to_owned(),
+        })?;
+    let mut arranged = vec![0i64; sample_count];
+
+    let mut add_source = |start: u64, limit: u64, repeat: bool| {
+        if start >= total_frames || start >= limit {
+            return;
+        }
+        let count = if repeat {
+            limit.saturating_sub(start)
+        } else {
+            (source_frames as u64).min(total_frames.saturating_sub(start))
+        };
+        for frame in 0..count {
+            let source_frame = if repeat {
+                frame as usize % source_frames
+            } else {
+                frame as usize
+            };
+            let output_frame = usize::try_from(start + frame).expect("frame index fits");
+            for ch in 0..channels {
+                arranged[output_frame * channels + ch] +=
+                    i64::from(source[source_frame * channels + ch]);
+            }
+        }
+    };
+
+    match mode {
+        TextureMode::Loop => {
+            // Non-loop scenes stop continuous ambience at the musical bar
+            // boundary, leaving the configured decay tail silent. Loop
+            // scenes run continuously across both render passes.
+            let active_end = if passes > 1 {
+                total_frames
+            } else {
+                pass_frames
+            };
+            add_source(start_frame, active_end, true);
+        }
+        TextureMode::OneShot => {
+            for pass in 0..u64::from(passes) {
+                for &trigger in trigger_frames {
+                    add_source(pass * pass_frames + trigger, total_frames, false);
+                }
+            }
+        }
+    }
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(&mut cursor, spec).map_err(|e| wav_err(output, e))?;
+    let gain = f64::from(gain);
+    for sample in arranged {
+        let value = (sample as f64 * gain)
+            .round()
+            .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+        writer.write_sample(value).map_err(|e| wav_err(output, e))?;
     }
     writer.finalize().map_err(|e| wav_err(output, e))?;
     tools::write_atomic(output, &cursor.into_inner())
@@ -272,6 +431,85 @@ mod tests {
         let err = mix(&[a, stereo], &out, 1.0).unwrap_err();
         assert!(err.to_string().contains("spec mismatch"), "{err}");
         assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn concat_appends_in_order_and_rejects_mismatch() {
+        let dir = std::env::temp_dir().join(format!("sk-audio-concat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.wav");
+        let b = dir.join("b.wav");
+        let out = dir.join("cat.wav");
+        write_wav(&a, &[1, 2, 3]);
+        write_wav(&b, &[40, 50]);
+        concat(&[a.clone(), b.clone()], &out).unwrap();
+        assert_eq!(read_wav(&out), vec![1, 2, 3, 40, 50]);
+        // order matters
+        concat(&[b.clone(), a.clone()], &out).unwrap();
+        assert_eq!(read_wav(&out), vec![40, 50, 1, 2, 3]);
+
+        let stereo = dir.join("stereo.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&stereo, spec).unwrap();
+        w.write_sample(1i16).unwrap();
+        w.write_sample(1i16).unwrap();
+        w.finalize().unwrap();
+        let bad = dir.join("bad.wav");
+        let err = concat(&[a, stereo], &bad).unwrap_err();
+        assert!(err.to_string().contains("spec mismatch"), "{err}");
+        assert!(!bad.exists());
+
+        let err = concat(&[], &dir.join("empty.wav")).unwrap_err();
+        assert!(err.to_string().contains("no inputs"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn texture_arrangement_loops_and_places_one_shots() {
+        let dir = std::env::temp_dir().join(format!("sk-audio-texture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.wav");
+        write_wav(&input, &[10, 20, 30]);
+
+        let looped = dir.join("looped.wav");
+        arrange_texture(
+            &input,
+            &looped,
+            TextureArrangement {
+                mode: TextureMode::Loop,
+                start_frame: 1,
+                trigger_frames: &[],
+                pass_frames: 8,
+                passes: 1,
+                total_frames: 10,
+                gain: 0.5,
+            },
+        )
+        .unwrap();
+        assert_eq!(read_wav(&looped), vec![0, 5, 10, 15, 5, 10, 15, 5, 0, 0]);
+
+        let shots = dir.join("shots.wav");
+        arrange_texture(
+            &input,
+            &shots,
+            TextureArrangement {
+                mode: TextureMode::OneShot,
+                start_frame: 0,
+                trigger_frames: &[1, 3],
+                pass_frames: 8,
+                passes: 1,
+                total_frames: 8,
+                gain: 1.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(read_wav(&shots), vec![0, 10, 20, 40, 20, 30, 0, 0]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

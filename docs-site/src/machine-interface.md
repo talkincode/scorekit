@@ -10,7 +10,7 @@ The machine interface follows semantic versioning. Within a major version, the f
 - The scene DSL itself, specified normatively in [Scene Protocol](scene-protocol.md) — field semantics, additive-only evolution, and byte-identical compilation for existing scenes.
 - Exit codes: `0` success · `1` I/O failure · `2` invalid input · `3` missing dependency · `4` external tool failure.
 - The `--json` error object shape on stderr (below).
-- The JSON Schemas exported by `scorekit schema`, `schema --grammar`, and `schema --profile` (fields are added, not removed or repurposed).
+- The JSON Schemas exported by `scorekit schema`, `schema --grammar`, `schema --profile`, and `schema --texture-profile` (fields are added, not removed or repurposed).
 - The `meta.json` / `report.json` artifact fields.
 
 Determinism boundary: the same scene + same sound source + same tool versions produces byte-identical MIDI, and audio identical within documented tolerances. Reproducibility across *different* FluidSynth/FFmpeg versions is explicitly **not** promised — pin your toolchain (e.g. in a container image) if you need cross-machine identical audio.

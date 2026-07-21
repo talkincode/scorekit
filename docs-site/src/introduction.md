@@ -2,7 +2,7 @@
 
 scorekit is an Agent-oriented music compiler for game and film-style scoring workflows. It compiles a reviewable YAML scene into deterministic MIDI, then delegates audio rendering and export to established external tools.
 
-The compiler produces seamless loops, sample-aligned stems, suite sections, metadata, and OGG or WAV assets. Creative decisions stay in the upstream Agent and the text scene; scorekit does not contain a generative model.
+The compiler produces seamless loops, sample-aligned instrument/texture stems, suite sections, metadata, and OGG or WAV assets. Texture tracks bring deterministic field recordings, ambience, and SFX into the score timeline. Creative decisions stay in the upstream Agent and the text scene; scorekit does not contain a generative model.
 
 ```text
 scene.yaml -> Score IR -> MIDI -> renderer -> WAV -> FFmpeg -> game assets

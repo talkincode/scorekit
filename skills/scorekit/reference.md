@@ -1,7 +1,8 @@
 # scorekit reference
 
-Verified against scorekit v0.2. When in doubt, trust the binary:
-`scorekit schema` / `scorekit schema --grammar` are the live source of truth.
+Verified against scorekit v0.3. When in doubt, trust the binary:
+`scorekit schema` / `scorekit schema --grammar` /
+`scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
 is `docs-site/src/scene-protocol.md`.
 
@@ -17,13 +18,13 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | --- | --- | --- |
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
-| `schema` | JSON Schema of scene DSL | `--grammar` → grammar-profile schema instead; `--profile` → renderer-profile schema instead |
+| `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → renderer profile; `--texture-profile` → texture-source profile |
 | `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` (44100); global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track#>`, `--section <name>` |
 | `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` (44100), `--gain` (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` secs (4.0, non-loop), `--crossfade-ms` (50, loop seal), `--keep-intermediates` |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` secs (4.0, non-loop), `--crossfade-ms` (50, loop seal), `--keep-intermediates` |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
 | `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export flags |
 
@@ -46,6 +47,7 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `harmony` | `[numeral, …]` | minor `i-VI-III-VII`, major `I-V-vi-IV` | one chord per bar, cycles; diatonic `i..vii` (case-insensitive, triads from scale) |
 | `performance` | object | absent | see below; absent = raw compile (bit-stable) |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies for `pattern: melody` tracks |
+| `textures` | `[texture, …]` | `[]` | field recordings/ambience/SFX; portable source names bind through `--texture-profile` |
 | `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic + ≤1 drums) |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite |
 
@@ -65,6 +67,32 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 `pan`/`reverb`/`glide` compile to deterministic MIDI (CC10/CC91/pitch-bend).
 fluidsynth/timidity honor all three; sfizz honors pitch bend, but CC10/91
 only take effect if the `.sfz` maps those CCs.
+
+### Texture track
+
+| Field | Type / range | Default | Notes |
+| --- | --- | --- | --- |
+| `source` | `[a-z][a-z0-9_-]{0,63}` | required | portable profile key, never a local path |
+| `mode` | `loop` \| `one_shot` | required | continuous repetition or full-source triggers |
+| `start_beat` | ≥0 | 0 | loop-only; must be 0 if the scene/any section loops |
+| `at` | 1..=64 quarter-note beats | — | required for one-shot; schedule repeats per loop pass |
+| `gain` | 0.0..=1.0 | 1.0 | linear gain before summation |
+
+Texture profile:
+
+```yaml
+name: forest
+root: /path/to/recordings
+sources:
+  river: ambience/river.flac
+  birds: wildlife/birds.wav
+```
+
+FFmpeg normalizes sources to stereo 16-bit PCM at the build sample rate;
+scorekit then performs deterministic placement only. With `--stems`, texture
+stems follow instrument stems (`03-texture-river.wav`, etc.) and are the same
+exact length. World-driven audio such as positional water, weather, or engine
+RPM belongs to the game runtime, not texture tracks.
 
 ### Motif note
 
@@ -195,7 +223,8 @@ Single scene (`build`):
   "crossfade_samples": 2205, "seconds": 41.75,
   "audio": "scene.ogg",
   "stems": ["scene.stems/00-piano.ogg", "..."],
-  "tracks": [{ "instrument": "piano", "pattern": "sustain", "intensity": 0.6 }]
+  "tracks": [{ "instrument": "piano", "pattern": "sustain", "intensity": 0.6 }],
+  "textures": [{ "source": "river", "mode": "loop", "start_beat": null, "at": [], "gain": 0.25 }]
 }
 ```
 

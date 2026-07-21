@@ -17,6 +17,7 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 - **Seamless loops** — sample-exact length, no click at the loopback point.
 - **Stems** — one file per track (strings, piano, bass, drums…), all equal length and sample-aligned, so the engine can layer them dynamically (calm exploration → add drums when combat starts).
 - **Scene suites** — intro / explore / combat / victory sections that share the same musical motifs, compiled from a single file.
+- **Sound textures** — layer field recordings, ambience, and SFX (water, birds, engines…) as deterministic loops or beat-scheduled one-shots without baking local paths into the scene.
 - **`meta.json`** — exact loop points and sample counts, ready for your engine to consume.
 
 ## Install
@@ -81,7 +82,38 @@ scorekit build forest.yaml -o forest.ogg --stems
 
 Output: `forest.ogg` (loops seamlessly), `forest.stems/01-strings.ogg … 04-drums.ogg`, and `forest.meta.json`. That's the whole workflow.
 
-Want a full scene set? Put `sections:` in one file and get `forest-intro.ogg`, `forest-explore.ogg`, `forest-combat.ogg`, `forest-victory.ogg` — all built on the same motifs. See [forest_suite.yaml](examples/scenes/forest_suite.yaml).
+Want a full scene set? Put `sections:` in one file and get `forest-intro.ogg`, `forest-explore.ogg`, `forest-combat.ogg`, `forest-victory.ogg` — all built on the same motifs — plus `forest.ogg`, the main playback file with every section concatenated in order. See [forest_suite.yaml](examples/scenes/forest_suite.yaml).
+
+## Field recordings, ambience, and SFX
+
+Non-instrument sound can be part of the composition too. A scene names
+portable sources and schedules them in quarter-note beats:
+
+```yaml
+textures:
+  - { source: river, mode: loop, gain: 0.25 }
+  - { source: forest_birds, mode: one_shot, at: [2, 14, 27.5], gain: 0.5 }
+```
+
+A separate machine-local profile maps those names to recordings:
+
+```yaml
+# textures.yaml
+name: forest-field-recordings
+root: /Volumes/Samples
+sources:
+  river: ambience/river.flac
+  forest_birds: wildlife/birds.wav
+```
+
+```bash
+scorekit build forest.yaml --texture-profile textures.yaml -o forest.ogg --stems
+```
+
+FFmpeg normalizes each recording to the build sample rate; scorekit only
+performs deterministic placement and gain-applied summation. Runtime sounds
+driven by player position, weather, or engine RPM still belong in the game
+engine — texture tracks are score-timeline material.
 
 ## Let your Agent compose
 

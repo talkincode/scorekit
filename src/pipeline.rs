@@ -25,6 +25,9 @@ pub struct BuildArgs<'a> {
     /// Renderer profile path (maps instruments to `.sfz` files). Required
     /// for `Renderer::Sfizz`, must be `None` for the SF2 backends.
     pub profile: Option<&'a Path>,
+    /// Portable texture-source profile. Required only when the scene declares
+    /// `textures`; independent of the selected musical renderer.
+    pub texture_profile: Option<&'a Path>,
     pub output: &'a Path,
     pub renderer: tools::Renderer,
     pub sample_rate: u32,
@@ -153,6 +156,7 @@ pub struct BatchArgs<'a> {
     pub scenes: &'a [PathBuf],
     pub soundfont: Option<&'a Path>,
     pub profile: Option<&'a Path>,
+    pub texture_profile: Option<&'a Path>,
     pub out_dir: &'a Path,
     pub format: &'a str,
     pub renderer: tools::Renderer,
@@ -203,6 +207,7 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
             scene,
             soundfont: args.soundfont,
             profile: args.profile,
+            texture_profile: args.texture_profile,
             output: &output,
             renderer: args.renderer,
             sample_rate: args.sample_rate,
@@ -260,8 +265,109 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
     }
 }
 
+fn beat_frame(beat: f64, tempo: u16, sample_rate: u32) -> u64 {
+    let ticks = (beat * f64::from(crate::composer::PPQ)).round() as u32;
+    midi::exact_samples(ticks, tempo, sample_rate)
+}
+
+/// Resolve, normalize and arrange every texture source before music render.
+/// All intermediates live in one cleanup-scoped staging directory, so a bad
+/// mapping or recording cannot leave a partial public artifact.
+fn render_texture_tracks(
+    args: &BuildArgs<'_>,
+    scene: &Scene,
+    output: &Path,
+    passes: u8,
+    pass_frames: u64,
+    total_raw_frames: u64,
+    cleanup: &mut Cleanup,
+) -> Result<Vec<PathBuf>> {
+    if scene.textures.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile_path = args.texture_profile.ok_or_else(|| {
+        validation(
+            "--texture-profile",
+            "scene declares `textures`; pass --texture-profile to map portable source names to audio files"
+                .to_owned(),
+        )
+    })?;
+    let profile = crate::texture::load_profile(profile_path)?;
+    let profile_dir = profile_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let staging = output.with_extension(format!("textures.tmp-{}", std::process::id()));
+    std::fs::create_dir_all(&staging).map_err(|source| Error::Io {
+        path: staging.display().to_string(),
+        source,
+    })?;
+    cleanup.dirs.push(staging.clone());
+
+    let mut normalized = std::collections::BTreeMap::<String, PathBuf>::new();
+    let mut arranged = Vec::with_capacity(scene.textures.len());
+    for (i, texture) in scene.textures.iter().enumerate() {
+        let normalized_path = if let Some(path) = normalized.get(&texture.source) {
+            path.clone()
+        } else {
+            let source = profile.resolve(&profile_dir, &texture.source)?;
+            if !source.is_file() {
+                return Err(validation(
+                    &format!("texture_profile.sources.{}", texture.source),
+                    format!("texture source file does not exist: {}", source.display()),
+                ));
+            }
+            let path = staging.join(format!("source-{}.wav", texture.source));
+            tools::normalize_texture(&source, &path, args.sample_rate)?;
+            normalized.insert(texture.source.clone(), path.clone());
+            path
+        };
+        if texture.mode == crate::schema::TextureMode::OneShot
+            && passes > 1
+            && audio::frames(&normalized_path)? > pass_frames
+        {
+            return Err(validation(
+                &format!("textures[{i}].source"),
+                format!(
+                    "one-shot source `{}` is longer than one scene loop; use a shorter recording",
+                    texture.source
+                ),
+            ));
+        }
+        let raw = staging.join(format!("{:02}-{}.raw.wav", i + 1, texture.source));
+        let start = beat_frame(
+            texture.start_beat.unwrap_or(0.0),
+            scene.tempo,
+            args.sample_rate,
+        );
+        let triggers: Vec<u64> = texture
+            .at
+            .iter()
+            .map(|&beat| beat_frame(beat, scene.tempo, args.sample_rate))
+            .collect();
+        audio::arrange_texture(
+            &normalized_path,
+            &raw,
+            audio::TextureArrangement {
+                mode: texture.mode,
+                start_frame: start,
+                trigger_frames: &triggers,
+                pass_frames,
+                passes,
+                total_frames: total_raw_frames,
+                gain: texture.gain,
+            },
+        )?;
+        arranged.push(raw);
+    }
+    Ok(arranged)
+}
+
 /// Cut `window` out of `raw` and deliver it at `output`: a direct
-/// sample-exact WAV, or an intermediate cut encoded to OGG.
+/// sample-exact WAV, or an intermediate cut encoded to OGG. With
+/// `keep_cut`, the intermediate `.cut.wav` survives for the caller (suite
+/// main-file assembly) instead of being cleaned up here; for WAV output the
+/// output itself is the cut, so the flag is a no-op.
 fn produce(
     raw: &Path,
     output: &Path,
@@ -269,18 +375,21 @@ fn produce(
     quality: u8,
     window: audio::Window,
     cleanup: &mut Cleanup,
+    keep_cut: bool,
 ) -> Result<()> {
     if ext == "wav" {
         audio::extract(raw, output, window)
     } else {
         let cut = output.with_extension("cut.wav");
-        cleanup.files.push(cut.clone());
+        if !keep_cut {
+            cleanup.files.push(cut.clone());
+        }
         audio::extract(raw, &cut, window)?;
         tools::export(&cut, output, quality)?;
         // Remove eagerly: stem cuts live in the staging dir, which is renamed
         // into place before the deferred Cleanup runs — the recorded path
         // would go stale and the cut would ship inside the stems folder.
-        if !cleanup.keep {
+        if !cleanup.keep && !keep_cut {
             let _ = std::fs::remove_file(&cut);
         }
         Ok(())
@@ -305,7 +414,7 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     let meta_path = args.output.with_extension("meta.json");
 
     if scene.sections.is_empty() {
-        let entry = build_one(args, &scene, args.output, &ext)?;
+        let entry = build_one(args, &scene, args.output, &ext, false)?;
         let meta_bytes = serde_json::to_vec_pretty(&entry).expect("meta serializes");
         tools::write_atomic(&meta_path, &meta_bytes)?;
         return Ok(format!(
@@ -317,24 +426,59 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         ));
     }
 
-    // Suite: one asset per section, all sharing tracks, motifs and key.
+    // Suite: one asset per section, all sharing tracks, motifs and key —
+    // plus the main playback file: every section concatenated in declaration
+    // order at `--output` itself, so one `build` always yields an asset under
+    // the requested path regardless of scene mode.
     let stem = args
         .output
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let mut cleanup = Cleanup {
+        files: Vec::new(),
+        dirs: Vec::new(),
+        keep: args.keep_intermediates,
+    };
     let mut entries = Vec::new();
     let mut names = Vec::new();
+    let mut cuts: Vec<PathBuf> = Vec::new();
     for section in &scene.sections {
         let derived = scene.for_section(section);
         let output = args
             .output
             .with_file_name(format!("{stem}-{}.{ext}", section.name));
-        let mut entry = build_one(args, &derived, &output, &ext)?;
+        // WAV sections are already sample-exact cuts; OGG sections keep
+        // their pre-encode `.cut.wav` alive (registered for cleanup first,
+        // so a failure mid-suite still removes it).
+        let cut = if ext == "wav" {
+            output.clone()
+        } else {
+            let cut = output.with_extension("cut.wav");
+            cleanup.files.push(cut.clone());
+            cut
+        };
+        let mut entry = build_one(args, &derived, &output, &ext, ext != "wav")?;
         entry["name"] = json!(section.name);
         entries.push(entry);
         names.push(section.name.clone());
+        cuts.push(cut);
     }
+
+    // Main playback file: sample-exact concatenation of the section cuts.
+    if ext == "wav" {
+        audio::concat(&cuts, args.output)?;
+    } else {
+        let main_cut = args.output.with_extension("cut.wav");
+        cleanup.files.push(main_cut.clone());
+        audio::concat(&cuts, &main_cut)?;
+        tools::export(&main_cut, args.output, args.quality)?;
+    }
+
+    let total_samples: u64 = entries
+        .iter()
+        .map(|entry| entry["total_samples"].as_u64().unwrap_or(0))
+        .sum();
     let manifest = json!({
         "title": scene.title,
         "story": scene.story,
@@ -343,12 +487,18 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         "key": scene.key,
         "time_signature": scene.time_signature,
         "sample_rate": args.sample_rate,
+        "audio": args.output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        "loop": false,
+        "total_samples": total_samples,
+        "seconds": total_samples as f64 / f64::from(args.sample_rate),
         "sections": entries,
     });
     let meta_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serializes");
     tools::write_atomic(&meta_path, &meta_bytes)?;
     Ok(format!(
-        "wrote {} section(s) [{}] and {}",
+        "wrote {} ({} samples) from {} section(s) [{}], {}",
+        args.output.display(),
+        total_samples,
         names.len(),
         names.join(", "),
         meta_path.display(),
@@ -356,12 +506,15 @@ pub fn build(args: &BuildArgs) -> Result<String> {
 }
 
 /// Compile one scene into one audio asset (+ optional stems) at `output` and
-/// return its metadata entry. Does not write the meta.json file.
+/// return its metadata entry. Does not write the meta.json file. With
+/// `keep_cut`, the full-mix pre-encode cut WAV survives next to `output`
+/// for suite main-file assembly (see `produce`).
 fn build_one(
     args: &BuildArgs,
     scene: &Scene,
     output: &Path,
     ext: &str,
+    keep_cut: bool,
 ) -> Result<serde_json::Value> {
     let one_pass = composer::compose(scene);
     let loop_samples = midi::exact_samples(one_pass.total_ticks, scene.tempo, args.sample_rate);
@@ -387,6 +540,7 @@ fn build_one(
         )
     };
     let total_samples = window.take;
+    let total_raw_frames = window.skip + window.take;
 
     let mid = output.with_extension("mid");
     let raw = output.with_extension("raw.wav");
@@ -396,6 +550,27 @@ fn build_one(
         keep: args.keep_intermediates,
     };
     let mut stem_rel: Vec<String> = Vec::new();
+    let texture_raws = render_texture_tracks(
+        args,
+        scene,
+        output,
+        passes,
+        loop_samples,
+        total_raw_frames,
+        &mut cleanup,
+    )?;
+    let stems_dir = output.with_extension("stems");
+    let stems_staging = if args.stems {
+        let staging = output.with_extension(format!("stems.tmp-{}", std::process::id()));
+        std::fs::create_dir_all(&staging).map_err(|source| Error::Io {
+            path: staging.display().to_string(),
+            source,
+        })?;
+        cleanup.dirs.push(staging.clone());
+        Some(staging)
+    } else {
+        None
+    };
 
     match require_backend(args.renderer, args.soundfont, args.profile)? {
         Backend::Sfizz {
@@ -435,17 +610,8 @@ fn build_one(
             }
             // Gain is already baked into each track above; mix at unity here.
             audio::mix(&track_raws, &raw, 1.0)?;
-            produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
-
             if args.stems {
-                let stems_dir = output.with_extension("stems");
-                let stems_staging =
-                    output.with_extension(format!("stems.tmp-{}", std::process::id()));
-                std::fs::create_dir_all(&stems_staging).map_err(|e| Error::Io {
-                    path: stems_staging.display().to_string(),
-                    source: e,
-                })?;
-                cleanup.dirs.push(stems_staging.clone());
+                let stems_staging = stems_staging.as_ref().expect("created when --stems");
                 for (i, track) in scene.tracks.iter().enumerate() {
                     let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
                     produce(
@@ -455,6 +621,7 @@ fn build_one(
                         args.quality,
                         window,
                         &mut cleanup,
+                        false,
                     )?;
                     let dir_name = stems_dir
                         .file_name()
@@ -462,17 +629,6 @@ fn build_one(
                         .unwrap_or_default();
                     stem_rel.push(format!("{dir_name}/{name}"));
                 }
-                if stems_dir.exists() {
-                    std::fs::remove_dir_all(&stems_dir).map_err(|e| Error::Io {
-                        path: stems_dir.display().to_string(),
-                        source: e,
-                    })?;
-                }
-                std::fs::rename(&stems_staging, &stems_dir).map_err(|e| Error::Io {
-                    path: stems_dir.display().to_string(),
-                    source: e,
-                })?;
-                cleanup.dirs.retain(|d| d != &stems_staging);
             }
         }
         Backend::Sf2 { soundfont } => {
@@ -486,17 +642,9 @@ fn build_one(
                 args.sample_rate,
                 args.gain,
             )?;
-            produce(&raw, output, ext, args.quality, window, &mut cleanup)?;
-
             // Stems: staged in a temp dir, swapped in only when every track rendered.
             if args.stems {
-                let stems_dir = output.with_extension("stems");
-                let staging = output.with_extension(format!("stems.tmp-{}", std::process::id()));
-                std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
-                    path: staging.display().to_string(),
-                    source: e,
-                })?;
-                cleanup.dirs.push(staging.clone());
+                let staging = stems_staging.as_ref().expect("created when --stems");
                 for (i, track) in scene.tracks.iter().enumerate() {
                     let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
                     let mid_i = staging.join(format!("{:02}.mid", i + 1));
@@ -517,6 +665,7 @@ fn build_one(
                         args.quality,
                         window,
                         &mut cleanup,
+                        false,
                     )?;
                     let _ = std::fs::remove_file(&mid_i);
                     let _ = std::fs::remove_file(&raw_i);
@@ -526,19 +675,64 @@ fn build_one(
                         .unwrap_or_default();
                     stem_rel.push(format!("{dir_name}/{name}"));
                 }
-                if stems_dir.exists() {
-                    std::fs::remove_dir_all(&stems_dir).map_err(|e| Error::Io {
-                        path: stems_dir.display().to_string(),
-                        source: e,
-                    })?;
-                }
-                std::fs::rename(&staging, &stems_dir).map_err(|e| Error::Io {
-                    path: stems_dir.display().to_string(),
-                    source: e,
-                })?;
-                cleanup.dirs.clear();
             }
         }
+    }
+
+    let full_raw = if texture_raws.is_empty() {
+        raw.clone()
+    } else {
+        let combined = output.with_extension("combined.raw.wav");
+        cleanup.files.push(combined.clone());
+        let mut inputs = Vec::with_capacity(texture_raws.len() + 1);
+        inputs.push(raw.clone());
+        inputs.extend(texture_raws.iter().cloned());
+        audio::mix(&inputs, &combined, 1.0)?;
+        combined
+    };
+    produce(
+        &full_raw,
+        output,
+        ext,
+        args.quality,
+        window,
+        &mut cleanup,
+        keep_cut,
+    )?;
+
+    if let Some(staging) = &stems_staging {
+        for (i, (texture, texture_raw)) in scene.textures.iter().zip(&texture_raws).enumerate() {
+            let name = format!(
+                "{:02}-texture-{}.{ext}",
+                scene.tracks.len() + i + 1,
+                texture.source
+            );
+            produce(
+                texture_raw,
+                &staging.join(&name),
+                ext,
+                args.quality,
+                window,
+                &mut cleanup,
+                false,
+            )?;
+            let dir_name = stems_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            stem_rel.push(format!("{dir_name}/{name}"));
+        }
+        if stems_dir.exists() {
+            std::fs::remove_dir_all(&stems_dir).map_err(|source| Error::Io {
+                path: stems_dir.display().to_string(),
+                source,
+            })?;
+        }
+        std::fs::rename(staging, &stems_dir).map_err(|source| Error::Io {
+            path: stems_dir.display().to_string(),
+            source,
+        })?;
+        cleanup.dirs.retain(|dir| dir != staging);
     }
 
     // Machine-readable metadata for game engines and agent pipelines.
@@ -546,7 +740,7 @@ fn build_one(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    Ok(json!({
+    let mut metadata = json!({
         "title": scene.title,
         "story": scene.story,
         "loop": scene.r#loop,
@@ -566,5 +760,21 @@ fn build_one(
             "pattern": serde_json::to_value(t.pattern).unwrap_or(json!(null)),
             "intensity": t.intensity,
         })).collect::<Vec<_>>(),
-    }))
+    });
+    if !scene.textures.is_empty() {
+        metadata["textures"] = json!(
+            scene
+                .textures
+                .iter()
+                .map(|texture| json!({
+                    "source": texture.source,
+                    "mode": texture.mode,
+                    "start_beat": texture.start_beat,
+                    "at": texture.at,
+                    "gain": texture.gain,
+                }))
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(metadata)
 }

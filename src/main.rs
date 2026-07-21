@@ -11,6 +11,7 @@ mod profile;
 mod profile_check;
 mod schema;
 mod soundfont;
+mod texture;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -39,7 +40,7 @@ enum Command {
     Doctor,
     /// Validate a scene file
     Validate { scene: PathBuf },
-    /// Print the JSON Schema of the scene DSL (or the grammar/renderer-profile DSL)
+    /// Print the JSON Schema of the scene DSL (or one of its external profiles)
     Schema {
         /// Print the grammar-profile schema instead of the scene schema
         #[arg(long)]
@@ -47,6 +48,9 @@ enum Command {
         /// Print the renderer-profile schema (--renderer sfizz) instead of the scene schema
         #[arg(long)]
         profile: bool,
+        /// Print the texture-source profile schema instead of the scene schema
+        #[arg(long)]
+        texture_profile: bool,
     },
     /// Check a scene against an aesthetic grammar profile
     Lint {
@@ -120,6 +124,9 @@ enum Command {
         /// with --renderer sfizz. See `scorekit schema --profile`.
         #[arg(long)]
         profile: Option<PathBuf>,
+        /// Texture profile mapping portable ambience/SFX source names to audio files
+        #[arg(long)]
+        texture_profile: Option<PathBuf>,
         /// Output audio file (.ogg or .wav)
         #[arg(short, long)]
         output: PathBuf,
@@ -132,7 +139,7 @@ enum Command {
         gain: f32,
         #[arg(long, default_value_t = 5)]
         quality: u8,
-        /// Also render one sample-aligned stem per track into `<output>.stems/`
+        /// Also render one sample-aligned stem per instrument/texture track
         #[arg(long)]
         stems: bool,
         /// Decay tail in seconds kept after non-loop scenes
@@ -161,6 +168,9 @@ enum Command {
         /// with --renderer sfizz. See `scorekit schema --profile`.
         #[arg(long)]
         profile: Option<PathBuf>,
+        /// Texture profile mapping portable ambience/SFX source names to audio files
+        #[arg(long)]
+        texture_profile: Option<PathBuf>,
         #[arg(long)]
         out_dir: PathBuf,
         /// Output format for every scene
@@ -175,7 +185,7 @@ enum Command {
         gain: f32,
         #[arg(long, default_value_t = 5)]
         quality: u8,
-        /// Also render sample-aligned stems for every scene
+        /// Also render instrument/texture stems for every scene
         #[arg(long)]
         stems: bool,
         #[arg(long, default_value_t = 4.0)]
@@ -255,10 +265,16 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 s.tempo
             ))
         }
-        Command::Schema { grammar, profile } => Ok(if *grammar {
+        Command::Schema {
+            grammar,
+            profile,
+            texture_profile,
+        } => Ok(if *grammar {
             grammar::schema_json()
         } else if *profile {
             crate::profile::schema_json()
+        } else if *texture_profile {
+            crate::texture::schema_json()
         } else {
             schema::schema_json()
         }),
@@ -390,6 +406,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             scene,
             soundfont,
             profile,
+            texture_profile,
             output,
             renderer,
             sample_rate,
@@ -405,6 +422,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 scene,
                 soundfont: soundfont.as_deref(),
                 profile: profile.as_deref(),
+                texture_profile: texture_profile.as_deref(),
                 output,
                 renderer: *renderer,
                 sample_rate: *sample_rate,
@@ -439,6 +457,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             scenes,
             soundfont,
             profile,
+            texture_profile,
             out_dir,
             format,
             renderer,
@@ -455,6 +474,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 scenes,
                 soundfont: soundfont.as_deref(),
                 profile: profile.as_deref(),
+                texture_profile: texture_profile.as_deref(),
                 out_dir,
                 format,
                 renderer: *renderer,
