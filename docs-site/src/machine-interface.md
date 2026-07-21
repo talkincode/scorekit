@@ -96,12 +96,13 @@ Example client registration (Claude Desktop / any MCP client):
 
 ## Deployment
 
-For cloud or CI use, the repository root ships a `Dockerfile` that pins scorekit, FluidSynth, FFmpeg, and the SHA-256-verified default SoundFont:
+For cloud or CI use, the repository root ships a `Dockerfile` that pins scorekit, FluidSynth, FFmpeg, and the SHA-256-verified default SoundFont. Multi-arch images (linux/amd64, linux/arm64) are published on every release to Docker Hub ([`talkincode/scorekit`](https://hub.docker.com/r/talkincode/scorekit)) and GHCR (`ghcr.io/talkincode/scorekit`):
 
 ```bash
-docker build -t scorekit .
-docker run --rm -v "$PWD:/work" -w /work scorekit build scene.yaml -o scene.ogg --stems
-docker run --rm -i scorekit mcp      # stdio MCP server in the pinned toolchain
+docker pull talkincode/scorekit          # or ghcr.io/talkincode/scorekit
+docker run --rm -v "$PWD:/work" -w /work talkincode/scorekit build scene.yaml -o scene.ogg --stems
+docker run --rm -i talkincode/scorekit mcp   # stdio MCP server in the pinned toolchain
+docker build -t scorekit .               # or build the image locally
 ```
 
 Pinning is what carries the determinism guarantee across machines. If you need an HTTP API, put your own thin gateway in front of the image — that layer belongs to the deployer, not the compiler.
