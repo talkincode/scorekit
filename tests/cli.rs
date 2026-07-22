@@ -330,6 +330,42 @@ fn schema_emits_json_schema() {
         v["properties"]["textures"].is_object(),
         "schema has textures: {v}"
     );
+    assert_eq!(v["properties"]["tempo"]["minimum"], 20);
+    assert_eq!(v["properties"]["tempo"]["maximum"], 300);
+    assert_eq!(v["properties"]["bars"]["minimum"], 1);
+    assert_eq!(v["properties"]["bars"]["maximum"], 256);
+    assert_eq!(
+        v["$defs"]["TextureTrack"]["properties"]["gain"]["minimum"],
+        0.0
+    );
+    assert_eq!(
+        v["$defs"]["TextureTrack"]["properties"]["gain"]["maximum"],
+        1.0
+    );
+    assert_eq!(
+        v["$defs"]["TextureTrack"]["properties"]["start_beat"]["minimum"],
+        0.0
+    );
+    assert_eq!(
+        v["$defs"]["TextureTrack"]["properties"]["at"]["items"]["minimum"],
+        0.0
+    );
+    assert_eq!(
+        v["$defs"]["MotifNote"]["properties"]["beats"]["minimum"],
+        0.125
+    );
+    assert_eq!(
+        v["$defs"]["MotifNote"]["properties"]["beats"]["maximum"],
+        16.0
+    );
+    assert_eq!(
+        v["$defs"]["Track"]["properties"]["intensity"]["minimum"],
+        0.0
+    );
+    assert_eq!(
+        v["$defs"]["Track"]["properties"]["intensity"]["maximum"],
+        1.0
+    );
 
     let out = bin()
         .args(["schema", "--texture-profile"])
@@ -429,6 +465,32 @@ fn validate_rejects_ambiguous_texture_placement() {
     let error: serde_json::Value =
         serde_json::from_slice(&out.get_output().stderr).expect("structured validation error");
     assert_eq!(error["field"], "textures[0].start_beat");
+}
+
+#[test]
+fn validate_rejects_texture_trigger_outside_shortest_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(
+        &scene,
+        "tempo: 60\nbars: 2\ntextures:\n  - source: bell\n    mode: one_shot\n    at: [5]\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - name: short\n    bars: 1\n    loop: true\n  - name: long\n    bars: 2\n    loop: false\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "textures[0].at[0]");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("section `short`"),
+        "error identifies the section whose timeline would wrap: {error}"
+    );
+    assert_dir_contains_exactly(dir.path(), &["suite.yaml"]);
 }
 
 #[test]
@@ -917,6 +979,103 @@ fn build_nonloop_wav_has_exact_padded_length() {
 }
 
 #[test]
+fn build_rejects_nonfinite_tail_as_structured_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("sting.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\nloop: false\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let output = dir.path().join("sting.wav");
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--tail")
+        .arg("inf")
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("stderr is one JSON error");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "--tail");
+    assert_dir_contains_exactly(dir.path(), &["sting.yaml"]);
+}
+
+#[test]
+fn numeric_cli_options_reject_out_of_range_values_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let midi = dir.path().join("missing.mid");
+    let audio = dir.path().join("missing.wav");
+
+    let cases = [
+        (
+            vec![
+                "render".into(),
+                midi.as_os_str().to_owned(),
+                "--sample-rate".into(),
+                "0".into(),
+                "-o".into(),
+                dir.path().join("rate.wav").into_os_string(),
+            ],
+            "--sample-rate",
+        ),
+        (
+            vec![
+                "render".into(),
+                midi.as_os_str().to_owned(),
+                "--gain".into(),
+                "NaN".into(),
+                "-o".into(),
+                dir.path().join("gain.wav").into_os_string(),
+            ],
+            "--gain",
+        ),
+        (
+            vec![
+                "export".into(),
+                audio.as_os_str().to_owned(),
+                "--quality".into(),
+                "11".into(),
+                "-o".into(),
+                dir.path().join("quality.ogg").into_os_string(),
+            ],
+            "--quality",
+        ),
+        (
+            vec![
+                "build".into(),
+                scene.as_os_str().to_owned(),
+                "--crossfade-ms".into(),
+                "60001".into(),
+                "-o".into(),
+                dir.path().join("crossfade.wav").into_os_string(),
+            ],
+            "--crossfade-ms",
+        ),
+    ];
+
+    for (args, field) in cases {
+        let out = bin().arg("--json").args(args).assert().code(2);
+        let error: serde_json::Value =
+            serde_json::from_slice(&out.get_output().stderr).expect("stderr is one JSON error");
+        assert_eq!(error["code"], "validation");
+        assert_eq!(error["field"], field);
+    }
+    assert_dir_contains_exactly(dir.path(), &["scene.yaml"]);
+}
+
+#[test]
 fn build_stems_are_aligned_and_sum_to_mix() {
     let dir = tempfile::tempdir().unwrap();
     let wav = dir.path().join("forest.wav");
@@ -1105,6 +1264,82 @@ fn build_missing_texture_source_leaves_no_partial_artifact() {
 }
 
 #[test]
+fn suite_failure_rolls_back_all_previously_built_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("long-bell.wav");
+    write_texture_wave(&source, 440.0, 5.0);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(
+        &profile,
+        "name: rollback-test\nsources:\n  long_bell: long-bell.wav\n",
+    )
+    .unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\ntextures:\n  - source: long_bell\n    mode: one_shot\n    at: [0]\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - name: long\n    bars: 2\n    loop: false\n  - name: short\n    bars: 1\n    loop: true\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .args(["--sample-rate", "8000", "--tail", "0"])
+        .arg("-o")
+        .arg(dir.path().join("suite.wav"))
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "textures[0].source");
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["long-bell.wav", "suite.yaml", "textures.yaml"],
+    );
+
+    // A failed rebuild must also leave an already published suite byte-for-byte
+    // untouched, rather than exposing a mixture of old and new sections.
+    let prior = [
+        ("suite.wav", b"old-main".as_slice()),
+        ("suite-long.wav", b"old-long".as_slice()),
+        ("suite-short.wav", b"old-short".as_slice()),
+        ("suite.meta.json", b"old-manifest".as_slice()),
+    ];
+    for (name, contents) in prior {
+        fs::write(dir.path().join(name), contents).unwrap();
+    }
+    bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .args(["--sample-rate", "8000", "--tail", "0"])
+        .arg("-o")
+        .arg(dir.path().join("suite.wav"))
+        .assert()
+        .code(2);
+    for (name, contents) in prior {
+        assert_eq!(fs::read(dir.path().join(name)).unwrap(), contents);
+    }
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "long-bell.wav",
+            "suite.yaml",
+            "textures.yaml",
+            "suite.wav",
+            "suite-long.wav",
+            "suite-short.wav",
+            "suite.meta.json",
+        ],
+    );
+}
+
+#[test]
 fn build_ogg_stems_leave_no_intermediates() {
     // Regression: encoded stems go through a `.cut.wav` intermediate inside
     // the staging dir; it must not ship inside the renamed stems folder.
@@ -1230,6 +1465,50 @@ fn build_suite_emits_per_section_assets_with_exact_lengths() {
     assert_eq!(sections[1]["tempo"], 140);
     // muted track dropped from the sting section
     assert_eq!(sections[1]["tracks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn successful_suite_build_replaces_existing_artifacts_as_one_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(&scene, suite_yaml()).unwrap();
+    for name in [
+        "suite.wav",
+        "suite-explore.wav",
+        "suite-sting.wav",
+        "suite.meta.json",
+    ] {
+        fs::write(dir.path().join(name), b"old incomplete suite").unwrap();
+    }
+
+    let output = dir.path().join("suite.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .success();
+
+    let (_, main) = read_frames(&output);
+    let (_, explore) = read_frames(&dir.path().join("suite-explore.wav"));
+    let (_, sting) = read_frames(&dir.path().join("suite-sting.wav"));
+    assert_eq!(main.len(), explore.len() + sting.len());
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("suite.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["suite"], true);
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "suite.yaml",
+            "suite.wav",
+            "suite-explore.wav",
+            "suite-sting.wav",
+            "suite.meta.json",
+        ],
+    );
 }
 
 #[test]

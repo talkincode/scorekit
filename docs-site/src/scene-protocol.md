@@ -118,6 +118,9 @@ needed at the loop boundary.
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on each track's intensity |
 
 Sections inherit the scene's key, tracks (including spatial fields), textures, motifs, harmony, and performance.
+A shared texture schedule must be valid for every section: each trigger is
+checked against the shortest derived section timeline, preventing a trigger
+from silently wrapping into a later pass of a shorter cue.
 
 ### Performance
 

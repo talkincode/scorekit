@@ -19,6 +19,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bin_dir="$root/assets/bin"
 out="$bin_dir/sfizz_render"
+sfizz_commit='4e70dc0bef53b41f2853ed46e26f5911114c92d0'
 
 if [ -x "$out" ]; then
   echo "$out"
@@ -40,6 +41,11 @@ echo "cloning sfizz 1.2.3 ..." >&2
 git clone --branch 1.2.3 --depth 1 --recursive \
   https://github.com/sfztools/sfizz.git "$work/sfizz"
 cd "$work/sfizz"
+actual_commit="$(git rev-parse HEAD)"
+if [[ "$actual_commit" != "$sfizz_commit" ]]; then
+  echo "sfizz 1.2.3 tag mismatch: expected $sfizz_commit, got $actual_commit" >&2
+  exit 1
+fi
 
 echo "patching for arm64 clang ..." >&2
 # 1. Don't apply 32-bit ARM NEON flags to arm64.

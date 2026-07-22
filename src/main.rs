@@ -235,6 +235,82 @@ fn compile_midi(
     tools::write_atomic(output, &bytes)
 }
 
+fn invalid_option(path: &str, message: impl Into<String>) -> error::Error {
+    error::Error::Validation {
+        path: path.to_owned(),
+        message: message.into(),
+    }
+}
+
+fn validate_sample_rate(sample_rate: u32) -> Result<()> {
+    if (8_000..=384_000).contains(&sample_rate) {
+        Ok(())
+    } else {
+        Err(invalid_option(
+            "--sample-rate",
+            format!("{sample_rate} out of range 8000..=384000"),
+        ))
+    }
+}
+
+fn validate_gain(gain: f32) -> Result<()> {
+    if gain.is_finite() && (0.0..=8.0).contains(&gain) {
+        Ok(())
+    } else {
+        Err(invalid_option(
+            "--gain",
+            format!("{gain} out of range 0.0..=8.0 (finite values only)"),
+        ))
+    }
+}
+
+fn validate_quality(quality: u8) -> Result<()> {
+    if quality <= 10 {
+        Ok(())
+    } else {
+        Err(invalid_option(
+            "--quality",
+            format!("{quality} out of range 0..=10"),
+        ))
+    }
+}
+
+fn validate_tail(tail: f64) -> Result<()> {
+    if tail.is_finite() && (0.0..=3_600.0).contains(&tail) {
+        Ok(())
+    } else {
+        Err(invalid_option(
+            "--tail",
+            format!("{tail} out of range 0.0..=3600.0 seconds (finite values only)"),
+        ))
+    }
+}
+
+fn validate_crossfade(crossfade_ms: u32) -> Result<()> {
+    if crossfade_ms <= 60_000 {
+        Ok(())
+    } else {
+        Err(invalid_option(
+            "--crossfade-ms",
+            format!("{crossfade_ms} out of range 0..=60000"),
+        ))
+    }
+}
+
+fn validate_build_options(
+    sample_rate: u32,
+    gain: f32,
+    quality: u8,
+    tail: f64,
+    crossfade_ms: u32,
+) -> Result<()> {
+    validate_sample_rate(sample_rate)?;
+    validate_gain(gain)?;
+    validate_quality(quality)?;
+    validate_tail(tail)?;
+    validate_crossfade(crossfade_ms)
+}
+
 fn run(command: &Command, json: bool) -> Result<String> {
     match command {
         Command::Doctor => {
@@ -310,6 +386,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
                     sample_rate,
                 },
         } => {
+            validate_sample_rate(*sample_rate)?;
             let report = profile_check::check(profile, *sample_rate)?;
             if json {
                 Ok(report.to_json().to_string())
@@ -336,6 +413,8 @@ fn run(command: &Command, json: bool) -> Result<String> {
             sample_rate,
             gain,
         } => {
+            validate_sample_rate(*sample_rate)?;
+            validate_gain(*gain)?;
             match renderer {
                 tools::Renderer::Sfizz => {
                     let sfz = sfz.as_deref().ok_or_else(|| error::Error::Validation {
@@ -374,6 +453,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             seek_samples,
             take_samples,
         } => {
+            validate_quality(*quality)?;
             if *seek_samples > 0 || take_samples.is_some() {
                 let take = match take_samples {
                     Some(t) => *t,
@@ -417,6 +497,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             crossfade_ms,
             keep_intermediates,
         } => {
+            validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::build(&pipeline::BuildArgs {
                 scene,
@@ -469,6 +550,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             crossfade_ms,
             report,
         } => {
+            validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::batch(&pipeline::BatchArgs {
                 scenes,

@@ -21,6 +21,7 @@ pub struct Scene {
     #[serde(default)]
     pub story: Option<String>,
     /// Tempo in BPM. Range: 20..=300.
+    #[schemars(range(min = 20, max = 300))]
     pub tempo: u16,
     /// Key, e.g. `C_major`, `D_minor`, `F#_minor`, `Eb_major`. Default: C_major.
     #[serde(default = "default_key")]
@@ -29,6 +30,7 @@ pub struct Scene {
     #[serde(default = "default_time_signature")]
     pub time_signature: String,
     /// Length in bars. Range: 1..=256.
+    #[schemars(range(min = 1, max = 256))]
     pub bars: u16,
     /// Whether this scene is intended to loop seamlessly (asset metadata).
     #[serde(default)]
@@ -42,6 +44,7 @@ pub struct Scene {
     /// patterns (sustain/arpeggio/bass) derive from it. Default when absent:
     /// I-V-vi-IV in major, i-VI-III-VII in minor.
     #[serde(default)]
+    #[schemars(length(max = 32))]
     pub harmony: Vec<String>,
     /// Performance rendering: deterministic humanization, dynamics, swing,
     /// legato. Absent means the exact mechanical rendering (byte-stable).
@@ -51,8 +54,10 @@ pub struct Scene {
     /// effects. Logical source names are bound to audio files by a separate
     /// texture profile at build time; paths never enter the scene protocol.
     #[serde(default)]
+    #[schemars(length(max = 16))]
     pub textures: Vec<TextureTrack>,
     /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one drums.
+    #[schemars(length(min = 1, max = 16))]
     pub tracks: Vec<Track>,
     /// Suite sections. When present, `build` emits one asset per section
     /// (e.g. intro / explore / combat / victory), all sharing this scene's
@@ -72,12 +77,15 @@ pub struct TextureTrack {
     pub mode: TextureMode,
     /// Start in quarter-note beats, valid only for `mode: loop`. Default: 0.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub start_beat: Option<f64>,
     /// Trigger positions in quarter-note beats, required for `mode: one_shot`.
     #[serde(default)]
+    #[schemars(length(max = 64), inner(range(min = 0.0)))]
     pub at: Vec<f64>,
     /// Linear amplitude multiplier applied before summation. Default: 1.
     #[serde(default = "default_texture_gain")]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub gain: f32,
 }
 
@@ -104,6 +112,7 @@ pub struct Track {
     pub motif: Option<String>,
     /// Dynamic level 0.0..=1.0, scales note velocities. Default: 0.6.
     #[serde(default = "default_intensity")]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub intensity: f32,
     /// Playing technique used to pick samples when rendering through an SFZ
     /// renderer profile (`--renderer sfizz`). Does not change the compiled
@@ -114,11 +123,13 @@ pub struct Track {
     /// Compiled to MIDI CC10 at the start of the track. Absent: no CC10 is
     /// emitted and the synth default (center) applies.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub pan: Option<f32>,
     /// Reverb send 0.0..=1.0, compiled to MIDI CC91 at the start of the
     /// track — spatial depth (near/far). Absent: no CC91 is emitted.
     /// SFZ instruments respond only if the `.sfz` maps these controllers.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub reverb: Option<f32>,
     /// Tail portamento, only with pattern `melody`: during the final `glide`
     /// fraction of each note, pitch bends deterministically toward the next
@@ -127,6 +138,7 @@ pub struct Track {
     /// note's pitch, so the gesture carries across the loop seam. Range:
     /// 0.0..=1.0. Absent or 0: no pitch-bend events are emitted.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub glide: Option<f32>,
 }
 
@@ -159,8 +171,10 @@ pub enum Articulation {
 pub struct MotifNote {
     /// Scale degree: 1 = tonic, 8 = tonic an octave up, negative = below,
     /// 0 = rest. Range: -21..=21.
+    #[schemars(range(min = -21, max = 21))]
     pub degree: i8,
     /// Duration in beats. Range: 0.125..=16.
+    #[schemars(range(min = 0.125, max = 16.0))]
     pub beats: f64,
 }
 
@@ -173,18 +187,21 @@ pub struct Section {
     /// Section name, used in output file names. `[A-Za-z0-9_-]+`.
     pub name: String,
     /// Length in bars. Range: 1..=256.
+    #[schemars(range(min = 1, max = 256))]
     pub bars: u16,
     /// Whether this section loops seamlessly.
     #[serde(default)]
     pub r#loop: bool,
     /// Optional tempo override in BPM. Range: 20..=300.
     #[serde(default)]
+    #[schemars(range(min = 20, max = 300))]
     pub tempo: Option<u16>,
     /// 0-based indices of tracks silenced in this section.
     #[serde(default)]
     pub mute: Vec<usize>,
     /// Multiplier applied to every track's intensity. Range: 0.0..=2.0. Default: 1.
     #[serde(default = "default_section_intensity")]
+    #[schemars(range(min = 0.0, max = 2.0))]
     pub intensity: f32,
 }
 
@@ -215,6 +232,7 @@ pub struct Performance {
     /// Swing feel: offbeat eighths delayed by this fraction of half a beat.
     /// Range: 0.0..=0.5. Default: 0 (straight).
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 0.5))]
     pub swing: f32,
     /// Extend melodic note durations so consecutive notes overlap slightly.
     #[serde(default)]
@@ -231,9 +249,11 @@ pub struct Performance {
 pub struct Humanize {
     /// Max onset shift in milliseconds, uniform in ±timing_ms. Range: 0..=50.
     #[serde(default)]
+    #[schemars(range(max = 50))]
     pub timing_ms: u8,
     /// Max velocity shift, uniform in ±velocity. Range: 0..=30.
     #[serde(default)]
+    #[schemars(range(max = 30))]
     pub velocity: u8,
     /// Random seed; same seed reproduces the same performance bit-exactly.
     #[serde(default)]
@@ -569,15 +589,23 @@ impl Scene {
                 ),
             );
         }
-        let max_bars = self
-            .sections
-            .iter()
-            .map(|s| s.bars)
-            .chain(std::iter::once(self.bars))
-            .max()
-            .unwrap_or(self.bars);
-        let max_beats =
-            f64::from(max_bars) * f64::from(time_sig.num) * 4.0 / f64::from(time_sig.den);
+        // Textures are shared by every section, so their schedule must fit the
+        // shortest compiled timeline. Validating against the longest section
+        // lets an event from pass one wrap into pass two of a shorter loop.
+        // If a section length is itself invalid, defer range checks here so the
+        // dedicated section validation below reports the primary error.
+        let beats_for =
+            |bars: u16| f64::from(bars) * f64::from(time_sig.num) * 4.0 / f64::from(time_sig.den);
+        let texture_timeline = if self.sections.is_empty() {
+            Some(("scene".to_owned(), beats_for(self.bars)))
+        } else if self.sections.iter().all(|s| (1..=256).contains(&s.bars)) {
+            self.sections
+                .iter()
+                .map(|s| (format!("section `{}`", s.name), beats_for(s.bars)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+        } else {
+            None
+        };
         let has_loop_section = self.r#loop || self.sections.iter().any(|s| s.r#loop);
         for (i, texture) in self.textures.iter().enumerate() {
             if !crate::texture::valid_source_name(&texture.source) {
@@ -604,10 +632,18 @@ impl Scene {
                         );
                     }
                     let start = texture.start_beat.unwrap_or(0.0);
-                    if !start.is_finite() || !(0.0..max_beats).contains(&start) {
+                    if !start.is_finite() {
                         return fail(
                             &format!("textures[{i}].start_beat"),
-                            format!("{start} out of range 0.0..{max_beats}"),
+                            format!("{start} must be finite"),
+                        );
+                    }
+                    if let Some((timeline, max_beats)) = &texture_timeline
+                        && !(0.0..*max_beats).contains(&start)
+                    {
+                        return fail(
+                            &format!("textures[{i}].start_beat"),
+                            format!("{start} out of range 0.0..{max_beats} for {timeline}"),
                         );
                     }
                     if has_loop_section && start != 0.0 {
@@ -638,10 +674,18 @@ impl Scene {
                         );
                     }
                     for (j, at) in texture.at.iter().enumerate() {
-                        if !at.is_finite() || !(0.0..max_beats).contains(at) {
+                        if !at.is_finite() {
                             return fail(
                                 &format!("textures[{i}].at[{j}]"),
-                                format!("{at} out of range 0.0..{max_beats}"),
+                                format!("{at} must be finite"),
+                            );
+                        }
+                        if let Some((timeline, max_beats)) = &texture_timeline
+                            && !(0.0..*max_beats).contains(at)
+                        {
+                            return fail(
+                                &format!("textures[{i}].at[{j}]"),
+                                format!("{at} out of range 0.0..{max_beats} for {timeline}"),
                             );
                         }
                     }
