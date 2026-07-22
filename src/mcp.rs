@@ -44,13 +44,13 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "schema",
             description: "Print the JSON Schema of the scene DSL, grammar profile, \
-                          renderer profile, or texture-source profile.",
+                          renderer profile, texture-source profile, or resolver config.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["scene", "grammar", "profile", "texture_profile"],
+                        "enum": ["scene", "grammar", "profile", "texture_profile", "resolver"],
                         "description": "Which schema to print (default: scene)"
                     }
                 },
@@ -95,6 +95,28 @@ fn tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "inspect_instruments",
+            description: "Resolve every track's instrument against a renderer profile's \
+                          availability and report exact/alias/fallback/missing status, \
+                          substitution scores, reasons, and the missing-instrument list.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "scene": { "type": "string", "description": "Path to the scene YAML file" },
+                    "profile": { "type": "string", "description": "Renderer profile defining availability (omit for the full General MIDI vocabulary)" },
+                    "resolver": { "type": "string", "description": "Resolver configuration YAML" },
+                    "fallback_mode": {
+                        "type": "string",
+                        "enum": ["strict", "conservative", "flexible"],
+                        "description": "Fallback mode (default: conservative)"
+                    },
+                    "verbose": { "type": "boolean", "description": "Include the full scored candidate list per track" }
+                },
+                "required": ["scene"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
             name: "diff",
             description: "Semantic diff of two scene files (musical meaning, not text).",
             schema: json!({
@@ -133,6 +155,7 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
                 Some("grammar") => argv.push("--grammar".into()),
                 Some("profile") => argv.push("--profile".into()),
                 Some("texture_profile") => argv.push("--texture-profile".into()),
+                Some("resolver") => argv.push("--resolver".into()),
                 Some(other) => return Err(format!("unknown schema kind `{other}`")),
             }
         }
@@ -171,6 +194,25 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             argv.push("diff".into());
             argv.push(required_str(args, "old")?);
             argv.push(required_str(args, "new")?);
+        }
+        "inspect_instruments" => {
+            argv.push("inspect-instruments".into());
+            argv.push(required_str(args, "scene")?);
+            if let Some(profile) = args.get("profile").and_then(Value::as_str) {
+                argv.push("--profile".into());
+                argv.push(profile.to_owned());
+            }
+            if let Some(resolver) = args.get("resolver").and_then(Value::as_str) {
+                argv.push("--resolver".into());
+                argv.push(resolver.to_owned());
+            }
+            if let Some(mode) = args.get("fallback_mode").and_then(Value::as_str) {
+                argv.push("--fallback-mode".into());
+                argv.push(mode.to_owned());
+            }
+            if args.get("verbose").and_then(Value::as_bool) == Some(true) {
+                argv.push("--verbose".into());
+            }
         }
         other => return Err(format!("unknown tool `{other}`")),
     }

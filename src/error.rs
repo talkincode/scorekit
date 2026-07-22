@@ -41,6 +41,15 @@ pub enum Error {
         /// Complete machine-readable report, including passing patches.
         report: serde_json::Value,
     },
+    #[error("{count} unresolved instrument(s) in `{scene}`")]
+    Resolution {
+        scene: String,
+        count: usize,
+        /// Pre-rendered human-readable lines, one per unresolved track.
+        porcelain: Vec<String>,
+        /// Complete machine-readable resolution report, including resolved tracks.
+        report: serde_json::Value,
+    },
     #[error("environment is not ready for audio builds")]
     Doctor {
         /// Complete human-readable diagnostics and platform-specific help.
@@ -66,6 +75,7 @@ impl Error {
             Error::Validation { .. } => "validation",
             Error::Lint { .. } => "lint",
             Error::ProfileCheck { .. } => "profile_check",
+            Error::Resolution { .. } => "resolution",
             Error::Doctor { .. } => "doctor",
             Error::MissingDependency { .. } => "missing_dependency",
             Error::ToolFailure { .. } => "tool_failure",
@@ -76,7 +86,10 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::Io { .. } => 1,
-            Error::Parse { .. } | Error::Validation { .. } | Error::Lint { .. } => 2,
+            Error::Parse { .. }
+            | Error::Validation { .. }
+            | Error::Lint { .. }
+            | Error::Resolution { .. } => 2,
             Error::ProfileCheck { status_code, .. } => *status_code,
             Error::Doctor { .. } => 3,
             Error::MissingDependency { .. } => 3,
@@ -109,6 +122,9 @@ impl Error {
             return;
         }
         if let Error::ProfileCheck {
+            porcelain, report, ..
+        }
+        | Error::Resolution {
             porcelain, report, ..
         } = self
         {

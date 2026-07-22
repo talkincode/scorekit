@@ -10,12 +10,14 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `schema --grammar` | Print the grammar-profile schema |
 | `schema --profile` | Print the renderer-profile schema |
 | `schema --texture-profile` | Print the texture-source profile schema |
+| `schema --resolver` | Print the instrument-resolver config schema |
 | `lint <scene> --grammar <file>` | Check compiled music against measurable style rules |
 | `midi <scene> -o <file>` | Compile deterministic Standard MIDI |
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
 | `export <audio> -o <file>` | Convert or trim audio through FFmpeg |
 | `build <scene> -o <file>` | Run the complete asset pipeline |
 | `profile check <profile>` | Render probes through every mapped SFZ patch |
+| `inspect-instruments <scene>` | Resolve every track's instrument and report substitutions and gaps |
 | `diff <old> <new>` | Compare scene semantics |
 | `batch <scenes...> --out-dir <dir>` | Build several scenes and write a JSON report |
 | `mcp` | Serve MCP (Model Context Protocol) over stdio; each tool wraps one CLI command |
@@ -32,3 +34,36 @@ seconds, and `--crossfade-ms` is 0..=60000.
 Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
 flag is independent of the musical renderer: it works alongside either an
 SF2 `--soundfont` or an sfizz `--profile`.
+
+## Instrument resolution
+
+`build` and `batch` resolve every track's instrument against what the
+selected backend actually provides before anything is rendered. SF2 backends
+carry the full General MIDI vocabulary, so everything resolves exactly; with
+`--renderer sfizz` availability is the renderer profile's mapping table, and
+unmapped instruments go through a scored fallback policy:
+
+- `--fallback-mode conservative` (default) substitutes within the same
+  instrument family only, minimum score 0.70. Missing instruments never
+  silently become strings — substituting *into* strings always requires an
+  explicit `allowed_families: [strings]` opt-in in the resolver config.
+- `--fallback-mode strict` performs no substitution: an unmapped instrument
+  fails the build (exit 2, code `resolution`) and the error names the best
+  candidate it refused to use.
+- `--fallback-mode flexible` also reaches related families and synth
+  stand-ins.
+- `--resolver <file>` supplies a config (see `scorekit schema --resolver`)
+  with `default_mode`, `minimum_score`, `allow_cross_family`, `allow_synth`,
+  `allowed_families`, and `excluded_families`.
+
+Every substitution prints one `WARN instrument fallback:` line with its score
+and reasons; `meta.json` embeds the full `instrument_resolution` report.
+Unresolved instruments abort before staging, leaving no partial artifacts.
+
+`inspect-instruments <scene> [--profile <file>] [--resolver <file>]
+[--fallback-mode <mode>] [--verbose]` prints the same resolution standalone:
+per-track status (`exact`/`alias`/`fallback`/`missing`/`rejected`), scores,
+reasons, and the missing-instrument list. It exits 2 when instruments are
+unresolved, and `--verbose` lists every scored candidate. Alias spellings
+(e.g. `french_horn` for `horn`) are pure surface syntax and never change
+MIDI bytes.

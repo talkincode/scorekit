@@ -48,8 +48,9 @@ or pass an explicit file to override it.
 ## Core workflow
 
 1. **Ask the schema, never guess:** `scorekit schema` (scene DSL),
-   `scorekit schema --grammar` (grammar profiles), and
-   `scorekit schema --texture-profile` (ambience/SFX source mappings) print JSON Schema.
+   `scorekit schema --grammar` (grammar profiles),
+   `scorekit schema --texture-profile` (ambience/SFX source mappings), and
+   `scorekit schema --resolver` (instrument-resolver config) print JSON Schema.
 2. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
 3. **Validate:** `scorekit --json validate scene.yaml` — errors are
    machine-readable on stderr with `field` paths and line numbers. Fix and
@@ -82,6 +83,14 @@ audio, metadata, and stem paths plus the motif/orchestration choices made.
 Batch many scenes: `scorekit batch a.yaml b.yaml --out-dir assets/` →
 per-scene results in `assets/report.json`, one failure
 doesn't stop the rest.
+
+With `--renderer sfizz`, instruments the profile doesn't map resolve through
+a scored same-family fallback (never silently to strings; exit 2 code
+`resolution` when nothing qualifies). Preview with
+`scorekit inspect-instruments scene.yaml --profile profile.yaml`; tune with
+`--fallback-mode strict|conservative|flexible` or `--resolver <config>`.
+Substitutions print `WARN instrument fallback:` lines and land in
+`meta.json` as `instrument_resolution`.
 
 Exit codes: `0` ok · `1` io · `2` invalid input / lint violations ·
 `3` missing dependency · `4` external tool failed. Global `--json` flag

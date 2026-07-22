@@ -30,6 +30,43 @@ Use the profile with the sfizz backend:
 scorekit build scene.yaml --renderer sfizz --profile profile.yaml -o scene.ogg
 ```
 
+## Instrument resolution and fallback
+
+Profile mappings are the author's ground truth: a mapped instrument always
+resolves exactly. Instruments a scene requests but the profile does not map
+go through the instrument resolver instead of failing outright:
+
+- Same-family substitutes are scored on range, articulation, envelope, role,
+  and timbre; the best candidate above the minimum score (default 0.70) is
+  used, and the build prints a `WARN instrument fallback:` line naming the
+  substitute, its score, and its reasons.
+- Strings are never a default absorber: no missing brass, woodwind, or
+  plucked instrument falls back to a string patch unless the resolver config
+  explicitly lists `strings` in `allowed_families`.
+- Drums are never substituted in either direction, and synth stand-ins
+  require `--fallback-mode flexible` or `allow_synth: true`.
+- When nothing qualifies the build fails with exit 2 (code `resolution`)
+  before any file is staged, and the error carries the full resolution
+  report including the best rejected candidate.
+
+Preview the outcome without building — `scorekit inspect-instruments
+scene.yaml --profile profile.yaml` — or pin behavior with a resolver config
+(`scorekit schema --resolver` prints its schema):
+
+```yaml
+# resolver.yaml
+default_mode: conservative   # strict | conservative | flexible
+minimum_score: 0.70
+allow_cross_family: false
+allow_synth: false
+excluded_families: []        # families never used as substitutes
+allowed_families: []         # explicit cross-family opt-ins (incl. strings)
+```
+
+Substitution only changes which SFZ patch is rendered; MIDI bytes, stem
+names, and `meta.json` track names keep the requested instrument, and the
+report is embedded as `instrument_resolution` in `meta.json`.
+
 ## Texture source profiles
 
 Texture profiles solve the same portability problem for field recordings,

@@ -39,6 +39,9 @@ pub struct BuildArgs<'a> {
     /// Loop-seal crossfade length in milliseconds.
     pub crossfade_ms: u32,
     pub keep_intermediates: bool,
+    /// Instrument fallback policy applied when the backend cannot serve a
+    /// requested instrument directly (see `resolver`).
+    pub fallback: &'a crate::resolver::FallbackPolicy,
 }
 
 /// A validated renderer backend: exactly the input the selected renderer
@@ -258,6 +261,7 @@ pub struct BatchArgs<'a> {
     pub tail: f64,
     pub crossfade_ms: u32,
     pub report: Option<&'a Path>,
+    pub fallback: &'a crate::resolver::FallbackPolicy,
 }
 
 /// Build every scene into `<out-dir>/<scene-stem>.<format>` and write a
@@ -308,6 +312,7 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
             tail: args.tail,
             crossfade_ms: args.crossfade_ms,
             keep_intermediates: false,
+            fallback: args.fallback,
         });
         match result {
             Ok(msg) => {
@@ -504,8 +509,34 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     let scene = schema::load_scene(args.scene)?;
     let meta_path = args.output.with_extension("meta.json");
 
+    // Resolve every track's instrument against what the backend can actually
+    // serve — before anything is staged, so an unresolved instrument aborts
+    // with no partial artifacts. SF2 General MIDI backends carry every
+    // instrument (resolution is trivially exact); sfizz availability is the
+    // renderer profile's mapping table.
+    let available = match require_backend(args.renderer, args.soundfont, args.profile)? {
+        Backend::Sfizz { profile } => Some(crate::resolver::available_from_profile(
+            &crate::profile::load_profile(profile)?,
+        )),
+        Backend::Sf2 { .. } => None,
+    };
+    let resolution =
+        crate::resolver::resolve_scene(&scene, None, available.as_ref(), args.fallback, false);
+    if let Some(err) = resolution.to_error(&args.scene.display().to_string()) {
+        return Err(err);
+    }
+    for line in resolution.warn_lines() {
+        eprintln!("{line}");
+    }
+    let targets: Vec<Option<schema::Instrument>> = resolution
+        .tracks
+        .iter()
+        .map(crate::resolver::Resolution::target)
+        .collect();
+
     if scene.sections.is_empty() {
-        let entry = build_one(args, &scene, args.output, &ext, false)?;
+        let mut entry = build_one(args, &scene, args.output, &ext, false, &targets)?;
+        entry["instrument_resolution"] = resolution.to_json();
         let meta_bytes = serde_json::to_vec_pretty(&entry).expect("meta serializes");
         tools::write_atomic(&meta_path, &meta_bytes)?;
         return Ok(format!(
@@ -549,6 +580,14 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     let mut cuts: Vec<PathBuf> = Vec::new();
     for section in &scene.sections {
         let derived = scene.for_section(section);
+        // `for_section` drops muted tracks by original index; the resolution
+        // targets must be filtered identically to stay index-aligned.
+        let section_targets: Vec<Option<schema::Instrument>> = targets
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !section.mute.contains(i))
+            .map(|(_, t)| *t)
+            .collect();
         let output = staged_output.with_file_name(format!("{stem}-{}.{ext}", section.name));
         // WAV sections are already sample-exact cuts; OGG sections keep
         // their pre-encode `.cut.wav` inside the private suite staging
@@ -558,7 +597,14 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         } else {
             output.with_extension("cut.wav")
         };
-        let mut entry = build_one(args, &derived, &output, &ext, ext != "wav")?;
+        let mut entry = build_one(
+            args,
+            &derived,
+            &output,
+            &ext,
+            ext != "wav",
+            &section_targets,
+        )?;
         entry["name"] = json!(section.name);
         entries.push(entry);
         names.push(section.name.clone());
@@ -594,6 +640,7 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         "loop": false,
         "total_samples": total_samples,
         "seconds": total_samples as f64 / f64::from(args.sample_rate),
+        "instrument_resolution": resolution.to_json(),
         "sections": entries,
     });
     let meta_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serializes");
@@ -622,6 +669,7 @@ fn build_one(
     output: &Path,
     ext: &str,
     keep_cut: bool,
+    targets: &[Option<schema::Instrument>],
 ) -> Result<serde_json::Value> {
     let one_pass = composer::compose(scene);
     let loop_samples = midi::exact_samples(one_pass.total_ticks, scene.tempo, args.sample_rate);
@@ -702,7 +750,16 @@ fn build_one(
 
             let mut track_raws: Vec<PathBuf> = Vec::with_capacity(scene.tracks.len());
             for (i, track) in scene.tracks.iter().enumerate() {
-                let sfz = profile.resolve(&profile_dir, track.instrument, track.articulation)?;
+                // The resolver may have substituted an available instrument
+                // for the requested one; the .sfz lookup uses the target,
+                // while MIDI bytes and stem names keep the requested
+                // instrument (determinism against the scene as written).
+                let target = targets
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(track.instrument);
+                let sfz = profile.resolve(&profile_dir, target, track.articulation)?;
                 let mid_i = staging.join(format!("{:02}.mid", i + 1));
                 let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
                 tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;

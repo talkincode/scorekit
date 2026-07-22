@@ -330,9 +330,7 @@ pub enum Pattern {
     Melody,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Instrument {
     Piano,
@@ -463,6 +461,34 @@ impl Instrument {
             SweepPad => 95,
             Drums => return None,
         })
+    }
+}
+
+/// Deserialization accepts canonical snake_case names plus the registered
+/// aliases and case/separator variants (`French Horn` → `horn`); see
+/// `instrument::resolve_name`. Serialization always emits the canonical
+/// name, so scene round-trips and compiled MIDI stay byte-stable however
+/// the instrument was spelled.
+impl<'de> Deserialize<'de> for Instrument {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match crate::instrument::resolve_name(&raw) {
+            Some(r) => Ok(r.instrument),
+            None => {
+                let suggestions = crate::instrument::suggest(&raw);
+                let hint = if suggestions.is_empty() {
+                    "see `scorekit schema` for the instrument list".to_owned()
+                } else {
+                    format!("did you mean {}?", suggestions.join(", "))
+                };
+                Err(serde::de::Error::custom(format!(
+                    "unknown instrument `{raw}`; {hint}"
+                )))
+            }
+        }
     }
 }
 

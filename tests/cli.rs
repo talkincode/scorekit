@@ -1810,8 +1810,15 @@ fn build_sfizz_rejects_soundfont_flag() {
 #[test]
 fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
     let dir = tempfile::tempdir().unwrap();
-    let scene = tiny_sfizz_scene(dir.path());
-    // Profile only maps `violin`; the scene's `cello` track has no mapping.
+    // Profile only maps `violin` (strings); the scene's `trumpet` track has
+    // no mapping and no same-family candidate — and brass must never fall
+    // back to strings silently.
+    let scene = dir.path().join("duo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: trumpet\n    pattern: sustain\n",
+    )
+    .unwrap();
     write_sine_sfz(dir.path());
     let profile = dir.path().join("profile.yaml");
     fs::write(
@@ -1819,7 +1826,8 @@ fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
     )
     .unwrap();
-    bin()
+    let out = bin()
+        .arg("--json")
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
@@ -1830,6 +1838,10 @@ fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
         .env("PATH", sfizz_path_env())
         .assert()
         .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "resolution");
+    assert_eq!(error["report"]["summary"]["missing"], 1);
+    assert_eq!(error["report"]["missing_instruments"][0], "trumpet");
     assert_dir_contains_exactly(
         dir.path(),
         &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
@@ -1883,6 +1895,296 @@ fn build_sfizz_corrupt_sfz_fails_without_partial_output() {
         .assert()
         .code(4);
     assert_dir_contains_exactly(dir.path(), &["duo.yaml", "mini.sfz", "profile.yaml"]);
+}
+
+// ---- Instrument resolution & fallback (M12) ------------------------------
+
+/// Same-family substitution: `cello` is unmapped, `violin` (same family,
+/// compatible range/articulation) stands in — the build succeeds, warns
+/// visibly, and meta.json embeds the full explainable resolution report.
+#[test]
+fn build_sfizz_same_family_fallback_substitutes_and_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("duo.wav");
+    let out = bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(&wav)
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("WARN instrument fallback:") && stderr.contains("requested=cello"),
+        "missing fallback warning: {stderr}"
+    );
+    assert!(wav.is_file());
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("duo.meta.json")).unwrap()).unwrap();
+    let resolution = &meta["instrument_resolution"];
+    assert_eq!(resolution["summary"]["exact"], 1);
+    assert_eq!(resolution["summary"]["fallback"], 1);
+    assert_eq!(resolution["fallbacks"][0]["requested"], "cello");
+    assert_eq!(resolution["fallbacks"][0]["resolved"], "violin");
+    assert!(resolution["fallbacks"][0]["score"].as_f64().unwrap() >= 0.70);
+    let cello = &resolution["tracks"][1];
+    assert_eq!(cello["status"], "fallback");
+    assert!(
+        cello["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "same_subfamily" || r == "same_family"),
+        "reasons: {}",
+        cello["reasons"]
+    );
+    // Stem naming stays under the *requested* instrument name.
+    assert_eq!(meta["tracks"][1]["instrument"], "cello");
+}
+
+/// Strict mode: no substitution at all — the same scene that succeeds under
+/// the conservative default fails fast, with no partial artifacts.
+#[test]
+fn build_sfizz_strict_mode_rejects_fallback_without_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let out = bin()
+        .arg("--json")
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .args(["--fallback-mode", "strict"])
+        .arg("-o")
+        .arg(dir.path().join("duo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "resolution");
+    assert_eq!(error["report"]["summary"]["rejected"], 1);
+    // The report still names the candidate strict mode refused to use.
+    assert_eq!(
+        error["report"]["tracks"][1]["best_candidate"]["instrument"],
+        "violin"
+    );
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+    );
+}
+
+/// A resolver config can widen the policy: flexible mode lets a brass
+/// request reach a related-family synth pad — but never strings.
+#[test]
+fn build_sfizz_flexible_config_reaches_synth_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("solo.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: horn\n    pattern: sustain\n",
+    )
+    .unwrap();
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  warm_pad:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let resolver = dir.path().join("resolver.yaml");
+    fs::write(&resolver, "default_mode: flexible\n").unwrap();
+    // Conservative default: no synth stand-in, the build fails.
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("solo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .code(2);
+    // Flexible via config file: warm_pad may stand in for the horn.
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--profile")
+        .arg(&profile)
+        .arg("--resolver")
+        .arg(&resolver)
+        .arg("-o")
+        .arg(dir.path().join("solo.wav"))
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("solo.meta.json")).unwrap()).unwrap();
+    assert_eq!(
+        meta["instrument_resolution"]["fallbacks"][0]["resolved"],
+        "warm_pad"
+    );
+}
+
+/// `inspect-instruments` reports all four statuses in one scene, exits 2
+/// when instruments are missing, and its report is byte-identical across
+/// runs (deterministic resolution).
+#[test]
+fn inspect_instruments_reports_statuses_and_is_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("mixed.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: fiddle\n    pattern: sustain\n  - instrument: viola\n    pattern: sustain\n  - instrument: trumpet\n    pattern: sustain\n",
+    )
+    .unwrap();
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n  cello:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let run = || {
+        let out = bin()
+            .arg("--json")
+            .arg("inspect-instruments")
+            .arg(&scene)
+            .arg("--profile")
+            .arg(&profile)
+            .assert()
+            .code(2);
+        out.get_output().stderr.clone()
+    };
+    let first = run();
+    let error: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(error["code"], "resolution");
+    assert_eq!(error["exit_code"], 2);
+    let report = &error["report"];
+    assert_eq!(report["summary"]["exact"], 1);
+    assert_eq!(report["summary"]["alias"], 1);
+    assert_eq!(report["summary"]["fallback"], 1);
+    assert_eq!(report["summary"]["missing"], 1);
+    assert_eq!(report["missing_instruments"][0], "trumpet");
+    // The alias row keeps the requested spelling as written in the file.
+    assert_eq!(report["tracks"][1]["requested"], "fiddle");
+    assert_eq!(report["tracks"][1]["canonical"], "violin");
+    assert_eq!(report["tracks"][1]["status"], "alias");
+    // Determinism: same inputs, byte-identical report.
+    assert_eq!(first, run(), "resolution report differs between runs");
+}
+
+/// All-resolved scenes exit 0; `--json` prints the report on stdout and the
+/// human report carries per-track lines plus a summary.
+#[test]
+fn inspect_instruments_all_resolved_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let profile = write_test_profile(dir.path());
+    let out = bin()
+        .arg("--json")
+        .arg("inspect-instruments")
+        .arg(&scene)
+        .arg("--profile")
+        .arg(&profile)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["summary"]["exact"], 2);
+    assert_eq!(report["summary"]["missing"], 0);
+    let human = bin()
+        .arg("inspect-instruments")
+        .arg(&scene)
+        .arg("--profile")
+        .arg(&profile)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&human.get_output().stdout).into_owned();
+    assert!(
+        text.contains("tracks[0]: violin -> violin (exact") && text.contains("summary: 2 exact"),
+        "human report: {text}"
+    );
+}
+
+/// Alias spellings are pure surface syntax: `french_horn` and `horn` scenes
+/// compile to byte-identical MIDI (determinism guarantee).
+#[test]
+fn alias_and_canonical_scene_produce_identical_midi() {
+    let dir = tempfile::tempdir().unwrap();
+    let write_scene = |name: &str, instrument: &str| {
+        let p = dir.path().join(name);
+        fs::write(
+            &p,
+            format!(
+                "tempo: 110\nbars: 2\ntracks:\n  - instrument: {instrument}\n    pattern: sustain\n"
+            ),
+        )
+        .unwrap();
+        p
+    };
+    let canonical = write_scene("canonical.yaml", "horn");
+    let alias = write_scene("alias.yaml", "french_horn");
+    let compile = |scene: &Path, out_name: &str| {
+        let out = dir.path().join(out_name);
+        bin()
+            .arg("midi")
+            .arg(scene)
+            .arg("-o")
+            .arg(&out)
+            .assert()
+            .success();
+        fs::read(&out).unwrap()
+    };
+    assert_eq!(
+        compile(&canonical, "canonical.mid"),
+        compile(&alias, "alias.mid"),
+        "alias spelling changed MIDI bytes"
+    );
+}
+
+/// SF2 backends carry the full General MIDI vocabulary: every instrument
+/// resolves exactly, and the meta report says so.
+#[test]
+fn build_sf2_resolution_is_all_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("forest.wav");
+    bin()
+        .arg("build")
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .assert()
+        .success();
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
+    let summary = &meta["instrument_resolution"]["summary"];
+    assert_eq!(summary["fallback"], 0);
+    assert_eq!(summary["missing"], 0);
+    assert_eq!(summary["rejected"], 0);
 }
 
 /// Low-level single-instrument path: `render --renderer sfizz --sfz ...`,
@@ -2688,7 +2990,15 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    for expected in ["doctor", "validate", "schema", "lint", "build", "diff"] {
+    for expected in [
+        "doctor",
+        "validate",
+        "schema",
+        "lint",
+        "build",
+        "diff",
+        "inspect_instruments",
+    ] {
         assert!(
             tools.contains(&expected),
             "missing tool {expected}: {tools:?}"

@@ -4,11 +4,13 @@ mod diff;
 mod doctor;
 mod error;
 mod grammar;
+mod instrument;
 mod mcp;
 mod midi;
 mod pipeline;
 mod profile;
 mod profile_check;
+mod resolver;
 mod schema;
 mod soundfont;
 mod texture;
@@ -51,6 +53,9 @@ enum Command {
         /// Print the texture-source profile schema instead of the scene schema
         #[arg(long)]
         texture_profile: bool,
+        /// Print the instrument-resolver config schema instead of the scene schema
+        #[arg(long)]
+        resolver: bool,
     },
     /// Check a scene against an aesthetic grammar profile
     Lint {
@@ -151,6 +156,12 @@ enum Command {
         /// Keep the intermediate .mid and .raw.wav next to the output
         #[arg(long)]
         keep_intermediates: bool,
+        /// Instrument-resolver configuration (YAML); see `scorekit schema --resolver`
+        #[arg(long)]
+        resolver: Option<PathBuf>,
+        /// Instrument fallback mode (overrides the resolver config's default_mode)
+        #[arg(long, value_enum)]
+        fallback_mode: Option<resolver::FallbackMode>,
     },
     /// Semantic diff of two scene files (musical meaning, not text)
     Diff { old: PathBuf, new: PathBuf },
@@ -195,6 +206,29 @@ enum Command {
         /// Report path (default: `<out-dir>/report.json`)
         #[arg(long)]
         report: Option<PathBuf>,
+        /// Instrument-resolver configuration (YAML); see `scorekit schema --resolver`
+        #[arg(long)]
+        resolver: Option<PathBuf>,
+        /// Instrument fallback mode (overrides the resolver config's default_mode)
+        #[arg(long, value_enum)]
+        fallback_mode: Option<resolver::FallbackMode>,
+    },
+    /// Resolve every track's instrument and report substitutions and gaps
+    InspectInstruments {
+        scene: PathBuf,
+        /// Renderer profile whose mappings define availability; without it,
+        /// availability is the full General MIDI vocabulary (SF2 backends).
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Instrument-resolver configuration (YAML); see `scorekit schema --resolver`
+        #[arg(long)]
+        resolver: Option<PathBuf>,
+        /// Instrument fallback mode (overrides the resolver config's default_mode)
+        #[arg(long, value_enum)]
+        fallback_mode: Option<resolver::FallbackMode>,
+        /// Include the full scored candidate list for every track
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -311,6 +345,43 @@ fn validate_build_options(
     validate_crossfade(crossfade_ms)
 }
 
+/// Assemble the effective fallback policy from `--resolver` and
+/// `--fallback-mode`, printing any deprecation warnings to stderr.
+fn assemble_fallback_policy(
+    resolver_config: Option<&Path>,
+    fallback_mode: Option<resolver::FallbackMode>,
+) -> Result<resolver::FallbackPolicy> {
+    let config = resolver_config.map(resolver::load_config).transpose()?;
+    let (policy, warnings) = resolver::build_policy(fallback_mode, config.as_ref());
+    for w in warnings {
+        eprintln!("{w}");
+    }
+    Ok(policy)
+}
+
+/// Instrument spellings as literally written in the scene file, so
+/// `inspect-instruments` can report `french_horn -> horn` as an alias.
+/// Best-effort: anything unexpected simply yields `None` (canonical name).
+fn raw_instrument_spellings(path: &Path, tracks: usize) -> Vec<Option<String>> {
+    let mut out = vec![None; tracks];
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
+        return out;
+    };
+    let Some(sequence) = value.get("tracks").and_then(|t| t.as_sequence()) else {
+        return out;
+    };
+    for (i, track) in sequence.iter().take(tracks).enumerate() {
+        out[i] = track
+            .get("instrument")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+    }
+    out
+}
+
 fn run(command: &Command, json: bool) -> Result<String> {
     match command {
         Command::Doctor => {
@@ -345,12 +416,15 @@ fn run(command: &Command, json: bool) -> Result<String> {
             grammar,
             profile,
             texture_profile,
+            resolver,
         } => Ok(if *grammar {
             grammar::schema_json()
         } else if *profile {
             crate::profile::schema_json()
         } else if *texture_profile {
             crate::texture::schema_json()
+        } else if *resolver {
+            resolver::schema_json()
         } else {
             schema::schema_json()
         }),
@@ -496,8 +570,11 @@ fn run(command: &Command, json: bool) -> Result<String> {
             tail,
             crossfade_ms,
             keep_intermediates,
+            resolver: resolver_config,
+            fallback_mode,
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
+            let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::build(&pipeline::BuildArgs {
                 scene,
@@ -513,6 +590,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 tail: *tail,
                 crossfade_ms: *crossfade_ms,
                 keep_intermediates: *keep_intermediates,
+                fallback: &fallback,
             })
         }
         Command::Diff { old, new } => {
@@ -549,8 +627,11 @@ fn run(command: &Command, json: bool) -> Result<String> {
             tail,
             crossfade_ms,
             report,
+            resolver: resolver_config,
+            fallback_mode,
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
+            let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::batch(&pipeline::BatchArgs {
                 scenes,
@@ -567,7 +648,35 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 tail: *tail,
                 crossfade_ms: *crossfade_ms,
                 report: report.as_deref(),
+                fallback: &fallback,
             })
+        }
+        Command::InspectInstruments {
+            scene,
+            profile,
+            resolver: resolver_config,
+            fallback_mode,
+            verbose,
+        } => {
+            let s = schema::load_scene(scene)?;
+            let policy = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
+            let available = profile
+                .as_deref()
+                .map(|p| {
+                    crate::profile::load_profile(p).map(|p| resolver::available_from_profile(&p))
+                })
+                .transpose()?;
+            let raws = raw_instrument_spellings(scene, s.tracks.len());
+            let resolution =
+                resolver::resolve_scene(&s, Some(&raws), available.as_ref(), &policy, *verbose);
+            if let Some(err) = resolution.to_error(&scene.display().to_string()) {
+                return Err(err);
+            }
+            if json {
+                Ok(resolution.to_json().to_string())
+            } else {
+                Ok(resolution.human_report())
+            }
         }
     }
 }

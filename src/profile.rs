@@ -96,6 +96,31 @@ impl Profile {
         Ok(())
     }
 
+    /// Rewrite instrument keys to their canonical spelling so alias keys
+    /// (e.g. `french_horn:`) land on the entry `resolve()` looks up by
+    /// `instrument_key()`. Two keys collapsing onto one canonical instrument
+    /// is an authoring error, not a merge. Unknown keys are left as-is for
+    /// `validate()` to report with suggestions.
+    fn canonicalize_instrument_keys(&mut self) -> Result<()> {
+        let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for (key, arts) in std::mem::take(&mut self.instruments) {
+            let canonical = match crate::instrument::resolve_name(&key) {
+                Some(r) => instrument_key(r.instrument),
+                None => key.clone(),
+            };
+            if out.insert(canonical.clone(), arts).is_some() {
+                return Err(Error::Validation {
+                    path: format!("instruments.{key}"),
+                    message: format!(
+                        "instrument `{key}` duplicates `{canonical}` after alias normalization"
+                    ),
+                });
+            }
+        }
+        self.instruments = out;
+        Ok(())
+    }
+
     /// Resolve the sample root: `root` (relative to the profile file's
     /// directory) or that directory itself.
     fn resolved_root(&self, profile_dir: &Path) -> PathBuf {
@@ -169,13 +194,14 @@ pub fn load_profile(path: &Path) -> Result<Profile> {
         path: path.display().to_string(),
         source,
     })?;
-    let profile: Profile = serde_yaml_ng::from_str(&text).map_err(|e| Error::Parse {
+    let mut profile: Profile = serde_yaml_ng::from_str(&text).map_err(|e| Error::Parse {
         message: format!("invalid renderer profile: {e}"),
         location: e.location().map(|l| Location {
             line: l.line(),
             column: l.column(),
         }),
     })?;
+    profile.canonicalize_instrument_keys()?;
     profile.validate()?;
     Ok(profile)
 }
@@ -253,6 +279,32 @@ mod tests {
         let path = write(&dir, "profile.yaml", text);
         let err = load_profile(&path).unwrap_err();
         assert!(err.to_string().contains("not_a_real_instrument"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn alias_instrument_keys_canonicalize_on_load() {
+        let dir = std::env::temp_dir().join(format!("sk-profile-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "name: test\ninstruments:\n  french_horn:\n    sustain: h.sfz\n";
+        let path = write(&dir, "profile.yaml", text);
+        let profile = load_profile(&path).unwrap();
+        assert!(profile.instruments.contains_key("horn"));
+        let resolved = profile
+            .resolve(&dir, Instrument::Horn, Articulation::Sustain)
+            .unwrap();
+        assert_eq!(resolved, dir.join("h.sfz"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn duplicate_keys_after_alias_normalization_fail_to_load() {
+        let dir = std::env::temp_dir().join(format!("sk-profile-dup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "name: test\ninstruments:\n  horn:\n    sustain: a.sfz\n  french_horn:\n    sustain: b.sfz\n";
+        let path = write(&dir, "profile.yaml", text);
+        let err = load_profile(&path).unwrap_err();
+        assert!(err.to_string().contains("duplicates"), "{err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

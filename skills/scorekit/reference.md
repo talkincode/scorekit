@@ -18,15 +18,16 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | --- | --- | --- |
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
-| `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → renderer profile; `--texture-profile` → texture-source profile |
+| `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → renderer profile; `--texture-profile` → texture-source profile; `--resolver` → instrument-resolver config |
 | `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track#>`, `--section <name>` |
 | `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
+| `inspect-instruments <scene>` | resolve instruments, report substitutions/gaps | `--profile <file>` (omit = GM, all exact), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
-| `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export flags |
+| `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export/resolver flags |
 
 Individual file writes are atomic (temp + rename). Suite builds additionally
 stage every section, main asset, stem directory, and manifest as one set; a
@@ -142,6 +143,11 @@ duplication — loop math stays sample-exact.
 - **Synth:** `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
 - **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` only
 
+Common alias spellings are accepted and normalized before compilation
+(`french_horn`→`horn`, `fiddle`→`violin`, `contrabass`/`double_bass`,
+`grand_piano`→`piano`, …); an unknown name errors with a suggestion.
+Aliases are surface syntax only — MIDI bytes are identical either way.
+
 ## Renderer profiles (`--renderer sfizz`)
 
 sfizz renders real `.sfz` sample libraries (e.g. free CC0 [VSCO 2 Community
@@ -168,9 +174,22 @@ instruments:
     sustain: GM-StylePerc.sfz
 ```
 
-Every `Instrument` used by a scene must have an entry with at least a
-`sustain` mapping; missing instruments or malformed paths fail loudly at
-build time (input error, no partial output). `.sfz` paths are relative to
+Every `Instrument` used by a scene should have an entry with at least a
+`sustain` mapping; profile mappings are ground truth and always resolve
+exactly. Instruments the profile doesn't map go through the **instrument
+resolver**: a scored same-family substitute (range/articulation/envelope/
+role/timbre, default minimum 0.70) is used with a `WARN instrument
+fallback:` line, but strings are never a default absorber (substituting
+into strings needs an explicit `allowed_families: [strings]` in a
+`--resolver` config), drums are never substituted, and synth stand-ins need
+`--fallback-mode flexible`. When nothing qualifies the build fails before
+staging (exit 2, code `resolution`, no partial output) and names the best
+rejected candidate. `--fallback-mode strict` disables substitution
+entirely; `scorekit inspect-instruments scene.yaml --profile <file>`
+previews per-track statuses (`exact`/`alias`/`fallback`/`missing`/
+`rejected`) without building; substitution never changes MIDI bytes or
+stem/meta names — only the rendered `.sfz`. Malformed paths still fail
+loudly at build time. `.sfz` paths are relative to
 `root`, and one profile can span multiple sample libraries per-instrument
 by prefixing each `.sfz` path with the library's own subfolder name under a
 shared `root` (no per-instrument `root:` override exists or is needed). See
@@ -232,6 +251,9 @@ Single scene (`build`):
 
 Suite: `{"suite": true, "tempo", "key", "time_signature", "sample_rate",
 "sections": [ …single-scene entries each with "name"… ]}`.
+Every build also embeds `"instrument_resolution"` (per-track
+status/score/reasons plus a summary; all-exact under GM SoundFonts) in the
+meta entry and suite manifest.
 Loop the file by playing `[0, loop_samples)`; `total_samples` includes the
 tail for non-loop scenes. `batch` writes `report.json`:
 `{"total", "succeeded", "failed", "items": [{scene, ok, output, meta,
