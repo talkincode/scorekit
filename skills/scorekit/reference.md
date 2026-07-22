@@ -19,17 +19,18 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
 | `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → renderer profile; `--texture-profile` → texture-source profile |
-| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` (44100); global `--json` emits the full report |
+| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track#>`, `--section <name>` |
-| `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` (44100), `--gain` (0.8, ignored by sfizz) |
+| `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` secs (4.0, non-loop), `--crossfade-ms` (50, loop seal), `--keep-intermediates` |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
 | `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export flags |
 
-All file writes are atomic (temp + rename): a failed command leaves no
-partial output.
+Individual file writes are atomic (temp + rename). Suite builds additionally
+stage every section, main asset, stem directory, and manifest as one set; a
+failed command leaves the previously published set unchanged.
 
 ## Scene DSL
 
@@ -113,7 +114,8 @@ RPM belongs to the game runtime, not texture tracks.
 
 Sections share the scene's key, tracks, motifs, harmony and performance.
 `midi --section <name>` compiles one; `build` emits one asset per section
-plus a manifest.
+plus a manifest. A shared texture trigger must fit the shortest section
+timeline, so it cannot wrap silently in a shorter cue.
 
 ### Performance (all optional, all deterministic)
 

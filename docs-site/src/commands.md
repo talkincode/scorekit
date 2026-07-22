@@ -24,6 +24,11 @@ Exit codes are stable: `0` success, `1` I/O failure, `2` invalid input, `3` miss
 
 Run `scorekit <command> --help` for the complete flag list shipped by the installed binary.
 
+Numeric audio-command options reject non-finite or out-of-range values before
+resolving tools or writing files: `--sample-rate` is 8000..=384000 Hz,
+`--gain` is 0.0..=8.0, `--quality` is 0..=10, `--tail` is 0.0..=3600.0
+seconds, and `--crossfade-ms` is 0..=60000.
+
 Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
 flag is independent of the musical renderer: it works alongside either an
 SF2 `--soundfont` or an sfizz `--profile`.

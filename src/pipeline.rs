@@ -150,6 +150,97 @@ impl Drop for Cleanup {
     }
 }
 
+fn path_io(path: &Path, source: std::io::Error) -> Error {
+    Error::Io {
+        path: path.display().to_string(),
+        source,
+    }
+}
+
+fn create_work_dir(parent: &Path, label: &str) -> Result<PathBuf> {
+    std::fs::create_dir_all(parent).map_err(|source| path_io(parent, source))?;
+    for attempt in 0..1_000u16 {
+        let candidate = parent.join(format!(".{label}-{}-{attempt}", std::process::id()));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(path_io(&candidate, source)),
+        }
+    }
+    Err(path_io(
+        parent,
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("could not allocate a unique {label} directory"),
+        ),
+    ))
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            std::fs::remove_dir_all(path)
+        }
+        Ok(_) => std::fs::remove_file(path),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source),
+    }
+}
+
+/// Publish a complete suite staging directory as one recoverable operation.
+/// Existing destinations are first moved into a same-filesystem backup. Any
+/// rename failure removes newly published entries and restores every backup,
+/// so a failed command never exposes a half-old/half-new suite.
+fn publish_staged_suite(staging: &Path, destination_dir: &Path, label: &str) -> Result<()> {
+    let mut sources = std::fs::read_dir(staging)
+        .map_err(|source| path_io(staging, source))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|source| path_io(staging, source))?;
+    sources.sort();
+    let backup = create_work_dir(destination_dir, &format!("{label}.suite.backup"))?;
+    let mut backups: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut published: Vec<PathBuf> = Vec::new();
+
+    let publish_result = (|| -> Result<()> {
+        for source in sources {
+            let name = source.file_name().ok_or_else(|| {
+                validation(
+                    "--output",
+                    format!("staged artifact has no file name: {}", source.display()),
+                )
+            })?;
+            let destination = destination_dir.join(name);
+            if std::fs::symlink_metadata(&destination).is_ok() {
+                let saved = backup.join(name);
+                std::fs::rename(&destination, &saved)
+                    .map_err(|source| path_io(&destination, source))?;
+                backups.push((saved, destination.clone()));
+            }
+            std::fs::rename(&source, &destination)
+                .map_err(|source| path_io(&destination, source))?;
+            published.push(destination);
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = publish_result {
+        for destination in published.iter().rev() {
+            let _ = remove_path(destination);
+        }
+        for (saved, destination) in backups.iter().rev() {
+            let _ = std::fs::rename(saved, destination);
+        }
+        let _ = std::fs::remove_dir_all(&backup);
+        return Err(error);
+    }
+
+    // Old complete artifacts are no longer needed. Public outputs are already
+    // fully committed; cleanup residue is private and best-effort on Drop.
+    let _ = std::fs::remove_dir_all(&backup);
+    Ok(())
+}
+
 /// Batch: render many scenes in one run; per-scene failures don't abort the
 /// run, they land in a machine-readable report instead.
 pub struct BatchArgs<'a> {
@@ -435,28 +526,37 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let destination_dir = args
+        .output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let output_name = args.output.file_name().ok_or_else(|| {
+        validation(
+            "--output",
+            format!("output has no file name: {}", args.output.display()),
+        )
+    })?;
+    let staging = create_work_dir(destination_dir, &format!("{stem}.suite.tmp"))?;
+    let staged_output = staging.join(output_name);
     let mut cleanup = Cleanup {
         files: Vec::new(),
-        dirs: Vec::new(),
-        keep: args.keep_intermediates,
+        dirs: vec![staging.clone()],
+        keep: false,
     };
     let mut entries = Vec::new();
     let mut names = Vec::new();
     let mut cuts: Vec<PathBuf> = Vec::new();
     for section in &scene.sections {
         let derived = scene.for_section(section);
-        let output = args
-            .output
-            .with_file_name(format!("{stem}-{}.{ext}", section.name));
+        let output = staged_output.with_file_name(format!("{stem}-{}.{ext}", section.name));
         // WAV sections are already sample-exact cuts; OGG sections keep
-        // their pre-encode `.cut.wav` alive (registered for cleanup first,
-        // so a failure mid-suite still removes it).
+        // their pre-encode `.cut.wav` inside the private suite staging
+        // directory until the main concatenation has finished.
         let cut = if ext == "wav" {
             output.clone()
         } else {
-            let cut = output.with_extension("cut.wav");
-            cleanup.files.push(cut.clone());
-            cut
+            output.with_extension("cut.wav")
         };
         let mut entry = build_one(args, &derived, &output, &ext, ext != "wav")?;
         entry["name"] = json!(section.name);
@@ -467,12 +567,15 @@ pub fn build(args: &BuildArgs) -> Result<String> {
 
     // Main playback file: sample-exact concatenation of the section cuts.
     if ext == "wav" {
-        audio::concat(&cuts, args.output)?;
+        audio::concat(&cuts, &staged_output)?;
     } else {
-        let main_cut = args.output.with_extension("cut.wav");
-        cleanup.files.push(main_cut.clone());
+        let main_cut = staged_output.with_extension("cut.wav");
         audio::concat(&cuts, &main_cut)?;
-        tools::export(&main_cut, args.output, args.quality)?;
+        tools::export(&main_cut, &staged_output, args.quality)?;
+        for cut in &cuts {
+            std::fs::remove_file(cut).map_err(|source| path_io(cut, source))?;
+        }
+        std::fs::remove_file(&main_cut).map_err(|source| path_io(&main_cut, source))?;
     }
 
     let total_samples: u64 = entries
@@ -494,7 +597,11 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         "sections": entries,
     });
     let meta_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serializes");
-    tools::write_atomic(&meta_path, &meta_bytes)?;
+    let staged_meta = staged_output.with_extension("meta.json");
+    tools::write_atomic(&staged_meta, &meta_bytes)?;
+    publish_staged_suite(&staging, destination_dir, &stem)?;
+    std::fs::remove_dir(&staging).map_err(|source| path_io(&staging, source))?;
+    cleanup.dirs.clear();
     Ok(format!(
         "wrote {} ({} samples) from {} section(s) [{}], {}",
         args.output.display(),

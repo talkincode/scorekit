@@ -11,17 +11,29 @@
 #   docker run --rm -v "$PWD:/work" -w /work scorekit build scene.yaml -o scene.ogg --stems
 #   docker run --rm -i scorekit mcp        # stdio MCP server
 
-FROM rust:1-bookworm AS build
+FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked
 
-FROM debian:bookworm-slim
-# bookworm ships FluidSynth 2.3.x and FFmpeg 5.1.x; the distro release pins
-# the tool major/minor versions this image guarantees.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends fluidsynth ffmpeg curl ca-certificates \
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+# Freeze the complete APT dependency graph through an immutable Debian
+# snapshot, then also name the top-level package versions as executable
+# documentation. Rebuilding the same source either gets these exact tools or
+# fails closed; it never silently advances the audio toolchain.
+ARG DEBIAN_SNAPSHOT=20260713T000000Z
+RUN printf '%s\n' \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm main" \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT} bookworm-security main" \
+      > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      fluidsynth=2.3.1-2 \
+      ffmpeg=7:5.1.9-0+deb12u1 \
+      curl=7.88.1-10+deb12u15 \
+      ca-certificates=20230311+deb12u1 \
     && rm -rf /var/lib/apt/lists/* \
     && fluidsynth --version && ffmpeg -version
 
