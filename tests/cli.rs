@@ -2332,6 +2332,140 @@ fn profile_check_missing_sfizz_is_dependency_error_without_residue() {
     assert_dir_contains_exactly(dir.path(), &["mini.sfz", "profile.yaml", "sine.wav"]);
 }
 
+/// Write a WAV of `frames` mono samples all set to `amplitude`.
+fn write_const_wav(path: &Path, amplitude: i16, frames: usize) {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for _ in 0..frames {
+        writer.write_sample(amplitude).unwrap();
+    }
+    writer.finalize().unwrap();
+}
+
+/// Install a fake `sfizz_render` that serves canned WAVs by invocation count:
+/// call N picks `w<N>.wav`, falling back to the last one provided. Lets tests
+/// script exactly which render attempts differ.
+#[cfg(unix)]
+fn install_counted_sfizz(fake_bin: &Path, outputs: &[i16]) {
+    fs::create_dir_all(fake_bin).unwrap();
+    for (i, amp) in outputs.iter().enumerate() {
+        write_const_wav(&fake_bin.join(format!("w{}.wav", i + 1)), *amp, 4410);
+    }
+    let script = format!(
+        "#!/bin/sh\ndir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nout=\"\"; prev=\"\"\nfor a in \"$@\"; do\n  [ \"$prev\" = \"--wav\" ] && out=\"$a\"\n  prev=\"$a\"\ndone\nn=$(cat \"$dir/count\" 2>/dev/null || echo 0)\nn=$((n+1)); printf %s \"$n\" > \"$dir/count\"\n[ $n -gt {max} ] && n={max}\ncp \"$dir/w$n.wav\" \"$out\"\n",
+        max = outputs.len()
+    );
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn profile_check_reports_render_sha256_golden_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = write_test_profile(dir.path());
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", sfizz_path_env())
+        .env("TMPDIR", dir.path())
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let hash = v["patches"][0]["render_sha256"].as_str().unwrap();
+    assert_eq!(hash.len(), 64, "render_sha256 must be hex SHA-256");
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(v["patches"][0].get("flake_diagnostics").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_flaky_first_pair_recovers_via_isolated_recheck() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    // First pair differs (1000 vs 2000) -> failed comparison; recheck pair is
+    // stable (1500, 1500) -> load-sensitive flake, overall pass.
+    install_counted_sfizz(&fake_bin, &[1000, 2000, 1500, 1500]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: flaky\ninstruments:\n  violin:\n    sustain: any.sfz\n",
+    )
+    .unwrap();
+    fs::write(work.join("any.sfz"), "<region> sample=w1.wav\n").unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", dir.path())
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["failed"], 0);
+    let patch = &v["patches"][0];
+    assert_eq!(patch["status"], "ok");
+    assert!(patch["render_sha256"].as_str().is_some());
+    let warnings = patch["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("load_sensitive_flake")),
+        "expected load_sensitive_flake warning, got {warnings:?}"
+    );
+    let flakes = patch["flake_diagnostics"].as_array().unwrap();
+    assert_eq!(flakes.len(), 1);
+    assert_eq!(flakes[0]["attempt"], "first");
+    assert_eq!(flakes[0]["observed_status"], "nondeterministic");
+    let hashes = flakes[0]["render_sha256"].as_array().unwrap();
+    assert_ne!(hashes[0], hashes[1], "differing renders must hash apart");
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_persistent_nondeterminism_fails_with_both_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    // Both pairs differ -> hard failure carrying first + recheck evidence.
+    install_counted_sfizz(&fake_bin, &[1000, 2000, 1500, 2500]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: broken\ninstruments:\n  violin:\n    sustain: any.sfz\n",
+    )
+    .unwrap();
+    fs::write(work.join("any.sfz"), "<region> sample=w1.wav\n").unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", dir.path())
+        .assert()
+        .code(2);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(v["report"]["failed"], 1);
+    let patch = &v["report"]["patches"][0];
+    assert_eq!(patch["status"], "nondeterministic");
+    assert!(patch.get("render_sha256").is_none());
+    let flakes = patch["flake_diagnostics"].as_array().unwrap();
+    assert_eq!(flakes.len(), 2);
+    assert_eq!(flakes[0]["attempt"], "first");
+    assert_eq!(flakes[1]["attempt"], "recheck");
+    assert_eq!(flakes[1]["observed_status"], "nondeterministic");
+}
+
 // ---- diff: semantic scene comparison (M4) ----
 
 #[test]

@@ -150,7 +150,7 @@ fn candidate_names(name: &str) -> Vec<OsString> {
     }
 }
 
-fn find_executable(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let candidates = candidate_names(name);
     for directory in std::env::split_paths(&path) {

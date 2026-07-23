@@ -9,6 +9,15 @@ The project profile, roadmap, and full acceptance matrix live in [docs/roadmap.m
 - MUST guarantee determinism: the same DSL + same sound source + same tool versions produces byte-identical MIDI output.
 - The DSL schema MUST NOT introduce fields that only commercial sound sources can fulfill.
 
+## Sound library & anti-homogenization (MUST)
+
+The standing program — goal, measured baseline, measurable targets (T1–T5), and operating loop — lives in the "Sound library & orchestration program" section of [docs/roadmap.md](docs/roadmap.md) (single source of truth). The following rules are MUST-level whenever touching sound sources, renderer/texture profiles, or the resolver:
+
+- Substitution fallback is a last-resort diagnostic, never a coverage strategy. When a wanted instrument or articulation is missing from the active profile, close the gap with a real source (acquire → manifest → map → `scorekit profile check`) or re-orchestrate the scene visibly; MUST NOT widen fallback policy, lower resolver score gates, or bind an unrelated patch just to silence the WARN.
+- Every library enters the corpus through a versioned identity with license + checksum manifests; every new mapping MUST pass `scorekit profile check` (deterministic, non-silent) before anything relies on it.
+- Preserve timbre diversity: renderer profiles are curated sound identities; prefer adding independent sources over deepening dependence on a single library, and MUST NOT wholesale-rebind existing mappings to a different library as a side effect — that is an audible style change and must be a visible, reviewed decision.
+- Coverage gaps are closed in the library/profile layer, never by bending the DSL schema toward one sound source (corollary of the schema-neutrality iron rule).
+
 ## Acceptance matrix (hard rules)
 
 The following five rules are MUST-level; the matrix itself is maintained in the "Acceptance matrix" section of [docs/roadmap.md](docs/roadmap.md) (single source of truth — not duplicated here):
