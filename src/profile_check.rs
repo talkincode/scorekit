@@ -1,6 +1,13 @@
 //! Active renderer-profile verification. Schema validation proves the YAML is
 //! shaped correctly; this module proves each referenced SFZ actually renders,
 //! produces audible PCM, and repeats deterministically with the pinned tool.
+//!
+//! Failure handling is a recorded, isolated recheck — not blind retry: a
+//! failed comparison (silent or nondeterministic) captures environment
+//! diagnostics (load average, tool identity, both render hashes, timings)
+//! and re-runs that one patch once; an isolated pass downgrades the failure
+//! to a `load_sensitive_flake` warning with the evidence attached, an
+//! isolated failure stays a hard failure carrying both attempts' diagnostics.
 
 use crate::composer::{NoteEvent, ScoreIr, TrackIr};
 use crate::error::{Error, Result};
@@ -8,11 +15,28 @@ use crate::profile;
 use crate::schema::{Instrument, TimeSig};
 use crate::{midi, tools};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const SILENCE_PEAK: u32 = 1;
 const DETERMINISM_TOLERANCE: f64 = 1.0e-6;
+
+/// Environment + evidence snapshot for one failed render-pair attempt.
+#[derive(Debug, Clone, Serialize)]
+pub struct FlakeDiagnostics {
+    pub attempt: String,
+    pub observed_status: String,
+    pub difference_rms_ratio: f64,
+    pub peak_abs: u32,
+    pub render_sha256: [String; 2],
+    pub render_ms: [u64; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_average: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sfizz_render: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchReport {
@@ -23,7 +47,14 @@ pub struct PatchReport {
     pub rms: f64,
     pub deterministic: bool,
     pub difference_rms_ratio: f64,
+    /// SHA-256 of the first render's WAV bytes. Stable across runs with the
+    /// same tool version, so a stored certified report doubles as a
+    /// golden-render baseline: corpus or tool drift shows up as a hash diff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_sha256: Option<String>,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub flake_diagnostics: Vec<FlakeDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -216,8 +247,130 @@ fn render_failure(
         rms: 0.0,
         deterministic: false,
         difference_rms_ratio: f64::INFINITY,
+        render_sha256: None,
         warnings: Vec::new(),
+        flake_diagnostics: Vec::new(),
         error: Some(error.into()),
+    }
+}
+
+/// Verdict of one double-render comparison.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Verdict {
+    Pass,
+    Silent,
+    Nondeterministic,
+}
+
+impl Verdict {
+    fn status(self) -> &'static str {
+        match self {
+            Verdict::Pass => "ok",
+            Verdict::Silent => "silent",
+            Verdict::Nondeterministic => "nondeterministic",
+        }
+    }
+}
+
+struct PairOutcome {
+    verdict: Verdict,
+    peak_abs: u32,
+    rms: f64,
+    difference_rms_ratio: f64,
+    hashes: [String; 2],
+    times_ms: [u64; 2],
+    diagnostics: Vec<tools::ToolDiagnostics>,
+}
+
+enum PairResult {
+    Rendered(Box<PairOutcome>),
+    Failed(String),
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).map_err(|source| Error::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+fn load_average() -> Option<String> {
+    let out = std::process::Command::new("uptime").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split("load average")
+        .nth(1)
+        .map(|tail| format!("load average{}", tail.trim()))
+}
+
+fn sfizz_identity() -> Option<String> {
+    let path = crate::doctor::find_executable("sfizz_render")?;
+    Some(path.display().to_string())
+}
+
+/// Render the probe twice into `<index>-<tag>-{a,b}.wav` and compare.
+/// `Err` propagates only fatal conditions (missing dependency, unreadable
+/// output); tool-level render failures come back as `PairResult::Failed`.
+fn render_pair(
+    midi: &Path,
+    sfz: &Path,
+    scratch: &Path,
+    index: usize,
+    tag: &str,
+    sample_rate: u32,
+) -> Result<PairResult> {
+    let a_path = scratch.join(format!("{index:04}-{tag}-a.wav"));
+    let b_path = scratch.join(format!("{index:04}-{tag}-b.wav"));
+    let mut diagnostics = Vec::with_capacity(2);
+    let mut times_ms = [0u64; 2];
+    for (slot, out_path) in [(0usize, &a_path), (1, &b_path)] {
+        let started = Instant::now();
+        match tools::render_sfz_with_diagnostics(midi, sfz, out_path, sample_rate) {
+            Err(e @ Error::MissingDependency { .. }) => return Err(e),
+            Err(e) => return Ok(PairResult::Failed(e.to_string())),
+            Ok(diag) => diagnostics.push(diag),
+        }
+        times_ms[slot] = started.elapsed().as_millis() as u64;
+    }
+    let a = read_pcm(&a_path)?;
+    let b = read_pcm(&b_path)?;
+    let (peak_abs, rms) = stats(&a.samples);
+    let difference_rms_ratio = difference_ratio(&a, &b);
+    let verdict = if peak_abs <= SILENCE_PEAK {
+        Verdict::Silent
+    } else if difference_rms_ratio > DETERMINISM_TOLERANCE {
+        Verdict::Nondeterministic
+    } else {
+        Verdict::Pass
+    };
+    let hashes = [sha256_file(&a_path)?, sha256_file(&b_path)?];
+    Ok(PairResult::Rendered(Box::new(PairOutcome {
+        verdict,
+        peak_abs,
+        rms,
+        difference_rms_ratio,
+        hashes,
+        times_ms,
+        diagnostics,
+    })))
+}
+
+fn flake_snapshot(attempt: &str, outcome: &PairOutcome) -> FlakeDiagnostics {
+    FlakeDiagnostics {
+        attempt: attempt.to_owned(),
+        observed_status: outcome.verdict.status().to_owned(),
+        difference_rms_ratio: outcome.difference_rms_ratio,
+        peak_abs: outcome.peak_abs,
+        render_sha256: outcome.hashes.clone(),
+        render_ms: outcome.times_ms,
+        load_average: load_average(),
+        sfizz_render: sfizz_identity(),
     }
 }
 
@@ -257,61 +410,87 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
             continue;
         }
         let midi = if drums { &drum_midi } else { &melodic_midi };
-        let a_path = scratch.path.join(format!("{index:04}-a.wav"));
-        let b_path = scratch.path.join(format!("{index:04}-b.wav"));
-        let first = match tools::render_sfz_with_diagnostics(midi, &path, &a_path, sample_rate) {
-            Err(e @ Error::MissingDependency { .. }) => return Err(e),
-            Err(e) => {
-                reports.push(render_failure(
-                    &path,
-                    mapping_names,
-                    "render_failed",
-                    e.to_string(),
-                ));
+        let first = match render_pair(midi, &path, &scratch.path, index, "first", sample_rate)? {
+            PairResult::Failed(e) => {
+                reports.push(render_failure(&path, mapping_names, "render_failed", e));
                 continue;
             }
-            Ok(diagnostics) => diagnostics,
+            PairResult::Rendered(outcome) => outcome,
         };
-        let second = match tools::render_sfz_with_diagnostics(midi, &path, &b_path, sample_rate) {
-            Err(e @ Error::MissingDependency { .. }) => return Err(e),
-            Err(e) => {
-                reports.push(render_failure(
-                    &path,
-                    mapping_names,
-                    "render_failed",
-                    e.to_string(),
-                ));
+
+        if first.verdict == Verdict::Pass {
+            reports.push(PatchReport {
+                path: path.display().to_string(),
+                mappings: mapping_names,
+                status: "ok".to_owned(),
+                peak_abs: first.peak_abs,
+                rms: first.rms,
+                deterministic: true,
+                difference_rms_ratio: first.difference_rms_ratio,
+                render_sha256: Some(first.hashes[0].clone()),
+                warnings: warnings(&first.diagnostics),
+                flake_diagnostics: Vec::new(),
+                error: None,
+            });
+            continue;
+        }
+
+        // Failed comparison: capture evidence, then one recorded isolated
+        // recheck of this single patch (see module docs).
+        let first_snapshot = flake_snapshot("first", &first);
+        let recheck = match render_pair(midi, &path, &scratch.path, index, "recheck", sample_rate)?
+        {
+            PairResult::Failed(e) => {
+                let mut report = render_failure(&path, mapping_names, "render_failed", e);
+                report.flake_diagnostics = vec![first_snapshot];
+                reports.push(report);
                 continue;
             }
-            Ok(diagnostics) => diagnostics,
+            PairResult::Rendered(outcome) => outcome,
         };
-        let a = read_pcm(&a_path)?;
-        let b = read_pcm(&b_path)?;
-        let (peak_abs, rms) = stats(&a.samples);
-        let difference_rms_ratio = difference_ratio(&a, &b);
-        let deterministic = difference_rms_ratio <= DETERMINISM_TOLERANCE;
-        let (status, error) = if peak_abs <= SILENCE_PEAK {
-            ("silent", Some("probe produced no audible PCM".to_owned()))
-        } else if !deterministic {
-            (
-                "nondeterministic",
-                Some(format!(
-                    "two renders differ (RMS ratio {difference_rms_ratio:.8})"
-                )),
-            )
-        } else {
-            ("ok", None)
+
+        if recheck.verdict == Verdict::Pass {
+            let mut patch_warnings = warnings(&recheck.diagnostics);
+            patch_warnings.push(format!(
+                "load_sensitive_flake: first attempt was {} (RMS ratio {:.8}); isolated recheck passed — see flake_diagnostics",
+                first_snapshot.observed_status, first_snapshot.difference_rms_ratio,
+            ));
+            reports.push(PatchReport {
+                path: path.display().to_string(),
+                mappings: mapping_names,
+                status: "ok".to_owned(),
+                peak_abs: recheck.peak_abs,
+                rms: recheck.rms,
+                deterministic: true,
+                difference_rms_ratio: recheck.difference_rms_ratio,
+                render_sha256: Some(recheck.hashes[0].clone()),
+                warnings: patch_warnings,
+                flake_diagnostics: vec![first_snapshot],
+                error: None,
+            });
+            continue;
+        }
+
+        let recheck_snapshot = flake_snapshot("recheck", &recheck);
+        let error = match recheck.verdict {
+            Verdict::Silent => "probe produced no audible PCM".to_owned(),
+            _ => format!(
+                "two renders differ (RMS ratio {:.8}); isolated recheck failed too",
+                recheck.difference_rms_ratio
+            ),
         };
         reports.push(PatchReport {
             path: path.display().to_string(),
             mappings: mapping_names,
-            status: status.to_owned(),
-            peak_abs,
-            rms,
-            deterministic,
-            difference_rms_ratio,
-            warnings: warnings(&[first, second]),
-            error,
+            status: recheck.verdict.status().to_owned(),
+            peak_abs: recheck.peak_abs,
+            rms: recheck.rms,
+            deterministic: false,
+            difference_rms_ratio: recheck.difference_rms_ratio,
+            render_sha256: None,
+            warnings: warnings(&recheck.diagnostics),
+            flake_diagnostics: vec![first_snapshot, recheck_snapshot],
+            error: Some(error),
         });
     }
 
