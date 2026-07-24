@@ -504,7 +504,13 @@ fn run(command: &Command, json: bool) -> Result<String> {
                                     .to_owned(),
                         });
                     }
-                    tools::render_sfz(midi, sfz, output, *sample_rate)?;
+                    tools::render_sfz(
+                        midi,
+                        sfz,
+                        output,
+                        *sample_rate,
+                        tools::ToolLimits::generic(),
+                    )?;
                 }
                 tools::Renderer::Fluidsynth | tools::Renderer::Timidity => {
                     if sfz.is_some() {
