@@ -34,16 +34,20 @@ time_signature: "4/4"
 bars: 8
 loop: true
 tracks:
-  - instrument: strings
+  - id: harmony
+    instrument: strings
     pattern: sustain
     intensity: 0.4
-  - instrument: piano
+  - id: motion
+    instrument: piano
     pattern: arpeggio
     intensity: 0.55
-  - instrument: bass
+  - id: foundation
+    instrument: bass
     pattern: bass
     intensity: 0.45
-  - instrument: drums
+  - id: pulse
+    instrument: drums
     pattern: drums
     intensity: 0.3
 ```
@@ -70,10 +74,17 @@ motifs:
     - { degree: 2, beats: 0.5 }
     - { degree: 1, beats: 2 }
 
+tracks:
+  - { id: lead, instrument: flute, pattern: melody, motif: theme, intensity: 0.7 }
+  - { id: harmony, instrument: strings, pattern: sustain, intensity: 0.5 }
+  - { id: motion, instrument: harp, pattern: arpeggio, intensity: 0.5 }
+  - { id: foundation, instrument: bass, pattern: bass, intensity: 0.5 }
+  - { id: pulse, instrument: drums, pattern: drums, intensity: 0.4 }
+
 sections:
   - name: intro               # theme alone, no rhythm section
     bars: 4
-    mute: [3, 4]
+    mute: [foundation, pulse]
     intensity: 0.7
   - name: explore             # full band, seamless loop
     bars: 8
@@ -85,7 +96,7 @@ sections:
     intensity: 1.4
   - name: victory             # short sting with natural decay
     bars: 2
-    mute: [4]
+    mute: [pulse]
 ```
 
 - **Vary state with `tempo`, `mute`, and the `intensity` multiplier — not new material.** The player must always recognize the same place; the shared motif is what carries that identity across intro, exploration, combat, and victory.
@@ -107,11 +118,13 @@ performance:
   dynamics: { start: pp, peak: mf }   # one long arch, returning to silence
 
 tracks:
-  - instrument: violin        # the lone voice
+  - id: lead
+    instrument: violin        # the lone voice
     pattern: melody
     motif: lament
     intensity: 0.65
-  - instrument: harp          # sparse consolation
+  - id: motion
+    instrument: harp          # sparse consolation
     pattern: arpeggio
     intensity: 0.3
 ```
@@ -138,6 +151,8 @@ The scene is also the mix, and it is fully deterministic:
 - **Separate voices with `pan`** — e.g. harp 0.35, strings 0.65 — instead of hoping the renderer sorts it out. `pan`/`reverb` compile to single CCs at tick 0: predictable, diff-able, portable across renderers.
 - **`articulation` never changes the MIDI.** It only selects SFZ samples at render time, so switching `sustain` → `tremolo` is a render decision you can audition freely without invalidating the compiled score.
 - **Use `--stems` when the game engine mixes.** Sample-aligned per-track files let the engine duck, mute, or crossfade layers at runtime — often better than baking several intensity variants.
+- **Give every `id` a role, not a number** (`lead`, `harmony`, `foundation`, `pulse`) — it names the stem file, survives track reordering, and reads clearly in `sections[].mute`/`--solo` years later.
+- **Use `palette` to layer a soloist over a section under `--renderer sfizz --orchestration <file>`.** One `violin` track on a `solo` palette next to another `violin` track left on the default `ensemble` palette resolves each through its own certified renderer profile — no cross-palette fallback, no path in the scene.
 
 ## Style governance with grammar profiles
 

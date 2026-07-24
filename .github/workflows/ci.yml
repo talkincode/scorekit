@@ -29,5 +29,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: Workspace tooling tests
+        run: python3 scripts/workspace_test.py
       - name: Test local toolchain, Agent skill, and sound directory installation
         run: make test-install

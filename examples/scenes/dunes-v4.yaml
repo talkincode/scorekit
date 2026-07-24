@@ -110,6 +110,6 @@ motifs:
     - { degree: 0, beats: 16 }
 
 tracks:
-  - { instrument: cello, pattern: melody, motif: exile_sentence, intensity: 0.88 }
-  - { instrument: flute, pattern: melody, motif: mother_memory, intensity: 0.3 }
-  - { instrument: slow_strings, pattern: sustain, intensity: 0.12 }
+  - { id: exile, instrument: cello, pattern: melody, motif: exile_sentence, intensity: 0.88 }
+  - { id: memory, instrument: flute, pattern: melody, motif: mother_memory, intensity: 0.3 }
+  - { id: horizon, instrument: slow_strings, pattern: sustain, intensity: 0.12 }

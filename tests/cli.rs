@@ -64,8 +64,8 @@ fn sfizz_path_env() -> std::ffi::OsString {
 /// A tiny, self-contained SFZ instrument (one region, one synthetic sine
 /// sample) generated on the fly — no committed binary fixture, no external
 /// sample library needed for the sfizz test suite to run anywhere.
-fn write_sine_sfz(dir: &Path) -> PathBuf {
-    let wav_path = dir.join("sine.wav");
+fn write_tone_sfz_files(dir: &Path, sfz_stem: &str, wav_stem: &str, frequency: f64) -> PathBuf {
+    let wav_path = dir.join(format!("{wav_stem}.wav"));
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: 44100,
@@ -75,14 +75,26 @@ fn write_sine_sfz(dir: &Path) -> PathBuf {
     let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
     for i in 0..4410u32 {
         let t = f64::from(i) / 44100.0;
-        let v = (3000.0 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as i16;
+        let v = (3000.0 * (2.0 * std::f64::consts::PI * frequency * t).sin()) as i16;
         writer.write_sample(v).unwrap();
     }
     writer.finalize().unwrap();
 
-    let sfz_path = dir.join("mini.sfz");
-    fs::write(&sfz_path, "<region>\nsample=sine.wav\nlokey=0\nhikey=127\n").unwrap();
+    let sfz_path = dir.join(format!("{sfz_stem}.sfz"));
+    fs::write(
+        &sfz_path,
+        format!("<region>\nsample={wav_stem}.wav\nlokey=0\nhikey=127\n"),
+    )
+    .unwrap();
     sfz_path
+}
+
+fn write_tone_sfz(dir: &Path, stem: &str, frequency: f64) -> PathBuf {
+    write_tone_sfz_files(dir, stem, stem, frequency)
+}
+
+fn write_sine_sfz(dir: &Path) -> PathBuf {
+    write_tone_sfz_files(dir, "mini", "sine", 440.0)
 }
 
 /// Renderer profile mapping `violin`/`cello` (used by the tiny sfizz test
@@ -98,11 +110,38 @@ fn write_test_profile(dir: &Path) -> PathBuf {
     profile_path
 }
 
+fn write_orchestration_for_profile(dir: &Path, profile: &Path) -> PathBuf {
+    let profile = profile
+        .file_name()
+        .expect("test profile has a file name")
+        .to_string_lossy();
+    let orchestration = dir.join("orchestration.yaml");
+    fs::write(
+        &orchestration,
+        format!(
+            "schema_version: 1\nname: test-orchestration\ndefault_palette: default\npalettes:\n  default: {{ profile: {profile} }}\n"
+        ),
+    )
+    .unwrap();
+    orchestration
+}
+
+fn write_test_orchestration(dir: &Path) -> PathBuf {
+    let profile = write_test_profile(dir);
+    let orchestration = write_orchestration_for_profile(dir, &profile);
+    fs::write(
+        &orchestration,
+        "schema_version: 1\nname: hybrid-test\ndefault_palette: default\npalettes:\n  default: { profile: profile.yaml }\n  solo: { profile: profile.yaml }\n",
+    )
+    .unwrap();
+    orchestration
+}
+
 fn tiny_sfizz_scene(dir: &Path) -> PathBuf {
     let scene = dir.join("duo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: cello\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - id: violin\n    instrument: violin\n    pattern: sustain\n  - id: cello\n    instrument: cello\n    pattern: sustain\n",
     )
     .unwrap();
     scene
@@ -121,7 +160,7 @@ fn make_tiny_midi(dir: &Path) -> PathBuf {
         .arg("-o")
         .arg(&mid)
         .arg("--solo")
-        .arg("0")
+        .arg("violin")
         .assert()
         .success();
     mid
@@ -267,7 +306,7 @@ fn skill_narrative_worked_example_validates() {
 fn validate_rejects_unknown_field_with_location() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("bad.yaml");
-    fs::write(&scene, "tempo: 100\nbars: 4\nbogus_field: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n").unwrap();
+    fs::write(&scene, "tempo: 100\nbars: 4\nbogus_field: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n").unwrap();
     let out = bin().arg("validate").arg(&scene).assert().code(2);
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
     assert!(stderr.contains("bogus_field"), "stderr: {stderr}");
@@ -280,7 +319,7 @@ fn validate_rejects_semantic_error_with_field_path_json() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 999\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 999\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = bin()
@@ -301,12 +340,56 @@ fn validate_rejects_drums_pattern_on_melodic_instrument() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 100\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: drums\n",
+        "tempo: 100\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: drums\n",
     )
     .unwrap();
     let out = bin().arg("validate").arg(&scene).assert().code(2);
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
     assert!(stderr.contains("tracks[0].pattern"), "stderr: {stderr}");
+}
+
+#[test]
+fn validate_requires_unique_stable_track_and_palette_keys() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let missing = dir.path().join("missing-id.yaml");
+    fs::write(
+        &missing,
+        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin().arg("validate").arg(&missing).assert().code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr);
+    assert!(stderr.contains("missing field `id`"), "stderr: {stderr}");
+
+    for (name, tracks, field) in [
+        (
+            "duplicate-id",
+            "  - { id: lead, instrument: piano, pattern: sustain }\n  - { id: lead, instrument: cello, pattern: sustain }\n",
+            "tracks[1].id",
+        ),
+        (
+            "invalid-id",
+            "  - { id: Lead/Violin, instrument: violin, pattern: sustain }\n",
+            "tracks[0].id",
+        ),
+        (
+            "invalid-palette",
+            "  - { id: lead, palette: ../solo, instrument: violin, pattern: sustain }\n",
+            "tracks[0].palette",
+        ),
+    ] {
+        let scene = dir.path().join(format!("{name}.yaml"));
+        fs::write(&scene, format!("tempo: 100\nbars: 2\ntracks:\n{tracks}")).unwrap();
+        let out = bin()
+            .args(["--json", "validate"])
+            .arg(&scene)
+            .assert()
+            .code(2);
+        let error: serde_json::Value =
+            serde_json::from_slice(&out.get_output().stderr).expect("JSON validation error");
+        assert_eq!(error["field"], field, "error: {error}");
+    }
 }
 
 #[test]
@@ -366,6 +449,12 @@ fn schema_emits_json_schema() {
         v["$defs"]["Track"]["properties"]["intensity"]["maximum"],
         1.0
     );
+    let required = v["$defs"]["Track"]["required"].as_array().unwrap();
+    assert!(required.iter().any(|value| value == "id"));
+    assert_eq!(
+        v["$defs"]["Track"]["properties"]["id"]["pattern"],
+        "^[a-z][a-z0-9_-]{0,63}$"
+    );
 
     let out = bin()
         .args(["schema", "--texture-profile"])
@@ -377,12 +466,73 @@ fn schema_emits_json_schema() {
 }
 
 #[test]
+fn orchestration_schema_and_check_load_relative_leaf_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let orchestration = write_test_orchestration(dir.path());
+
+    let out = bin().args(["schema", "--orchestration"]).assert().success();
+    let schema: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("orchestration schema is JSON");
+    assert_eq!(
+        schema["properties"]["schema_version"]["const"],
+        serde_json::json!(1)
+    );
+    assert!(schema["properties"]["default_palette"].is_object());
+    assert!(schema["properties"]["palettes"].is_object());
+
+    let out = bin()
+        .args(["orchestration", "check"])
+        .arg(&orchestration)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
+    assert!(stdout.contains("hybrid-test"), "stdout: {stdout}");
+    assert!(stdout.contains("2 palette(s)"), "stdout: {stdout}");
+    assert!(stdout.contains("default `default`"), "stdout: {stdout}");
+
+    let out = bin()
+        .args(["--json", "orchestration", "check"])
+        .arg(&orchestration)
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("check report is JSON");
+    assert_eq!(report["name"], "hybrid-test");
+    assert_eq!(report["default_palette"], "default");
+    assert_eq!(report["palettes"].as_array().unwrap().len(), 2);
+    assert_eq!(report["palettes"][0]["profile_path"], "profile.yaml");
+}
+
+#[test]
+fn orchestration_check_contextualizes_missing_leaf_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let orchestration = dir.path().join("orchestration.yaml");
+    fs::write(
+        &orchestration,
+        "schema_version: 1\nname: broken\ndefault_palette: default\npalettes:\n  default: { profile: missing.yaml }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "orchestration", "check"])
+        .arg(&orchestration)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("JSON validation error");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "palettes.default.profile");
+    assert!(error["message"].as_str().unwrap().contains("missing.yaml"));
+    assert_dir_contains_exactly(dir.path(), &["orchestration.yaml"]);
+}
+
+#[test]
 fn story_is_informational_and_never_affects_midi_bytes() {
     // `story` is an annotation for downstream agent review; the protocol
     // guarantees it never changes compiled output. Same scene with and
     // without a story must validate and produce byte-identical MIDI.
     let dir = tempfile::tempdir().unwrap();
-    let base = "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n";
+    let base = "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n";
     let plain = dir.path().join("plain.yaml");
     let storied = dir.path().join("storied.yaml");
     fs::write(&plain, base).unwrap();
@@ -416,9 +566,49 @@ fn story_is_informational_and_never_affects_midi_bytes() {
 }
 
 #[test]
+fn track_identity_and_palette_do_not_change_midi_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let intimate = dir.path().join("intimate.yaml");
+    let ensemble = dir.path().join("ensemble.yaml");
+    fs::write(
+        &intimate,
+        "tempo: 100\nbars: 2\ntracks:\n  - id: harmony\n    palette: intimate\n    instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+    fs::write(
+        &ensemble,
+        "tempo: 100\nbars: 2\ntracks:\n  - id: renamed_harmony\n    palette: ensemble\n    instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    bin()
+        .arg("midi")
+        .arg(&intimate)
+        .arg("-o")
+        .arg(&a)
+        .assert()
+        .success();
+    bin()
+        .arg("midi")
+        .arg(&ensemble)
+        .arg("-o")
+        .arg(&b)
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(a).unwrap(),
+        fs::read(b).unwrap(),
+        "track identity and palette are routing metadata, not MIDI instructions"
+    );
+}
+
+#[test]
 fn textures_do_not_change_midi_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    let base = "tempo: 120\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n";
+    let base = "tempo: 120\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n";
     let plain = dir.path().join("plain.yaml");
     let textured = dir.path().join("textured.yaml");
     fs::write(&plain, base).unwrap();
@@ -454,7 +644,7 @@ fn validate_rejects_ambiguous_texture_placement() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    start_beat: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    start_beat: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = bin()
@@ -473,7 +663,7 @@ fn validate_rejects_texture_trigger_outside_shortest_section() {
     let scene = dir.path().join("suite.yaml");
     fs::write(
         &scene,
-        "tempo: 60\nbars: 2\ntextures:\n  - source: bell\n    mode: one_shot\n    at: [5]\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - name: short\n    bars: 1\n    loop: true\n  - name: long\n    bars: 2\n    loop: false\n",
+        "tempo: 60\nbars: 2\ntextures:\n  - source: bell\n    mode: one_shot\n    at: [5]\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\nsections:\n  - name: short\n    bars: 1\n    loop: true\n  - name: long\n    bars: 2\n    loop: false\n",
     )
     .unwrap();
     let out = bin()
@@ -499,7 +689,7 @@ fn validate_rejects_non_string_story_with_location() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "story: { mood: 0.9 }\ntempo: 100\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "story: { mood: 0.9 }\ntempo: 100\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = bin().arg("validate").arg(&scene).assert().code(2);
@@ -557,7 +747,7 @@ fn midi_invalid_scene_leaves_no_partial_file() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 999\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 999\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = dir.path().join("out.mid");
@@ -638,7 +828,7 @@ fn build_uses_musescore_general_from_default_sound_library() {
     let scene = dir.path().join("solo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let wav = dir.path().join("solo.wav");
@@ -663,7 +853,7 @@ fn batch_uses_musescore_general_from_default_sound_library() {
     let scene = dir.path().join("solo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out_dir = dir.path().join("out");
@@ -690,7 +880,7 @@ fn batch_missing_default_soundfont_fails_before_writing_anything() {
     let scene = dir.path().join("solo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out_dir = dir.path().join("out");
@@ -959,7 +1149,7 @@ fn build_nonloop_wav_has_exact_padded_length() {
     // plus the default 4s decay tail = 352800 frames total.
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let wav = dir.path().join("sting.wav");
@@ -984,7 +1174,7 @@ fn build_rejects_nonfinite_tail_as_structured_input_error() {
     let scene = dir.path().join("sting.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\nloop: false\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\nloop: false\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let output = dir.path().join("sting.wav");
@@ -1012,7 +1202,7 @@ fn numeric_cli_options_reject_out_of_range_values_before_writing() {
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let midi = dir.path().join("missing.mid");
@@ -1097,20 +1287,20 @@ fn build_stems_are_aligned_and_sum_to_mix() {
     assert_dir_contains_exactly(
         &stems_dir,
         &[
-            "01-strings.wav",
-            "02-piano.wav",
-            "03-bass.wav",
-            "04-drums.wav",
+            "01-harmony.wav",
+            "02-motion.wav",
+            "03-foundation.wav",
+            "04-pulse.wav",
         ],
     );
     let l = forest_loop_samples() as usize;
     let (spec, mix) = read_frames(&wav);
     let ch = spec.channels as usize;
     let stems: Vec<Vec<i16>> = [
-        "01-strings.wav",
-        "02-piano.wav",
-        "03-bass.wav",
-        "04-drums.wav",
+        "01-harmony.wav",
+        "02-motion.wav",
+        "03-foundation.wav",
+        "04-pulse.wav",
     ]
     .iter()
     .map(|n| {
@@ -1139,7 +1329,7 @@ fn build_stems_are_aligned_and_sum_to_mix() {
     let meta: serde_json::Value =
         serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
     assert_eq!(meta["stems"].as_array().unwrap().len(), 4);
-    assert_eq!(meta["stems"][0], "forest.stems/01-strings.wav");
+    assert_eq!(meta["stems"][0], "forest.stems/01-harmony.wav");
 }
 
 #[test]
@@ -1158,7 +1348,7 @@ fn build_textures_normalizes_places_mixes_and_emits_stems() {
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    gain: 0.25\n  - source: birds\n    mode: one_shot\n    at: [1, 5]\n    gain: 0.5\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: true\ntextures:\n  - source: river\n    mode: loop\n    gain: 0.25\n  - source: birds\n    mode: one_shot\n    at: [1, 5]\n    gain: 0.5\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let output = dir.path().join("scene.wav");
@@ -1239,7 +1429,7 @@ fn build_missing_texture_source_leaves_no_partial_artifact() {
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\ntextures:\n  - { source: river, mode: loop }\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntextures:\n  - { source: river, mode: loop }\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let profile = dir.path().join("textures.yaml");
@@ -1277,7 +1467,7 @@ fn suite_failure_rolls_back_all_previously_built_sections() {
     let scene = dir.path().join("suite.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\ntextures:\n  - source: long_bell\n    mode: one_shot\n    at: [0]\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - name: long\n    bars: 2\n    loop: false\n  - name: short\n    bars: 1\n    loop: true\n",
+        "tempo: 120\nbars: 2\ntextures:\n  - source: long_bell\n    mode: one_shot\n    at: [0]\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\nsections:\n  - name: long\n    bars: 2\n    loop: false\n  - name: short\n    bars: 1\n    loop: true\n",
     )
     .unwrap();
     let out = bin()
@@ -1362,10 +1552,10 @@ fn build_ogg_stems_leave_no_intermediates() {
     assert_dir_contains_exactly(
         &dir.path().join("forest.stems"),
         &[
-            "01-strings.ogg",
-            "02-piano.ogg",
-            "03-bass.ogg",
-            "04-drums.ogg",
+            "01-harmony.ogg",
+            "02-motion.ogg",
+            "03-foundation.ogg",
+            "04-pulse.ogg",
         ],
     );
 }
@@ -1376,7 +1566,7 @@ fn build_corrupt_soundfont_leaves_no_partial_output_or_stems() {
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 1\nloop: true\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\nloop: true\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let fake = dir.path().join("fake.sf2");
@@ -1401,7 +1591,7 @@ fn build_corrupt_soundfont_leaves_no_partial_output_or_stems() {
 
 /// Two-section suite with a shared motif; small bars for fast rendering.
 fn suite_yaml() -> &'static str {
-    "tempo: 120\nbars: 2\nkey: C_major\nmotifs:\n  theme:\n    - { degree: 1, beats: 1 }\n    - { degree: 5, beats: 1 }\n    - { degree: 3, beats: 2 }\ntracks:\n  - instrument: flute\n    pattern: melody\n    motif: theme\n  - instrument: strings\n    pattern: sustain\nsections:\n  - name: explore\n    bars: 2\n    loop: true\n  - name: sting\n    bars: 1\n    tempo: 140\n    mute: [0]\n"
+    "tempo: 120\nbars: 2\nkey: C_major\nmotifs:\n  theme:\n    - { degree: 1, beats: 1 }\n    - { degree: 5, beats: 1 }\n    - { degree: 3, beats: 2 }\ntracks:\n  - id: flute\n    instrument: flute\n    pattern: melody\n    motif: theme\n  - id: strings\n    instrument: strings\n    pattern: sustain\nsections:\n  - name: explore\n    bars: 2\n    loop: true\n  - name: sting\n    bars: 1\n    tempo: 140\n    mute: [flute]\n"
 }
 
 #[test]
@@ -1577,6 +1767,56 @@ fn midi_section_selector_compiles_that_section_deterministically() {
 }
 
 #[test]
+fn midi_section_mute_and_solo_address_tracks_by_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let suite = dir.path().join("suite.yaml");
+    let expected = dir.path().join("expected.yaml");
+    fs::write(
+        &suite,
+        "tempo: 120\nbars: 2\ntracks:\n  - { id: lead, instrument: piano, pattern: sustain }\n  - { id: pulse, instrument: bass, pattern: bass }\nsections:\n  - { name: pulse_only, bars: 2, mute: [lead] }\n",
+    )
+    .unwrap();
+    fs::write(
+        &expected,
+        "tempo: 120\nbars: 2\ntracks:\n  - { id: pulse, instrument: bass, pattern: bass }\n",
+    )
+    .unwrap();
+
+    let selected = dir.path().join("selected.mid");
+    let standalone = dir.path().join("standalone.mid");
+    bin()
+        .arg("midi")
+        .arg(&suite)
+        .arg("-o")
+        .arg(&selected)
+        .args(["--section", "pulse_only", "--solo", "pulse"])
+        .assert()
+        .success();
+    bin()
+        .arg("midi")
+        .arg(&expected)
+        .arg("-o")
+        .arg(&standalone)
+        .args(["--solo", "pulse"])
+        .assert()
+        .success();
+    assert_eq!(fs::read(&selected).unwrap(), fs::read(&standalone).unwrap());
+
+    let missing = dir.path().join("missing.mid");
+    let out = bin()
+        .arg("midi")
+        .arg(&suite)
+        .arg("-o")
+        .arg(&missing)
+        .args(["--solo", "missing"])
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr);
+    assert!(stderr.contains("--solo"), "stderr: {stderr}");
+    assert!(!missing.exists());
+}
+
+#[test]
 fn midi_unknown_section_is_input_error() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("suite.yaml");
@@ -1600,7 +1840,7 @@ fn validate_rejects_unknown_motif_reference() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 100\nbars: 2\ntracks:\n  - instrument: flute\n    pattern: melody\n    motif: nonexistent\n",
+        "tempo: 100\nbars: 2\ntracks:\n  - id: flute\n    instrument: flute\n    pattern: melody\n    motif: nonexistent\n",
     )
     .unwrap();
     let out = bin()
@@ -1619,7 +1859,7 @@ fn validate_rejects_duplicate_section_names_and_mute_all() {
     let dup = dir.path().join("dup.yaml");
     fs::write(
         &dup,
-        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1 }\n  - { name: a, bars: 2 }\n",
+        "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1 }\n  - { name: a, bars: 2 }\n",
     )
     .unwrap();
     let out = bin().arg("validate").arg(&dup).assert().code(2);
@@ -1629,7 +1869,7 @@ fn validate_rejects_duplicate_section_names_and_mute_all() {
     let mute = dir.path().join("mute.yaml");
     fs::write(
         &mute,
-        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1, mute: [0] }\n",
+        "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\nsections:\n  - { name: a, bars: 1, mute: [piano] }\n",
     )
     .unwrap();
     let out = bin().arg("validate").arg(&mute).assert().code(2);
@@ -1727,13 +1967,14 @@ fn build_sfizz_happy_path_produces_stems_and_sums_to_mix() {
     let dir = tempfile::tempdir().unwrap();
     let scene = tiny_sfizz_scene(dir.path());
     let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let wav = dir.path().join("duo.wav");
     bin()
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(&wav)
         .arg("--stems")
@@ -1772,7 +2013,128 @@ fn build_sfizz_happy_path_produces_stems_and_sums_to_mix() {
 }
 
 #[test]
-fn build_sfizz_missing_profile_is_input_error() {
+fn build_sfizz_routes_same_instrument_to_distinct_palette_patches() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tone_sfz(dir.path(), "solo", 440.0);
+    write_tone_sfz(dir.path(), "ensemble", 660.0);
+    fs::write(
+        dir.path().join("solo-profile.yaml"),
+        "name: solo-profile\ninstruments:\n  violin:\n    sustain: solo.sfz\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("ensemble-profile.yaml"),
+        "name: ensemble-profile\ninstruments:\n  violin:\n    sustain: ensemble.sfz\n",
+    )
+    .unwrap();
+    let orchestration = dir.path().join("orchestration.yaml");
+    fs::write(
+        &orchestration,
+        "schema_version: 1\nname: hybrid\ndefault_palette: ensemble\npalettes:\n  ensemble: { profile: ensemble-profile.yaml }\n  solo: { profile: solo-profile.yaml }\n",
+    )
+    .unwrap();
+    let scene = dir.path().join("hybrid.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: lead, palette: solo, instrument: violin, pattern: sustain }\n  - { id: section, instrument: violin, pattern: sustain }\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("hybrid.wav");
+
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(&wav)
+        .arg("--stems")
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+
+    let stems = dir.path().join("hybrid.stems");
+    assert_dir_contains_exactly(&stems, &["01-lead.wav", "02-section.wav"]);
+    let (_, lead) = read_frames(&stems.join("01-lead.wav"));
+    let (_, section) = read_frames(&stems.join("02-section.wav"));
+    assert_ne!(
+        lead, section,
+        "the two palettes must select different patches"
+    );
+    let (_, mix) = read_frames(&wav);
+    assert_eq!(lead.len(), mix.len());
+    assert_eq!(section.len(), mix.len());
+    let (mut diff2, mut ref2) = (0.0, 0.0);
+    for ((lead, section), mix) in lead.iter().zip(&section).zip(&mix) {
+        let summed = f64::from(*lead) + f64::from(*section);
+        let mix = f64::from(*mix);
+        diff2 += (summed - mix) * (summed - mix);
+        ref2 += mix * mix;
+    }
+    let ratio = (diff2 / ref2.max(1.0)).sqrt();
+    assert!(
+        ratio < 0.02,
+        "multi-profile stems do not sum to mix: RMS ratio {ratio:.4}"
+    );
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("hybrid.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["orchestration"]["name"], "hybrid");
+    assert_eq!(meta["tracks"][0]["id"], "lead");
+    assert_eq!(meta["tracks"][0]["palette"], "solo");
+    assert_eq!(meta["tracks"][1]["id"], "section");
+    assert!(meta["tracks"][1]["palette"].is_null());
+    assert_eq!(
+        meta["instrument_resolution"]["tracks"][0]["profile"],
+        "solo-profile"
+    );
+    assert_eq!(
+        meta["instrument_resolution"]["tracks"][1]["profile"],
+        "ensemble-profile"
+    );
+}
+
+#[test]
+fn build_sfizz_unknown_palette_fails_before_writing_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+    let scene = dir.path().join("bad.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: lead, palette: unavailable, instrument: violin, pattern: sustain }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(dir.path().join("bad.wav"))
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("JSON validation error");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "tracks[0].palette");
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "bad.yaml",
+            "mini.sfz",
+            "sine.wav",
+            "profile.yaml",
+            "orchestration.yaml",
+        ],
+    );
+}
+
+#[test]
+fn build_sfizz_missing_orchestration_is_input_error() {
     let dir = tempfile::tempdir().unwrap();
     let scene = tiny_sfizz_scene(dir.path());
     bin()
@@ -1792,12 +2154,13 @@ fn build_sfizz_rejects_soundfont_flag() {
     let dir = tempfile::tempdir().unwrap();
     let scene = tiny_sfizz_scene(dir.path());
     let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     bin()
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("--soundfont")
         .arg(sf2())
         .arg("-o")
@@ -1816,7 +2179,7 @@ fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
     let scene = dir.path().join("duo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: trumpet\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - id: violin\n    instrument: violin\n    pattern: sustain\n  - id: trumpet\n    instrument: trumpet\n    pattern: sustain\n",
     )
     .unwrap();
     write_sine_sfz(dir.path());
@@ -1826,13 +2189,14 @@ fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let out = bin()
         .arg("--json")
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(dir.path().join("duo.wav"))
         .env("PATH", sfizz_path_env())
@@ -1844,7 +2208,13 @@ fn build_sfizz_unmapped_instrument_leaves_no_partial_output() {
     assert_eq!(error["report"]["missing_instruments"][0], "trumpet");
     assert_dir_contains_exactly(
         dir.path(),
-        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+        &[
+            "duo.yaml",
+            "mini.sfz",
+            "sine.wav",
+            "profile.yaml",
+            "orchestration.yaml",
+        ],
     );
 }
 
@@ -1853,12 +2223,13 @@ fn build_sfizz_missing_binary_is_dependency_error() {
     let dir = tempfile::tempdir().unwrap();
     let scene = tiny_sfizz_scene(dir.path());
     let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     bin()
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(dir.path().join("duo.wav"))
         .env("PATH", "")
@@ -1866,7 +2237,13 @@ fn build_sfizz_missing_binary_is_dependency_error() {
         .code(3);
     assert_dir_contains_exactly(
         dir.path(),
-        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+        &[
+            "duo.yaml",
+            "mini.sfz",
+            "sine.wav",
+            "profile.yaml",
+            "orchestration.yaml",
+        ],
     );
 }
 
@@ -1883,18 +2260,22 @@ fn build_sfizz_corrupt_sfz_fails_without_partial_output() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n  cello:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     bin()
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(dir.path().join("duo.wav"))
         .env("PATH", sfizz_path_env())
         .assert()
         .code(4);
-    assert_dir_contains_exactly(dir.path(), &["duo.yaml", "mini.sfz", "profile.yaml"]);
+    assert_dir_contains_exactly(
+        dir.path(),
+        &["duo.yaml", "mini.sfz", "profile.yaml", "orchestration.yaml"],
+    );
 }
 
 // ---- Instrument resolution & fallback (M12) ------------------------------
@@ -1913,13 +2294,14 @@ fn build_sfizz_same_family_fallback_substitutes_and_reports() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let wav = dir.path().join("duo.wav");
     let out = bin()
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(&wav)
         .env("PATH", sfizz_path_env())
@@ -1967,13 +2349,14 @@ fn build_sfizz_strict_mode_rejects_fallback_without_artifacts() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let out = bin()
         .arg("--json")
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .args(["--fallback-mode", "strict"])
         .arg("-o")
         .arg(dir.path().join("duo.wav"))
@@ -1990,7 +2373,13 @@ fn build_sfizz_strict_mode_rejects_fallback_without_artifacts() {
     );
     assert_dir_contains_exactly(
         dir.path(),
-        &["duo.yaml", "mini.sfz", "sine.wav", "profile.yaml"],
+        &[
+            "duo.yaml",
+            "mini.sfz",
+            "sine.wav",
+            "profile.yaml",
+            "orchestration.yaml",
+        ],
     );
 }
 
@@ -2002,7 +2391,7 @@ fn build_sfizz_flexible_config_reaches_synth_fallback() {
     let scene = dir.path().join("solo.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - instrument: horn\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\nloop: false\ntracks:\n  - id: horn\n    instrument: horn\n    pattern: sustain\n",
     )
     .unwrap();
     write_sine_sfz(dir.path());
@@ -2012,6 +2401,7 @@ fn build_sfizz_flexible_config_reaches_synth_fallback() {
         "name: test-profile\ninstruments:\n  warm_pad:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let resolver = dir.path().join("resolver.yaml");
     fs::write(&resolver, "default_mode: flexible\n").unwrap();
     // Conservative default: no synth stand-in, the build fails.
@@ -2019,8 +2409,8 @@ fn build_sfizz_flexible_config_reaches_synth_fallback() {
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("-o")
         .arg(dir.path().join("solo.wav"))
         .env("PATH", sfizz_path_env())
@@ -2031,8 +2421,8 @@ fn build_sfizz_flexible_config_reaches_synth_fallback() {
         .arg("build")
         .arg(&scene)
         .args(["--renderer", "sfizz"])
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .arg("--resolver")
         .arg(&resolver)
         .arg("-o")
@@ -2057,7 +2447,7 @@ fn inspect_instruments_reports_statuses_and_is_deterministic() {
     let scene = dir.path().join("mixed.yaml");
     fs::write(
         &scene,
-        "tempo: 120\nbars: 2\ntracks:\n  - instrument: violin\n    pattern: sustain\n  - instrument: fiddle\n    pattern: sustain\n  - instrument: viola\n    pattern: sustain\n  - instrument: trumpet\n    pattern: sustain\n",
+        "tempo: 120\nbars: 2\ntracks:\n  - id: violin\n    instrument: violin\n    pattern: sustain\n  - id: fiddle\n    instrument: fiddle\n    pattern: sustain\n  - id: viola\n    instrument: viola\n    pattern: sustain\n  - id: trumpet\n    instrument: trumpet\n    pattern: sustain\n",
     )
     .unwrap();
     write_sine_sfz(dir.path());
@@ -2067,13 +2457,14 @@ fn inspect_instruments_reports_statuses_and_is_deterministic() {
         "name: test-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n  cello:\n    sustain: mini.sfz\n",
     )
     .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let run = || {
         let out = bin()
             .arg("--json")
             .arg("inspect-instruments")
             .arg(&scene)
-            .arg("--profile")
-            .arg(&profile)
+            .arg("--orchestration")
+            .arg(&orchestration)
             .assert()
             .code(2);
         out.get_output().stderr.clone()
@@ -2103,12 +2494,13 @@ fn inspect_instruments_all_resolved_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     let scene = tiny_sfizz_scene(dir.path());
     let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
     let out = bin()
         .arg("--json")
         .arg("inspect-instruments")
         .arg(&scene)
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .assert()
         .success();
     let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
@@ -2117,15 +2509,134 @@ fn inspect_instruments_all_resolved_exits_zero() {
     let human = bin()
         .arg("inspect-instruments")
         .arg(&scene)
-        .arg("--profile")
-        .arg(&profile)
+        .arg("--orchestration")
+        .arg(&orchestration)
         .assert()
         .success();
     let text = String::from_utf8_lossy(&human.get_output().stdout).into_owned();
     assert!(
-        text.contains("tracks[0]: violin -> violin (exact") && text.contains("summary: 2 exact"),
+        text.contains("tracks[violin]: violin -> violin (exact")
+            && text.contains("summary: 2 exact"),
         "human report: {text}"
     );
+}
+
+#[test]
+fn inspect_instruments_reports_per_track_palette_patch_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mini = write_sine_sfz(dir.path());
+    fs::copy(&mini, dir.path().join("ensemble.sfz")).unwrap();
+    fs::write(
+        dir.path().join("solo.yaml"),
+        "name: solo-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("ensemble.yaml"),
+        "name: ensemble-profile\ninstruments:\n  violin:\n    sustain: ensemble.sfz\n",
+    )
+    .unwrap();
+    let orchestration = dir.path().join("orchestration.yaml");
+    fs::write(
+        &orchestration,
+        "schema_version: 1\nname: hybrid\ndefault_palette: ensemble\npalettes:\n  ensemble: { profile: ensemble.yaml }\n  solo: { profile: solo.yaml }\n",
+    )
+    .unwrap();
+    let scene = dir.path().join("layered.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\ntracks:\n  - { id: lead, palette: solo, instrument: violin, pattern: sustain }\n  - { id: section, palette: ensemble, instrument: violin, pattern: sustain }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "inspect-instruments"])
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("JSON inspect report");
+    assert_eq!(report["summary"]["exact"], 2);
+    assert_eq!(report["tracks"][0]["track_id"], "lead");
+    assert_eq!(report["tracks"][0]["palette"], "solo");
+    assert_eq!(report["tracks"][0]["profile"], "solo-profile");
+    assert_eq!(report["tracks"][0]["profile_path"], "solo.yaml");
+    assert!(
+        report["tracks"][0]["sfz"]
+            .as_str()
+            .unwrap()
+            .ends_with("mini.sfz")
+    );
+    assert_eq!(report["tracks"][1]["track_id"], "section");
+    assert_eq!(report["tracks"][1]["palette"], "ensemble");
+    assert_eq!(report["tracks"][1]["profile"], "ensemble-profile");
+    assert!(
+        report["tracks"][1]["sfz"]
+            .as_str()
+            .unwrap()
+            .ends_with("ensemble.sfz")
+    );
+
+    let out = bin()
+        .arg("inspect-instruments")
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .success();
+    let human = String::from_utf8_lossy(&out.get_output().stdout);
+    assert!(human.contains("tracks[lead]"), "report: {human}");
+    assert!(human.contains("palette=solo"), "report: {human}");
+    assert!(human.contains("profile=solo-profile"), "report: {human}");
+    assert!(human.contains("mini.sfz"), "report: {human}");
+}
+
+#[test]
+fn inspect_instruments_never_falls_back_across_palettes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_sine_sfz(dir.path());
+    fs::write(
+        dir.path().join("solo.yaml"),
+        "name: solo-profile\ninstruments:\n  violin:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("ensemble.yaml"),
+        "name: ensemble-profile\ninstruments:\n  cello:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let orchestration = dir.path().join("orchestration.yaml");
+    fs::write(
+        &orchestration,
+        "schema_version: 1\nname: isolated\ndefault_palette: ensemble\npalettes:\n  ensemble: { profile: ensemble.yaml }\n  solo: { profile: solo.yaml }\n",
+    )
+    .unwrap();
+    let scene = dir.path().join("isolated.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\ntracks:\n  - { id: low_solo, palette: solo, instrument: cello, pattern: sustain }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "inspect-instruments"])
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .args(["--fallback-mode", "strict"])
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("JSON resolution error");
+    let track = &error["report"]["tracks"][0];
+    assert_eq!(track["track_id"], "low_solo");
+    assert_eq!(track["status"], "rejected");
+    assert_eq!(track["best_candidate"]["instrument"], "violin");
+    assert_eq!(track["palette"], "solo");
+    assert_eq!(track["profile"], "solo-profile");
+    assert!(track["resolved"].is_null());
 }
 
 /// Alias spellings are pure surface syntax: `french_horn` and `horn` scenes
@@ -2138,7 +2649,7 @@ fn alias_and_canonical_scene_produce_identical_midi() {
         fs::write(
             &p,
             format!(
-                "tempo: 110\nbars: 2\ntracks:\n  - instrument: {instrument}\n    pattern: sustain\n"
+                "tempo: 110\nbars: 2\ntracks:\n  - id: track\n    instrument: {instrument}\n    pattern: sustain\n"
             ),
         )
         .unwrap();
@@ -2632,13 +3143,13 @@ fn diff_reports_semantic_changes_and_ignores_formatting() {
     let b = dir.path().join("b.yaml");
     fs::write(
         &a,
-        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     // Same music, different formatting/key order → empty diff.
     fs::write(
         &b,
-        "bars: 2\ntempo: 100\ntracks:\n  - {instrument: piano, pattern: sustain}\n",
+        "bars: 2\ntempo: 100\ntracks:\n  - {id: piano, instrument: piano, pattern: sustain}\n",
     )
     .unwrap();
     let out = bin().arg("diff").arg(&a).arg(&b).assert().success();
@@ -2647,7 +3158,7 @@ fn diff_reports_semantic_changes_and_ignores_formatting() {
     let c = dir.path().join("c.yaml");
     fs::write(
         &c,
-        "tempo: 120\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    intensity: 0.9\n",
+        "tempo: 120\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n    intensity: 0.9\n",
     )
     .unwrap();
     let out = bin().arg("diff").arg(&a).arg(&c).assert().success();
@@ -2679,7 +3190,7 @@ fn diff_invalid_scene_is_input_error() {
     let bad = dir.path().join("bad.yaml");
     fs::write(
         &a,
-        "tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     fs::write(&bad, "tempo: 9999\nbars: 2\ntracks: []\n").unwrap();
@@ -2695,12 +3206,12 @@ fn batch_builds_all_scenes_and_writes_report() {
     let s2 = dir.path().join("two.yaml");
     fs::write(
         &s1,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     fs::write(
         &s2,
-        "tempo: 140\nbars: 1\nloop: true\ntracks:\n  - instrument: strings\n    pattern: sustain\n",
+        "tempo: 140\nbars: 1\nloop: true\ntracks:\n  - id: strings\n    instrument: strings\n    pattern: sustain\n",
     )
     .unwrap();
     let out_dir = dir.path().join("out");
@@ -2738,13 +3249,47 @@ fn batch_builds_all_scenes_and_writes_report() {
 }
 
 #[test]
+fn batch_sfizz_forwards_orchestration_to_each_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let profile = write_test_profile(dir.path());
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+    let out_dir = dir.path().join("out");
+
+    bin()
+        .arg("batch")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .args(["--format", "wav"])
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("duo.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["orchestration"]["name"], "test-orchestration");
+    assert_eq!(
+        meta["instrument_resolution"]["tracks"][0]["profile"],
+        "test-profile"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["succeeded"], 1);
+    assert_eq!(report["failed"], 0);
+}
+
+#[test]
 fn batch_partial_failure_reports_and_exits_nonzero() {
     let dir = tempfile::tempdir().unwrap();
     let good = dir.path().join("good.yaml");
     let bad = dir.path().join("bad.yaml");
     fs::write(
         &good,
-        "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     fs::write(&bad, "tempo: 9999\nbars: 2\ntracks: []\n").unwrap();
@@ -2783,7 +3328,7 @@ fn batch_duplicate_scene_stems_is_input_error() {
     for p in [&a, &b] {
         fs::write(
             p,
-            "tempo: 120\nbars: 1\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+            "tempo: 120\nbars: 1\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
         )
         .unwrap();
     }
@@ -2805,7 +3350,7 @@ fn batch_duplicate_scene_stems_is_input_error() {
 
 fn perf_yaml(seed: u64) -> String {
     format!(
-        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nharmony: [i, iv, VI, v]\nperformance:\n  humanize: {{ timing_ms: 12, velocity: 8, seed: {seed} }}\n  swing: 0.12\n  legato: true\n  dynamics: {{ start: p, peak: f }}\ntracks:\n  - {{ instrument: piano, pattern: arpeggio, intensity: 0.6 }}\n  - {{ instrument: bass, pattern: bass, intensity: 0.5 }}\n  - {{ instrument: drums, pattern: drums, intensity: 0.5 }}\n"
+        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nharmony: [i, iv, VI, v]\nperformance:\n  humanize: {{ timing_ms: 12, velocity: 8, seed: {seed} }}\n  swing: 0.12\n  legato: true\n  dynamics: {{ start: p, peak: f }}\ntracks:\n  - {{ id: piano, instrument: piano, pattern: arpeggio, intensity: 0.6 }}\n  - {{ id: bass, instrument: bass, pattern: bass, intensity: 0.5 }}\n  - {{ id: drums, instrument: drums, pattern: drums, intensity: 0.5 }}\n"
     )
 }
 
@@ -2877,8 +3422,7 @@ fn harmony_changes_notes_at_same_length() {
     let dir = tempfile::tempdir().unwrap();
     let plain = dir.path().join("plain.yaml");
     let harm = dir.path().join("harm.yaml");
-    let base =
-        "tempo: 92\nkey: D_minor\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: arpeggio\n";
+    let base = "tempo: 92\nkey: D_minor\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: arpeggio\n";
     fs::write(&plain, base).unwrap();
     fs::write(&harm, format!("harmony: [i, iv, VI, v]\n{base}")).unwrap();
     let (m0, m1) = (dir.path().join("p.mid"), dir.path().join("h.mid"));
@@ -2904,7 +3448,7 @@ fn validate_rejects_bad_swing_and_bad_numeral() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 92\nbars: 2\nperformance:\n  swing: 0.9\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 92\nbars: 2\nperformance:\n  swing: 0.9\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = bin()
@@ -2916,7 +3460,7 @@ fn validate_rejects_bad_swing_and_bad_numeral() {
     assert!(stderr.contains("performance.swing"), "stderr: {stderr}");
     fs::write(
         &scene,
-        "tempo: 92\nbars: 2\nharmony: [viii]\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 92\nbars: 2\nharmony: [viii]\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let out = bin()
@@ -2937,7 +3481,7 @@ fn spatial_yaml(with_spatial: bool) -> String {
         ""
     };
     format!(
-        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nmotifs:\n  line:\n    - {{ degree: 1, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\n    - {{ degree: 3, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\ntracks:\n  - instrument: violin\n    pattern: melody\n    motif: line\n{spatial}  - instrument: cello\n    pattern: sustain\n    intensity: 0.5\n"
+        "tempo: 92\nkey: D_minor\nbars: 2\nloop: true\nmotifs:\n  line:\n    - {{ degree: 1, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\n    - {{ degree: 3, beats: 1 }}\n    - {{ degree: 2, beats: 1 }}\ntracks:\n  - id: violin\n    instrument: violin\n    pattern: melody\n    motif: line\n{spatial}  - id: cello\n    instrument: cello\n    pattern: sustain\n    intensity: 0.5\n"
     )
 }
 
@@ -3053,7 +3597,7 @@ fn validate_rejects_bad_pan_and_glide_on_non_melody() {
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 92\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    pan: 1.5\n",
+        "tempo: 92\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n    pan: 1.5\n",
     )
     .unwrap();
     let out = bin()
@@ -3066,7 +3610,7 @@ fn validate_rejects_bad_pan_and_glide_on_non_melody() {
 
     fs::write(
         &scene,
-        "tempo: 92\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    glide: 0.3\n",
+        "tempo: 92\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n    glide: 0.3\n",
     )
     .unwrap();
     let out = bin()
@@ -3146,7 +3690,7 @@ fn lint_measures_rest_ratio_from_compiled_ir() {
     let scene = dir.path().join("busy.yaml");
     fs::write(
         &scene,
-        "tempo: 50\nbars: 2\nmotifs:\n  wall:\n    - { degree: 1, beats: 4 }\n    - { degree: 2, beats: 4 }\ntracks:\n  - instrument: violin\n    pattern: melody\n    motif: wall\n",
+        "tempo: 50\nbars: 2\nmotifs:\n  wall:\n    - { degree: 1, beats: 4 }\n    - { degree: 2, beats: 4 }\ntracks:\n  - id: violin\n    instrument: violin\n    pattern: melody\n    motif: wall\n",
     )
     .unwrap();
     let grammar = dir.path().join("g.yaml");
@@ -3289,6 +3833,7 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
         "build",
         "diff",
         "inspect_instruments",
+        "orchestration_check",
     ] {
         assert!(
             tools.contains(&expected),
@@ -3314,12 +3859,47 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
 }
 
 #[test]
+fn mcp_exposes_orchestration_across_schema_check_build_and_inspect() {
+    let dir = tempfile::tempdir().unwrap();
+    let orchestration = write_test_orchestration(dir.path());
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "schema", "arguments": {"kind": "orchestration"}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "orchestration_check",
+                       "arguments": {"orchestration": orchestration.to_str().unwrap()}}}),
+    ]);
+    assert_eq!(replies.len(), 3);
+
+    let tools = replies[0]["result"]["tools"].as_array().unwrap();
+    let find = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap();
+    find("orchestration_check");
+    let build = find("build");
+    assert!(build["inputSchema"]["properties"]["orchestration"].is_object());
+    assert!(build["inputSchema"]["properties"]["profile"].is_null());
+    let inspect = find("inspect_instruments");
+    assert!(inspect["inputSchema"]["properties"]["orchestration"].is_object());
+    assert!(inspect["inputSchema"]["properties"]["profile"].is_null());
+
+    let schema_text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let schema: serde_json::Value = serde_json::from_str(schema_text).unwrap();
+    assert!(schema["properties"]["palettes"].is_object());
+
+    assert_eq!(replies[2]["result"]["isError"], false);
+    let check_text = replies[2]["result"]["content"][0]["text"].as_str().unwrap();
+    let check: serde_json::Value = serde_json::from_str(check_text).unwrap();
+    assert_eq!(check["name"], "hybrid-test");
+    assert_eq!(check["palettes"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn mcp_tool_failure_passes_structured_error_through() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("bad.yaml");
     fs::write(
         &scene,
-        "tempo: 999\nbars: 4\ntracks:\n  - instrument: piano\n    pattern: sustain\n",
+        "tempo: 999\nbars: 4\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
     )
     .unwrap();
     let replies = mcp_roundtrip(&[

@@ -7,7 +7,7 @@
 - [Best Practices](best-practices.md)
 - [Command Reference](commands.md)
 - [Rendering and Dependencies](rendering.md)
-- [SFZ Renderer Profiles](profiles.md)
+- [Orchestration and Renderer Profiles](profiles.md)
 - [Building a Sound Library](sound-library.md)
 - [Agent Skill](agent-skill.md)
 - [Machine Interface](machine-interface.md)

@@ -22,27 +22,32 @@ motifs:
     - { degree: 1, beats: 2 }
 
 tracks:
-  - instrument: flute # 0: lead voice carrying the theme
+  - id: lead
+    instrument: flute # lead voice carrying the theme
     pattern: melody
     motif: theme
     intensity: 0.7
-  - instrument: strings # 1: harmonic bed
+  - id: harmony
+    instrument: strings # harmonic bed
     pattern: sustain
     intensity: 0.5
-  - instrument: harp # 2: motion
+  - id: motion
+    instrument: harp # motion
     pattern: arpeggio
     intensity: 0.5
-  - instrument: bass # 3: foundation
+  - id: foundation
+    instrument: bass # foundation
     pattern: bass
     intensity: 0.5
-  - instrument: drums # 4: pulse
+  - id: pulse
+    instrument: drums # pulse
     pattern: drums
     intensity: 0.4
 
 sections:
   - name: intro # theme alone over strings, no rhythm section
     bars: 4
-    mute: [3, 4]
+    mute: [foundation, pulse]
     intensity: 0.7
   - name: explore # full band, seamless loop
     bars: 8
@@ -54,4 +59,4 @@ sections:
     intensity: 1.4
   - name: victory # short sting with natural decay
     bars: 2
-    mute: [4]
+    mute: [pulse]

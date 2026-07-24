@@ -7,6 +7,7 @@ mod grammar;
 mod instrument;
 mod mcp;
 mod midi;
+mod orchestration;
 mod pipeline;
 mod profile;
 mod profile_check;
@@ -56,6 +57,9 @@ enum Command {
         /// Print the instrument-resolver config schema instead of the scene schema
         #[arg(long)]
         resolver: bool,
+        /// Print the orchestration-profile schema instead of the scene schema
+        #[arg(long)]
+        orchestration: bool,
     },
     /// Check a scene against an aesthetic grammar profile
     Lint {
@@ -69,6 +73,11 @@ enum Command {
         #[command(subcommand)]
         command: ProfileCommand,
     },
+    /// Inspect and validate multi-profile orchestration routing
+    Orchestration {
+        #[command(subcommand)]
+        command: OrchestrationCommand,
+    },
     /// Compile a scene to a Standard MIDI File
     Midi {
         scene: PathBuf,
@@ -77,9 +86,9 @@ enum Command {
         /// Render the material N times back to back (seamless-loop workflows)
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=8))]
         passes: u8,
-        /// Keep only the given track (0-based), preserving its mix channel
+        /// Keep only the track with this stable scene-local ID
         #[arg(long)]
-        solo: Option<usize>,
+        solo: Option<String>,
         /// Compile one named section of a suite scene
         #[arg(long)]
         section: Option<String>,
@@ -91,7 +100,7 @@ enum Command {
         #[arg(long)]
         soundfont: Option<PathBuf>,
         /// Single `.sfz` instrument; only valid with --renderer sfizz. For
-        /// multi-instrument scenes use `scorekit build --renderer sfizz --profile ...`.
+        /// multi-instrument scenes use `scorekit build --renderer sfizz --orchestration ...`.
         #[arg(long)]
         sfz: Option<PathBuf>,
         #[arg(short, long)]
@@ -125,10 +134,10 @@ enum Command {
         /// SF2 SoundFont; defaults to MuseScore_General.sf2 unless --renderer sfizz
         #[arg(long)]
         soundfont: Option<PathBuf>,
-        /// Renderer profile mapping instruments to `.sfz` files; only valid
-        /// with --renderer sfizz. See `scorekit schema --profile`.
+        /// Orchestration profile mapping logical palettes to renderer profiles;
+        /// only valid with --renderer sfizz. See `scorekit schema --orchestration`.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        orchestration: Option<PathBuf>,
         /// Texture profile mapping portable ambience/SFX source names to audio files
         #[arg(long)]
         texture_profile: Option<PathBuf>,
@@ -175,10 +184,10 @@ enum Command {
         /// SF2 SoundFont; defaults to MuseScore_General.sf2 unless --renderer sfizz
         #[arg(long)]
         soundfont: Option<PathBuf>,
-        /// Renderer profile mapping instruments to `.sfz` files; only valid
-        /// with --renderer sfizz. See `scorekit schema --profile`.
+        /// Orchestration profile mapping logical palettes to renderer profiles;
+        /// only valid with --renderer sfizz. See `scorekit schema --orchestration`.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        orchestration: Option<PathBuf>,
         /// Texture profile mapping portable ambience/SFX source names to audio files
         #[arg(long)]
         texture_profile: Option<PathBuf>,
@@ -216,10 +225,10 @@ enum Command {
     /// Resolve every track's instrument and report substitutions and gaps
     InspectInstruments {
         scene: PathBuf,
-        /// Renderer profile whose mappings define availability; without it,
-        /// availability is the full General MIDI vocabulary (SF2 backends).
+        /// Multi-profile orchestration whose palettes define per-track availability;
+        /// without it, availability is the full General MIDI vocabulary.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        orchestration: Option<PathBuf>,
         /// Instrument-resolver configuration (YAML); see `scorekit schema --resolver`
         #[arg(long)]
         resolver: Option<PathBuf>,
@@ -242,11 +251,17 @@ enum ProfileCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum OrchestrationCommand {
+    /// Validate palette bindings, leaf profiles and referenced SFZ files
+    Check { orchestration: PathBuf },
+}
+
 fn compile_midi(
     scene_path: &Path,
     output: &Path,
     passes: u8,
-    solo: Option<usize>,
+    solo: Option<&str>,
     section: Option<&str>,
 ) -> Result<()> {
     let mut scene = schema::load_scene(scene_path)?;
@@ -265,6 +280,27 @@ fn compile_midi(
             }
         }
     }
+    let solo = solo
+        .map(|id| {
+            scene
+                .tracks
+                .iter()
+                .position(|track| track.id == id)
+                .ok_or_else(|| {
+                    invalid_option(
+                        "--solo",
+                        format!(
+                            "unknown track id `{id}` (defined: {:?})",
+                            scene
+                                .tracks
+                                .iter()
+                                .map(|track| &track.id)
+                                .collect::<Vec<_>>()
+                        ),
+                    )
+                })
+        })
+        .transpose()?;
     let bytes = pipeline::midi_bytes(&scene, passes, solo)?;
     tools::write_atomic(output, &bytes)
 }
@@ -417,6 +453,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             profile,
             texture_profile,
             resolver,
+            orchestration,
         } => Ok(if *grammar {
             grammar::schema_json()
         } else if *profile {
@@ -425,6 +462,8 @@ fn run(command: &Command, json: bool) -> Result<String> {
             crate::texture::schema_json()
         } else if *resolver {
             resolver::schema_json()
+        } else if *orchestration {
+            orchestration::schema_json()
         } else {
             schema::schema_json()
         }),
@@ -468,6 +507,16 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 Ok(report.summary())
             }
         }
+        Command::Orchestration {
+            command: OrchestrationCommand::Check { orchestration },
+        } => {
+            let orchestration = orchestration::load(orchestration)?;
+            if json {
+                Ok(orchestration.to_json().to_string())
+            } else {
+                Ok(orchestration.summary())
+            }
+        }
         Command::Midi {
             scene,
             output,
@@ -475,7 +524,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             solo,
             section,
         } => {
-            compile_midi(scene, output, *passes, *solo, section.as_deref())?;
+            compile_midi(scene, output, *passes, solo.as_deref(), section.as_deref())?;
             Ok(format!("wrote {}", output.display()))
         }
         Command::Render {
@@ -493,7 +542,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 tools::Renderer::Sfizz => {
                     let sfz = sfz.as_deref().ok_or_else(|| error::Error::Validation {
                         path: "--sfz".to_owned(),
-                        message: "renderer `sfizz` requires --sfz (a single .sfz instrument); for multi-instrument scenes use `scorekit build --profile`"
+                        message: "renderer `sfizz` requires --sfz (a single .sfz instrument); for multi-instrument scenes use `scorekit build --orchestration`"
                             .to_owned(),
                     })?;
                     if soundfont.is_some() {
@@ -565,7 +614,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Build {
             scene,
             soundfont,
-            profile,
+            orchestration,
             texture_profile,
             output,
             renderer,
@@ -585,7 +634,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             pipeline::build(&pipeline::BuildArgs {
                 scene,
                 soundfont: soundfont.as_deref(),
-                profile: profile.as_deref(),
+                orchestration: orchestration.as_deref(),
                 texture_profile: texture_profile.as_deref(),
                 output,
                 renderer: *renderer,
@@ -621,7 +670,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Batch {
             scenes,
             soundfont,
-            profile,
+            orchestration,
             texture_profile,
             out_dir,
             format,
@@ -642,7 +691,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             pipeline::batch(&pipeline::BatchArgs {
                 scenes,
                 soundfont: soundfont.as_deref(),
-                profile: profile.as_deref(),
+                orchestration: orchestration.as_deref(),
                 texture_profile: texture_profile.as_deref(),
                 out_dir,
                 format,
@@ -659,22 +708,24 @@ fn run(command: &Command, json: bool) -> Result<String> {
         }
         Command::InspectInstruments {
             scene,
-            profile,
+            orchestration,
             resolver: resolver_config,
             fallback_mode,
             verbose,
         } => {
             let s = schema::load_scene(scene)?;
             let policy = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
-            let available = profile
+            let orchestration = orchestration
                 .as_deref()
-                .map(|p| {
-                    crate::profile::load_profile(p).map(|p| resolver::available_from_profile(&p))
-                })
+                .map(crate::orchestration::load)
                 .transpose()?;
             let raws = raw_instrument_spellings(scene, s.tracks.len());
-            let resolution =
-                resolver::resolve_scene(&s, Some(&raws), available.as_ref(), &policy, *verbose);
+            let resolution = match orchestration {
+                Some(orchestration) => {
+                    orchestration.resolve_scene(&s, Some(&raws), &policy, *verbose)?
+                }
+                None => resolver::resolve_scene(&s, Some(&raws), None, &policy, *verbose),
+            };
             if let Some(err) = resolution.to_error(&scene.display().to_string()) {
                 return Err(err);
             }

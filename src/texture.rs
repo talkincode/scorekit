@@ -27,7 +27,7 @@ pub struct TextureProfile {
     pub sources: BTreeMap<String, String>,
 }
 
-pub fn valid_source_name(name: &str) -> bool {
+pub fn valid_logical_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name.bytes().enumerate().all(|(i, b)| {
@@ -44,7 +44,7 @@ impl TextureProfile {
             });
         }
         for (name, path) in &self.sources {
-            if !valid_source_name(name) {
+            if !valid_logical_name(name) {
                 return Err(Error::Validation {
                     path: format!("sources.{name}"),
                     message: format!(

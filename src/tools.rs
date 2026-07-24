@@ -337,8 +337,9 @@ pub fn render(
     if renderer == Renderer::Sfizz {
         return Err(Error::Validation {
             path: "--renderer".to_owned(),
-            message: "renderer `sfizz` is driven by --profile via `render_sfz`, not `render`"
-                .to_owned(),
+            message:
+                "renderer `sfizz` is driven by orchestration patches via `render_sfz`, not `render`"
+                    .to_owned(),
         });
     }
     require_sf2(soundfont)?;
@@ -445,7 +446,7 @@ pub fn render_sfz_with_diagnostics(
     limits: ToolLimits,
 ) -> Result<ToolDiagnostics> {
     require_file(midi, "midi")?;
-    require_file(sfz, "--profile")?;
+    require_file(sfz, "sfz patch")?;
     let diagnostics = run_to_file_capture(
         "sfizz_render",
         "install `sfizz_render` (Homebrew: `brew install talkincode/tap/scorekit-sfizz`; source build: https://github.com/sfztools/sfizz with `-DSFIZZ_RENDER=ON -DSFIZZ_JACK=OFF -DSFIZZ_TESTS=OFF`)",

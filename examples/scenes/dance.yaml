@@ -38,19 +38,24 @@ motifs:
     - { degree: 2, beats: 1 }
 
 tracks:
-  - instrument: saw_lead # 0: the riff
+  - id: lead
+    instrument: saw_lead # the riff
     pattern: melody
     motif: riff
     intensity: 0.8
-  - instrument: synth_bass # 1: pumping root motion
+  - id: foundation
+    instrument: synth_bass # pumping root motion
     pattern: bass
     intensity: 0.85
-  - instrument: pad # 2: wash behind the riff
+  - id: harmony
+    instrument: pad # wash behind the riff
     pattern: sustain
     intensity: 0.4
-  - instrument: epiano # 3: offbeat sparkle
+  - id: motion
+    instrument: epiano # offbeat sparkle
     pattern: arpeggio
     intensity: 0.45
-  - instrument: drums # 4: front and center
+  - id: pulse
+    instrument: drums # front and center
     pattern: drums
     intensity: 0.9

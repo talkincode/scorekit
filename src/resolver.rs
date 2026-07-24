@@ -246,6 +246,7 @@ pub struct Candidate {
 #[derive(Debug, Clone, Serialize)]
 pub struct Resolution {
     pub track: usize,
+    pub track_id: String,
     /// The instrument as requested (raw spelling when known).
     pub requested: String,
     /// Canonical instrument key after alias normalization.
@@ -263,6 +264,18 @@ pub struct Resolution {
     /// Full scored candidate list (verbose mode only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_articulation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub articulation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sfz: Option<String>,
     #[serde(skip)]
     target: Option<Instrument>,
 }
@@ -278,6 +291,28 @@ impl Resolution {
             self.status,
             ResolutionStatus::Missing | ResolutionStatus::Rejected
         )
+    }
+
+    pub fn sfz_path(&self) -> Option<&Path> {
+        self.sfz.as_deref().map(Path::new)
+    }
+
+    pub fn set_renderer_context(
+        &mut self,
+        palette: &str,
+        profile: &str,
+        profile_path: &str,
+        requested_articulation: &str,
+    ) {
+        self.palette = Some(palette.to_owned());
+        self.profile = Some(profile.to_owned());
+        self.profile_path = Some(profile_path.to_owned());
+        self.requested_articulation = Some(requested_articulation.to_owned());
+    }
+
+    pub fn set_renderer_patch(&mut self, articulation: &str, sfz: &Path) {
+        self.articulation = Some(articulation.to_owned());
+        self.sfz = Some(sfz.display().to_string());
     }
 }
 
@@ -465,6 +500,7 @@ fn resolve_track(
     let Some(available) = available else {
         return Resolution {
             track: index,
+            track_id: track.id.clone(),
             requested,
             canonical: canonical.clone(),
             resolved: Some(canonical),
@@ -478,6 +514,12 @@ fn resolve_track(
             warnings: Vec::new(),
             best_candidate: None,
             candidates: Vec::new(),
+            palette: None,
+            profile: None,
+            profile_path: None,
+            requested_articulation: None,
+            articulation: None,
+            sfz: None,
             target: Some(track.instrument),
         };
     };
@@ -492,6 +534,7 @@ fn resolve_track(
         }
         return Resolution {
             track: index,
+            track_id: track.id.clone(),
             requested,
             canonical: canonical.clone(),
             resolved: Some(canonical),
@@ -505,6 +548,12 @@ fn resolve_track(
             warnings,
             best_candidate: None,
             candidates: Vec::new(),
+            palette: None,
+            profile: None,
+            profile_path: None,
+            requested_articulation: None,
+            articulation: None,
+            sfz: None,
             target: Some(track.instrument),
         };
     }
@@ -539,6 +588,7 @@ fn resolve_track(
         warnings.push("fallback_disabled_by_strict_mode".to_owned());
         return Resolution {
             track: index,
+            track_id: track.id.clone(),
             requested,
             canonical,
             resolved: None,
@@ -548,6 +598,12 @@ fn resolve_track(
             warnings,
             best_candidate: best_overall,
             candidates: if verbose { candidates } else { Vec::new() },
+            palette: None,
+            profile: None,
+            profile_path: None,
+            requested_articulation: None,
+            articulation: None,
+            sfz: None,
             target: None,
         };
     }
@@ -563,6 +619,7 @@ fn resolve_track(
             reasons.extend(chosen.reasons.iter().cloned());
             Resolution {
                 track: index,
+                track_id: track.id.clone(),
                 requested,
                 canonical,
                 resolved: Some(chosen.instrument.clone()),
@@ -572,6 +629,12 @@ fn resolve_track(
                 warnings,
                 best_candidate: None,
                 candidates: if verbose { candidates } else { Vec::new() },
+                palette: None,
+                profile: None,
+                profile_path: None,
+                requested_articulation: None,
+                articulation: None,
+                sfz: None,
                 target,
             }
         }
@@ -579,6 +642,7 @@ fn resolve_track(
             warnings.push("no_candidate_satisfies_fallback_policy".to_owned());
             Resolution {
                 track: index,
+                track_id: track.id.clone(),
                 requested,
                 canonical,
                 resolved: None,
@@ -588,6 +652,12 @@ fn resolve_track(
                 warnings,
                 best_candidate: best_overall,
                 candidates: if verbose { candidates } else { Vec::new() },
+                palette: None,
+                profile: None,
+                profile_path: None,
+                requested_articulation: None,
+                articulation: None,
+                sfz: None,
                 target: None,
             }
         }
@@ -634,7 +704,7 @@ impl SceneResolution {
             match r.status {
                 ResolutionStatus::Fallback => lines.push(format!(
                     "WARN instrument fallback: track={} requested={} resolved={} score={:.2} reason={}",
-                    r.track,
+                    r.track_id,
                     r.requested,
                     r.resolved.as_deref().unwrap_or("-"),
                     r.score,
@@ -644,7 +714,7 @@ impl SceneResolution {
                     let best = r.best_candidate.as_ref();
                     lines.push(format!(
                         "WARN instrument missing: track={} requested={} fallback_rejected=true best_candidate={} candidate_score={} minimum_score={:.2}",
-                        r.track,
+                        r.track_id,
                         r.requested,
                         best.map(|c| c.instrument.as_str()).unwrap_or("none"),
                         best.map(|c| format!("{:.2}", c.score))
@@ -672,13 +742,23 @@ impl SceneResolution {
             };
             let mut line = format!(
                 "tracks[{}]: {} -> {} ({status}, score {:.2})",
-                r.track,
+                r.track_id,
                 r.requested,
                 r.resolved.as_deref().unwrap_or("∅"),
                 r.score,
             );
             if !r.reasons.is_empty() {
                 line.push_str(&format!(" reasons: {}", r.reasons.join(",")));
+            }
+            if let (Some(palette), Some(profile)) = (&r.palette, &r.profile) {
+                line.push_str(&format!(
+                    " route: palette={palette} profile={profile} articulation={} sfz={}",
+                    r.articulation
+                        .as_deref()
+                        .or(r.requested_articulation.as_deref())
+                        .unwrap_or("-"),
+                    r.sfz.as_deref().unwrap_or("-"),
+                ));
             }
             out.push(line);
             for w in &r.warnings {
@@ -771,7 +851,7 @@ impl SceneResolution {
                     .unwrap_or_default();
                 format!(
                     "tracks[{}]: `{}` is not available{best}",
-                    r.track, r.requested
+                    r.track_id, r.requested
                 )
             })
             .collect();
@@ -822,13 +902,46 @@ pub fn resolve_scene(
     }
 }
 
+/// Resolve tracks against independent availability sets, one per scene track.
+/// This is the orchestration path: fallback candidates never cross palettes.
+pub fn resolve_scene_per_track(
+    scene: &Scene,
+    raws: Option<&[Option<String>]>,
+    available: &[&Available],
+    policy: &FallbackPolicy,
+    verbose: bool,
+) -> SceneResolution {
+    assert_eq!(
+        scene.tracks.len(),
+        available.len(),
+        "one availability set is required per track"
+    );
+    let tracks = scene
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, track)| {
+            let raw = raws
+                .and_then(|r| r.get(i))
+                .and_then(|r| r.as_deref())
+                .filter(|r| instrument::resolve_name(r).is_some());
+            resolve_track(i, track, raw, Some(available[i]), policy, verbose)
+        })
+        .collect();
+    SceneResolution {
+        mode: policy.mode,
+        minimum_score: policy.minimum_score,
+        tracks,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn track(instrument: Instrument, pattern: Pattern, articulation: Articulation) -> Track {
         serde_yaml_ng::from_str(&format!(
-            "instrument: {}\npattern: {}\narticulation: {}",
+            "id: track\ninstrument: {}\npattern: {}\narticulation: {}",
             instrument_key(instrument),
             serde_json::to_value(pattern).unwrap().as_str().unwrap(),
             articulation_key(articulation),

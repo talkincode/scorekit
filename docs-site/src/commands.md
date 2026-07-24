@@ -8,7 +8,8 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `validate <scene>` | Validate scene syntax and semantics |
 | `schema` | Print the scene JSON Schema |
 | `schema --grammar` | Print the grammar-profile schema |
-| `schema --profile` | Print the renderer-profile schema |
+| `schema --profile` | Print the leaf renderer-profile schema |
+| `schema --orchestration` | Print the orchestration-profile schema |
 | `schema --texture-profile` | Print the texture-source profile schema |
 | `schema --resolver` | Print the instrument-resolver config schema |
 | `lint <scene> --grammar <file>` | Check compiled music against measurable style rules |
@@ -16,7 +17,8 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
 | `export <audio> -o <file>` | Convert or trim audio through FFmpeg |
 | `build <scene> -o <file>` | Run the complete asset pipeline |
-| `profile check <profile>` | Render probes through every mapped SFZ patch |
+| `profile check <profile>` | Render probes through every mapped SFZ patch in a leaf renderer profile |
+| `orchestration check <file>` | Validate palette bindings and every referenced leaf profile/SFZ file |
 | `inspect-instruments <scene>` | Resolve every track's instrument and report substitutions and gaps |
 | `diff <old> <new>` | Compare scene semantics |
 | `batch <scenes...> --out-dir <dir>` | Build several scenes and write a JSON report |
@@ -33,15 +35,19 @@ seconds, and `--crossfade-ms` is 0..=60000.
 
 Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
 flag is independent of the musical renderer: it works alongside either an
-SF2 `--soundfont` or an sfizz `--profile`.
+SF2 `--soundfont` or an sfizz `--orchestration` profile.
 
 ## Instrument resolution
 
 `build` and `batch` resolve every track's instrument against what the
 selected backend actually provides before anything is rendered. SF2 backends
 carry the full General MIDI vocabulary, so everything resolves exactly; with
-`--renderer sfizz` availability is the renderer profile's mapping table, and
-unmapped instruments go through a scored fallback policy:
+`--renderer sfizz` availability is each track's effective palette's leaf
+renderer profile (routed through `--orchestration <file>`, the only sfizz
+routing input for `build`/`batch`/`inspect-instruments`), and unmapped
+instruments go through a scored fallback policy confined to that one
+palette — resolution never crosses palettes, even when another palette in
+the same orchestration happens to map the same instrument:
 
 - `--fallback-mode conservative` (default) substitutes within the same
   instrument family only, minimum score 0.70. Missing instruments never
@@ -57,13 +63,15 @@ unmapped instruments go through a scored fallback policy:
   `allowed_families`, and `excluded_families`.
 
 Every substitution prints one `WARN instrument fallback:` line with its score
-and reasons; `meta.json` embeds the full `instrument_resolution` report.
+and reasons; `meta.json` embeds the full `instrument_resolution` report,
+including each track's `id`, declared/effective `palette`, resolved leaf
+profile, requested/effective articulation, and resolved SFZ path.
 Unresolved instruments abort before staging, leaving no partial artifacts.
 
-`inspect-instruments <scene> [--profile <file>] [--resolver <file>]
+`inspect-instruments <scene> [--orchestration <file>] [--resolver <file>]
 [--fallback-mode <mode>] [--verbose]` prints the same resolution standalone:
 per-track status (`exact`/`alias`/`fallback`/`missing`/`rejected`), scores,
-reasons, and the missing-instrument list. It exits 2 when instruments are
-unresolved, and `--verbose` lists every scored candidate. Alias spellings
-(e.g. `french_horn` for `horn`) are pure surface syntax and never change
-MIDI bytes.
+reasons, palette/profile/SFZ routing, and the missing-instrument list. It
+exits 2 when instruments are unresolved, and `--verbose` lists every scored
+candidate. Alias spellings (e.g. `french_horn` for `horn`) are pure surface
+syntax and never change MIDI bytes.

@@ -66,6 +66,8 @@ A proposed field must clear all of these gates (this is the governance encoded i
 
 | Field | Type / range | Default | Compile semantic |
 | --- | --- | --- | --- |
+| `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity referenced by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and every `meta.json`/`inspect-instruments` report; itself never affects compiled MIDI |
+| `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration-palette selector (`--orchestration`, `--renderer sfizz` only); pure routing metadata — **never changes compiled MIDI** and has no effect on SF2/TiMidity backends |
 | `instrument` | GM name (see `scorekit schema` for the enum) or `drums` | required | program change at tick 0; `drums` ↔ channel 10 |
 | `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` | required | note-generation algorithm (below) |
 | `motif` | motif name | — | required iff `pattern: melody`; must exist in `motifs` |
@@ -114,7 +116,7 @@ needed at the loop boundary.
 | `bars` | 1..=256 | required | section length |
 | `tempo` | 20..=300 | scene tempo | per-section override |
 | `loop` | bool | `false` | per-section loop treatment |
-| `mute` | `[track index, …]` | `[]` | 0-based; muting every track is rejected |
+| `mute` | `[track id, …]` | `[]` | stable track `id`s silenced this section; muting every track is rejected |
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on each track's intensity |
 
 Sections inherit the scene's key, tracks (including spatial fields), textures, motifs, harmony, and performance.
@@ -167,5 +169,5 @@ Protocol violations follow the machine-interface error shape: exit 2, and with `
 ## What the protocol will not carry
 
 - **No mood/state/intent fields** (`emotion`, `danger`, `avoid`) — no deterministic compile semantic exists for them; they live in the agent's brief.
-- **No renderer or recording paths** (`.sf2`/`.sfz`/audio locations) — sound sources are bound at invocation time (`--soundfont`, `--profile`, `--texture-profile`), so a scene never bakes in one machine's disk layout.
+- **No renderer or recording paths** (`.sf2`/`.sfz`/audio locations) — sound sources are bound at invocation time (`--soundfont`, `--orchestration`, `--texture-profile`), so a scene never bakes in one machine's disk layout. A track's `id`/`palette` are portable routing metadata, not paths — the orchestration profile they route through resolves to real files, never the scene.
 - **No embedded version negotiation, includes, or macros** — one file, one scene, strict fields. Composition happens in the agent, not in a template engine.

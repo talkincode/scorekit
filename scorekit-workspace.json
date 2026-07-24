@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "projects": {
+    "scorekit": {
+      "kind": "git",
+      "remote": "https://github.com/talkincode/scorekit",
+      "role": "compiler-hub",
+      "description": "Deterministic music compiler CLI; ecosystem adjudication hub (docs/roadmap.md). Owns this workspace manifest and scripts/workspace.py."
+    },
+    "scorebench": {
+      "kind": "git",
+      "remote": "https://github.com/talkincode/scorebench",
+      "role": "workbench",
+      "description": "Agent-native desktop workbench (Tauri 2 + Svelte 5). Consumes scorekit strictly as a subprocess via --json; never links or parses human output."
+    },
+    "scorebench-samples": {
+      "kind": "git",
+      "remote": "https://github.com/talkincode/scorebench-samples",
+      "role": "corpus",
+      "description": "Public sample gallery and reproducible capability corpus for scorebench/scorekit regression catching."
+    },
+    "scoredata-forge": {
+      "kind": "git",
+      "remote": "https://github.com/talkincode/scoredata-forge",
+      "role": "foundry",
+      "description": "Deterministic CC0 SFZ sample-library foundry. Output-only coupling: never imports scorekit; its builds enter ScoreData like any downloaded library."
+    },
+    "ScoreData": {
+      "kind": "data",
+      "env": "SCOREKIT_SOUND_LIBRARY_DIR",
+      "role": "sound-corpus",
+      "description": "Local, versioned sound-source inventory (libraries, archives, manifests, certified profiles). Not a git repo; large binary payloads.",
+      "provisioning": "Provision manually per its README: libraries enter via incoming/ -> manifest + checksums -> catalog -> scorekit profile check."
+    }
+  }
+}

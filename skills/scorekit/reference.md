@@ -18,16 +18,17 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | --- | --- | --- |
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
-| `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → renderer profile; `--texture-profile` → texture-source profile; `--resolver` → instrument-resolver config |
+| `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → leaf renderer profile; `--orchestration` → orchestration profile; `--texture-profile` → texture-source profile; `--resolver` → instrument-resolver config |
 | `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); global `--json` emits the full report |
+| `orchestration check <file>` | validate palette bindings and every referenced leaf renderer profile + SFZ file | global `--json` emits `{name, default_palette, palettes: [{name, profile, profile_path, mappings, patches}]}` |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
-| `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track#>`, `--section <name>` |
+| `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track id>`, `--section <name>` |
 | `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
-| `inspect-instruments <scene>` | resolve instruments, report substitutions/gaps | `--profile <file>` (omit = GM, all exact), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz only; routes each track's `palette` to a certified leaf renderer profile); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
+| `inspect-instruments <scene>` | resolve instruments, report per-track palette/profile/SFZ routing | `--orchestration <file>` (omit = GM, all exact), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
-| `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--profile <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export/resolver flags |
+| `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export/resolver flags |
 
 Individual file writes are atomic (temp + rename). Suite builds additionally
 stage every section, main asset, stem directory, and manifest as one set; a
@@ -57,11 +58,13 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 
 | Field | Type / range | Default | Notes |
 | --- | --- | --- | --- |
+| `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity; used by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and `meta.json`/`inspect-instruments` reports |
+| `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration palette (`--orchestration`, `--renderer sfizz` only); routing metadata only — never changes MIDI or affects SF2/TiMidity backends |
 | `instrument` | enum (below) | required | `drums` instrument ↔ `drums` pattern, exclusively both ways |
 | `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` | required | melody plays the named motif, looped/truncated to fill |
 | `motif` | motif name | — | required iff `pattern: melody` |
 | `intensity` | 0.0..=1.0 | 0.6 | velocity scale |
-| `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity, selects the `.sfz` file under `--renderer sfizz --profile ...` (falls back to the instrument's `sustain` mapping if unmapped) |
+| `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity; under `--renderer sfizz --orchestration ...` selects the `.sfz` file the track's effective palette's leaf profile resolves to (falls back to the instrument's `sustain` mapping if unmapped) |
 | `pan` | 0.0..=1.0 | — | stereo position → CC10 (`0` left, `0.5` center, `1` right); omitted = renderer default |
 | `reverb` | 0.0..=1.0 | — | reverb send → CC91; omitted = renderer default |
 | `glide` | 0.0..=1.0 | — | melody-only tail portamento: the last `glide` fraction of each note pitch-bends toward the next pitch (clamped ±2 semitones); loops bend last→first, seam-safe |
@@ -110,7 +113,7 @@ RPM belongs to the game runtime, not texture tracks.
 | `name` | string | required | unique; asset suffix (`out-<name>.ogg`) |
 | `bars` | 1..=256 | required | |
 | `tempo` | 20..=300 | scene tempo | per-section override |
-| `mute` | `[track index, …]` | `[]` | 0-based; muting all tracks is rejected |
+| `mute` | `[track id, …]` | `[]` | stable track `id`s silenced this section; muting all tracks is rejected |
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on every track's intensity |
 
 Sections share the scene's key, tracks, motifs, harmony and performance.
@@ -148,7 +151,7 @@ Common alias spellings are accepted and normalized before compilation
 `grand_piano`→`piano`, …); an unknown name errors with a suggestion.
 Aliases are surface syntax only — MIDI bytes are identical either way.
 
-## Renderer profiles (`--renderer sfizz`)
+## Orchestration profiles (`--renderer sfizz --orchestration`)
 
 sfizz renders real `.sfz` sample libraries (e.g. free CC0 [VSCO 2 Community
 Edition](https://vis.versilstudios.com/vsco-community.html)) instead of a
@@ -158,12 +161,48 @@ sample-aligned by construction. Build the binary once with
 `scripts/build_sfizz.sh` (not packaged by Homebrew).
 
 A scene never names a `.sfz` file or a local path — only `instrument` +
-`articulation` (portable, shareable). A **renderer profile** (external YAML,
-`--profile <file>`, only valid with `--renderer sfizz`) is the one place that
-maps those DSL names onto real sample files on a given machine:
+`articulation` (portable, shareable) plus each track's stable `id` and an
+optional logical `palette`. `build`/`batch --renderer sfizz` and
+`inspect-instruments` take a single **orchestration profile**
+(`--orchestration <file>`) that is the only sfizz build/inspect input; the
+old per-build `--profile` flag is gone:
 
 ```yaml
-name: vsco2-ce
+# orchestration.yaml
+schema_version: 1
+name: hybrid-cinematic
+default_palette: ensemble
+palettes:
+  solo:
+    profile: ../renderers/scoredata-chamber.yaml
+  ensemble:
+    profile: ../renderers/scoredata-symphonic.yaml
+```
+
+`scorekit schema --orchestration` prints its schema;
+`scorekit orchestration check orchestration.yaml` validates the palette
+bindings and loads every referenced leaf profile (and every SFZ path each
+leaf profile resolves), failing loudly and without any partial output if a
+palette or a leaf profile is missing. Each track's `palette` field selects
+which palette routes it (case-sensitive exact match); a track that omits
+`palette` uses `default_palette`. Resolution and fallback are strictly
+confined to that one palette's leaf profile — there is **no cross-palette
+fallback**, so a `solo` track never silently borrows a patch mapped only
+under `ensemble`. Declaring several tracks with different `palette` values
+(e.g. a `violin` track on `solo` next to a `violin` track on `ensemble`) is
+how a scene expresses an explicit soloist-over-section layering; each
+resolves through its own palette's leaf profile independently.
+
+### Leaf renderer profiles
+
+A **leaf renderer profile** (external YAML, `schema --profile`) is the
+piece that actually maps portable `instrument`/`articulation` DSL names onto
+real sample files on a given machine — orchestration only routes a logical
+palette name to one of these:
+
+```yaml
+# renderers/scoredata-symphonic.yaml
+name: scoredata-symphonic
 root: /path/to/VSCO-2-CE-1.1.0   # optional; default = the profile file's own directory
 instruments:
   violin:
@@ -174,26 +213,34 @@ instruments:
     sustain: GM-StylePerc.sfz
 ```
 
+Leaf profile paths in `palettes.<name>.profile` resolve relative to the
+orchestration file; each leaf profile's own `.sfz` paths then resolve
+relative to `root` (or that profile file's own directory) exactly as
+before — never relative to the scene or the orchestration file.
+
 Every `Instrument` used by a scene should have an entry with at least a
 `sustain` mapping; profile mappings are ground truth and always resolve
-exactly. Instruments the profile doesn't map go through the **instrument
-resolver**: a scored same-family substitute (range/articulation/envelope/
-role/timbre, default minimum 0.70) is used with a `WARN instrument
-fallback:` line, but strings are never a default absorber (substituting
-into strings needs an explicit `allowed_families: [strings]` in a
-`--resolver` config), drums are never substituted, and synth stand-ins need
-`--fallback-mode flexible`. When nothing qualifies the build fails before
-staging (exit 2, code `resolution`, no partial output) and names the best
-rejected candidate. `--fallback-mode strict` disables substitution
-entirely; `scorekit inspect-instruments scene.yaml --profile <file>`
+exactly. Instruments the active palette's leaf profile doesn't map go
+through the **instrument resolver**, isolated per palette: a scored
+same-family substitute (range/articulation/envelope/role/timbre, default
+minimum 0.70) is used with a `WARN instrument fallback:` line, but strings
+are never a default absorber (substituting into strings needs an explicit
+`allowed_families: [strings]` in a `--resolver` config), drums are never
+substituted, and synth stand-ins need `--fallback-mode flexible`. When
+nothing qualifies the build fails before staging (exit 2, code
+`resolution`, no partial output) and names the best rejected candidate.
+`--fallback-mode strict` disables substitution entirely;
+`scorekit inspect-instruments scene.yaml --orchestration orchestration.yaml`
 previews per-track statuses (`exact`/`alias`/`fallback`/`missing`/
-`rejected`) without building; substitution never changes MIDI bytes or
-stem/meta names — only the rendered `.sfz`. Malformed paths still fail
-loudly at build time. `.sfz` paths are relative to
-`root`, and one profile can span multiple sample libraries per-instrument
-by prefixing each `.sfz` path with the library's own subfolder name under a
-shared `root` (no per-instrument `root:` override exists or is needed). See
-`scorekit schema --profile` for the full JSON Schema,
+`rejected`) plus each track's `id`, declared/effective palette, leaf profile
+name/path, requested/effective articulation, and resolved SFZ path, without
+building. Substitution never changes MIDI bytes or stem/meta names — only
+the rendered `.sfz`. Malformed paths still fail loudly at build time.
+`.sfz` paths are relative to a leaf profile's `root`, and one leaf profile
+can span multiple sample libraries per-instrument by prefixing each `.sfz`
+path with the library's own subfolder name under a shared `root` (no
+per-instrument `root:` override exists or is needed). See
+`scorekit schema --profile` for the leaf profile's full JSON Schema,
 [examples/profiles/vsco2-ce.yaml](../../examples/profiles/vsco2-ce.yaml) for
 a complete worked mapping (including orchestral substitutions for
 synth/vocal instruments VSCO2 doesn't provide, e.g. `square_lead` → flute),
@@ -201,11 +248,13 @@ and [examples/profiles/vsco2-vcsl.yaml](../../examples/profiles/vsco2-vcsl.yaml)
 for a hybrid that also pulls piano/harp/epiano/timpani from VCSL (a CC0
 supplement library, not a substitute for VSCO2's strings/brass/choir).
 
-Run `scorekit profile check <profile.yaml>` before using a new or changed
-profile. The check deduplicates shared patch paths, renders broad melodic or
-GM-drum probes at varied velocities twice, rejects missing and silent patches,
-captures sfizz warnings, and verifies repeatability. It writes no persistent
-audio; command-scoped probe files are removed on success and failure. Use
+Every leaf profile is still independently certified with
+`scorekit profile check <profile.yaml>` before it is wired into any
+orchestration — this is unchanged. The check deduplicates shared patch
+paths, renders broad melodic or GM-drum probes at varied velocities twice,
+rejects missing and silent patches, captures sfizz warnings, and verifies
+repeatability. It writes no persistent audio; command-scoped probe files
+are removed on success and failure. Use
 `scorekit --json profile check <profile.yaml>` to retain a machine-readable
 certification report.
 
@@ -243,17 +292,24 @@ Single scene (`build`):
   "loop_samples": 1841216, "total_samples": 1841216,
   "crossfade_samples": 2205, "seconds": 41.75,
   "audio": "scene.ogg",
-  "stems": ["scene.stems/00-piano.ogg", "..."],
-  "tracks": [{ "instrument": "piano", "pattern": "sustain", "intensity": 0.6 }],
-  "textures": [{ "source": "river", "mode": "loop", "start_beat": null, "at": [], "gain": 0.25 }]
+  "stems": ["scene.stems/01-piano.ogg", "..."],
+  "tracks": [{ "id": "harmony", "palette": null, "instrument": "piano", "articulation": "sustain", "pattern": "sustain", "intensity": 0.6 }],
+  "textures": [{ "source": "river", "mode": "loop", "start_beat": null, "at": [], "gain": 0.25 }],
+  "orchestration": { "name": "hybrid-cinematic", "default_palette": "ensemble", "palettes": ["..."] }
 }
 ```
+
+`"orchestration"` and per-track `"palette"` are present only for
+`--renderer sfizz --orchestration <file>` builds; SF2/TiMidity builds omit
+them (`palette` is `null`, `orchestration` is absent).
 
 Suite: `{"suite": true, "tempo", "key", "time_signature", "sample_rate",
 "sections": [ …single-scene entries each with "name"… ]}`.
 Every build also embeds `"instrument_resolution"` (per-track
-status/score/reasons plus a summary; all-exact under GM SoundFonts) in the
-meta entry and suite manifest.
+status/score/reasons plus a summary; all-exact under GM SoundFonts; under
+`--orchestration` each track entry also carries `track_id`,
+`palette`/`profile`/`profile_path`, `requested_articulation`/`articulation`,
+and `sfz`) in the meta entry and suite manifest.
 Loop the file by playing `[0, loop_samples)`; `total_samples` includes the
 tail for non-loop scenes. `batch` writes `report.json`:
 `{"total", "succeeded", "failed", "items": [{scene, ok, output, meta,

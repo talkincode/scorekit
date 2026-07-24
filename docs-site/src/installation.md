@@ -65,7 +65,7 @@ make install-sound-dir SCOREKIT_SOUND_LIBRARY_DIR="/Volumes/Samples/scorekit"
 make install-default-soundfont
 ```
 
-The sound root contains `sf2/`, `sfz/`, and `profiles/`. SF2 builds default to `sf2/MuseScore_General.sf2`; an explicit `--soundfont` overrides it. SFZ builds still require an explicit renderer profile.
+The sound root contains `sf2/`, `sfz/`, and `profiles/`. SF2 builds default to `sf2/MuseScore_General.sf2`; an explicit `--soundfont` overrides it. SFZ builds still require an explicit `--orchestration` profile (which routes to one or more certified renderer profiles under `profiles/`).
 
 ## Using a project-managed sound library
 

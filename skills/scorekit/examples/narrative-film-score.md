@@ -68,7 +68,8 @@ scorekit build exile-in-the-dunes.yaml \
 
 The default FluidSynth path resolves
 `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`. For SFZ libraries,
-replace the build command with `--renderer sfizz --profile <profile.yaml>`.
+replace the build command with
+`--renderer sfizz --orchestration <orchestration.yaml>`.
 
 ## Report the result
 

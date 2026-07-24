@@ -20,11 +20,11 @@ use std::path::{Path, PathBuf};
 pub struct BuildArgs<'a> {
     pub scene: &'a Path,
     /// SF2 SoundFont path. Required for `Renderer::Fluidsynth`/`Timidity`,
-    /// must be `None` for `Renderer::Sfizz` (see `profile` instead).
+    /// must be `None` for `Renderer::Sfizz` (see `orchestration` instead).
     pub soundfont: Option<&'a Path>,
-    /// Renderer profile path (maps instruments to `.sfz` files). Required
+    /// Orchestration profile path (maps track palettes to renderer profiles). Required
     /// for `Renderer::Sfizz`, must be `None` for the SF2 backends.
-    pub profile: Option<&'a Path>,
+    pub orchestration: Option<&'a Path>,
     /// Portable texture-source profile. Required only when the scene declares
     /// `textures`; independent of the selected musical renderer.
     pub texture_profile: Option<&'a Path>,
@@ -47,38 +47,45 @@ pub struct BuildArgs<'a> {
 /// A validated renderer backend: exactly the input the selected renderer
 /// consumes, so downstream code matches on this instead of re-checking
 /// `soundfont`/`profile` optionality.
+#[derive(Clone, Copy)]
 enum Backend<'a> {
     /// SF2-consuming renderers (FluidSynth, TiMidity++).
     Sf2 { soundfont: &'a Path },
-    /// `sfizz_render`, driven by a renderer profile mapping instruments to `.sfz`.
-    Sfizz { profile: &'a Path },
+    /// `sfizz_render`, driven by per-track orchestration palette routing.
+    Sfizz { orchestration: &'a Path },
 }
 
-/// Exactly one of `soundfont`/`profile` must be set, matching what the
+#[derive(Debug, Clone)]
+struct TrackRenderTarget {
+    sfz: Option<PathBuf>,
+}
+
+/// Exactly one of `soundfont`/`orchestration` must be set, matching what the
 /// selected renderer actually consumes — this is checked once up front so
 /// every scene in a batch fails the same clear way instead of partway
 /// through a long run.
 fn require_backend<'a>(
     renderer: tools::Renderer,
     soundfont: Option<&'a Path>,
-    profile: Option<&'a Path>,
+    orchestration: Option<&'a Path>,
 ) -> Result<Backend<'a>> {
     match renderer {
         tools::Renderer::Sfizz => {
-            let Some(profile) = profile else {
+            let Some(orchestration) = orchestration else {
                 return Err(validation(
-                    "--profile",
-                    "renderer `sfizz` requires --profile (maps instruments to .sfz files); see `scorekit schema --profile`"
+                    "--orchestration",
+                    "renderer `sfizz` requires --orchestration (maps track palettes to renderer profiles); see `scorekit schema --orchestration`"
                         .to_owned(),
                 ));
             };
             if soundfont.is_some() {
                 return Err(validation(
                     "--soundfont",
-                    "renderer `sfizz` does not use --soundfont; pass --profile instead".to_owned(),
+                    "renderer `sfizz` does not use --soundfont; pass --orchestration instead"
+                        .to_owned(),
                 ));
             }
-            Ok(Backend::Sfizz { profile })
+            Ok(Backend::Sfizz { orchestration })
         }
         tools::Renderer::Fluidsynth | tools::Renderer::Timidity => {
             let Some(soundfont) = soundfont else {
@@ -87,10 +94,11 @@ fn require_backend<'a>(
                     "this renderer requires --soundfont".to_owned(),
                 ));
             };
-            if profile.is_some() {
+            if orchestration.is_some() {
                 return Err(validation(
-                    "--profile",
-                    "this renderer does not use --profile; pass --soundfont instead".to_owned(),
+                    "--orchestration",
+                    "this renderer does not use --orchestration; pass --soundfont instead"
+                        .to_owned(),
                 ));
             }
             Ok(Backend::Sf2 { soundfont })
@@ -264,7 +272,7 @@ fn publish_staged_suite(staging: &Path, destination_dir: &Path, label: &str) -> 
 pub struct BatchArgs<'a> {
     pub scenes: &'a [PathBuf],
     pub soundfont: Option<&'a Path>,
-    pub profile: Option<&'a Path>,
+    pub orchestration: Option<&'a Path>,
     pub texture_profile: Option<&'a Path>,
     pub out_dir: &'a Path,
     pub format: &'a str,
@@ -283,7 +291,7 @@ pub struct BatchArgs<'a> {
 /// report JSON. Returns the first failure (after the report is written) so
 /// the exit code reflects it; agents read the report for the full picture.
 pub fn batch(args: &BatchArgs) -> Result<String> {
-    require_backend(args.renderer, args.soundfont, args.profile)?;
+    require_backend(args.renderer, args.soundfont, args.orchestration)?;
     let mut stems_seen = std::collections::BTreeMap::new();
     for (i, scene) in args.scenes.iter().enumerate() {
         let stem = scene
@@ -316,7 +324,7 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
         let result = build(&BuildArgs {
             scene,
             soundfont: args.soundfont,
-            profile: args.profile,
+            orchestration: args.orchestration,
             texture_profile: args.texture_profile,
             output: &output,
             renderer: args.renderer,
@@ -508,7 +516,7 @@ fn produce(
 }
 
 pub fn build(args: &BuildArgs) -> Result<String> {
-    require_backend(args.renderer, args.soundfont, args.profile)?;
+    let backend = require_backend(args.renderer, args.soundfont, args.orchestration)?;
     let ext = args
         .output
         .extension()
@@ -524,34 +532,36 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     let scene = schema::load_scene(args.scene)?;
     let meta_path = args.output.with_extension("meta.json");
 
-    // Resolve every track's instrument against what the backend can actually
-    // serve — before anything is staged, so an unresolved instrument aborts
-    // with no partial artifacts. SF2 General MIDI backends carry every
-    // instrument (resolution is trivially exact); sfizz availability is the
-    // renderer profile's mapping table.
-    let available = match require_backend(args.renderer, args.soundfont, args.profile)? {
-        Backend::Sfizz { profile } => Some(crate::resolver::available_from_profile(
-            &crate::profile::load_profile(profile)?,
-        )),
+    // Load and resolve orchestration before staging anything. Each track gets
+    // only its palette's availability, so fallback cannot cross sound identities.
+    let loaded_orchestration = match backend {
+        Backend::Sfizz { orchestration } => Some(crate::orchestration::load(orchestration)?),
         Backend::Sf2 { .. } => None,
     };
-    let resolution =
-        crate::resolver::resolve_scene(&scene, None, available.as_ref(), args.fallback, false);
+    let resolution = match &loaded_orchestration {
+        Some(orchestration) => orchestration.resolve_scene(&scene, None, args.fallback, false)?,
+        None => crate::resolver::resolve_scene(&scene, None, None, args.fallback, false),
+    };
     if let Some(err) = resolution.to_error(&args.scene.display().to_string()) {
         return Err(err);
     }
     for line in resolution.warn_lines() {
         eprintln!("{line}");
     }
-    let targets: Vec<Option<schema::Instrument>> = resolution
+    let targets: Vec<TrackRenderTarget> = resolution
         .tracks
         .iter()
-        .map(crate::resolver::Resolution::target)
+        .map(|track| TrackRenderTarget {
+            sfz: track.sfz_path().map(Path::to_path_buf),
+        })
         .collect();
 
     if scene.sections.is_empty() {
         let mut entry = build_one(args, &scene, args.output, &ext, false, &targets)?;
         entry["instrument_resolution"] = resolution.to_json();
+        if let Some(orchestration) = &loaded_orchestration {
+            entry["orchestration"] = orchestration.to_json();
+        }
         let meta_bytes = serde_json::to_vec_pretty(&entry).expect("meta serializes");
         tools::write_atomic(&meta_path, &meta_bytes)?;
         return Ok(format!(
@@ -595,13 +605,13 @@ pub fn build(args: &BuildArgs) -> Result<String> {
     let mut cuts: Vec<PathBuf> = Vec::new();
     for section in &scene.sections {
         let derived = scene.for_section(section);
-        // `for_section` drops muted tracks by original index; the resolution
+        // `for_section` drops muted tracks by stable ID; the resolution
         // targets must be filtered identically to stay index-aligned.
-        let section_targets: Vec<Option<schema::Instrument>> = targets
+        let section_targets: Vec<TrackRenderTarget> = targets
             .iter()
             .enumerate()
-            .filter(|(i, _)| !section.mute.contains(i))
-            .map(|(_, t)| *t)
+            .filter(|(i, _)| !section.mute.contains(&scene.tracks[*i].id))
+            .map(|(_, target)| target.clone())
             .collect();
         let output = staged_output.with_file_name(format!("{stem}-{}.{ext}", section.name));
         // WAV sections are already sample-exact cuts; OGG sections keep
@@ -643,7 +653,7 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         .iter()
         .map(|entry| entry["total_samples"].as_u64().unwrap_or(0))
         .sum();
-    let manifest = json!({
+    let mut manifest = json!({
         "title": scene.title,
         "story": scene.story,
         "suite": true,
@@ -658,6 +668,9 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         "instrument_resolution": resolution.to_json(),
         "sections": entries,
     });
+    if let Some(orchestration) = &loaded_orchestration {
+        manifest["orchestration"] = orchestration.to_json();
+    }
     let meta_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serializes");
     let staged_meta = staged_output.with_extension("meta.json");
     tools::write_atomic(&staged_meta, &meta_bytes)?;
@@ -684,7 +697,7 @@ fn build_one(
     output: &Path,
     ext: &str,
     keep_cut: bool,
-    targets: &[Option<schema::Instrument>],
+    targets: &[TrackRenderTarget],
 ) -> Result<serde_json::Value> {
     let one_pass = composer::compose(scene);
     let loop_samples = midi::exact_samples(one_pass.total_ticks, scene.tempo, args.sample_rate);
@@ -742,20 +755,12 @@ fn build_one(
         None
     };
 
-    match require_backend(args.renderer, args.soundfont, args.profile)? {
-        Backend::Sfizz {
-            profile: profile_path,
-        } => {
+    match require_backend(args.renderer, args.soundfont, args.orchestration)? {
+        Backend::Sfizz { .. } => {
             // sfizz_render only ever plays one instrument: render every track
             // solo (the same per-track pass `--stems` needs anyway), then mix
             // them in-process into the full-mix raw. "Sum of stems == full mix"
             // therefore holds by construction, same as the SF2 backends.
-            let profile = crate::profile::load_profile(profile_path)?;
-            let profile_dir = profile_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-
             let staging = output.with_extension(format!("sfizz.tmp-{}", std::process::id()));
             std::fs::create_dir_all(&staging).map_err(|e| Error::Io {
                 path: staging.display().to_string(),
@@ -781,16 +786,18 @@ fn build_one(
 
             let mut track_raws: Vec<PathBuf> = Vec::with_capacity(scene.tracks.len());
             for (i, track) in scene.tracks.iter().enumerate() {
-                // The resolver may have substituted an available instrument
-                // for the requested one; the .sfz lookup uses the target,
-                // while MIDI bytes and stem names keep the requested
-                // instrument (determinism against the scene as written).
-                let target = targets
+                let sfz = targets
                     .get(i)
-                    .copied()
-                    .flatten()
-                    .unwrap_or(track.instrument);
-                let sfz = profile.resolve(&profile_dir, target, track.articulation)?;
+                    .and_then(|target| target.sfz.as_deref())
+                    .ok_or_else(|| {
+                        validation(
+                            &format!("tracks[{i}].palette"),
+                            format!(
+                                "track `{}` has no resolved SFZ patch in the orchestration",
+                                track.id
+                            ),
+                        )
+                    })?;
                 let mid_i = staging.join(format!("{:02}.mid", i + 1));
                 let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
                 tools::write_atomic(
@@ -801,7 +808,7 @@ fn build_one(
                 // -A), so gain is applied here in-process instead — on each
                 // track individually, so stems and the mixed-down full track
                 // carry the same gain and still sum correctly.
-                tools::render_sfz(&mid_i, &sfz, &raw_i, args.sample_rate, limits)?;
+                tools::render_sfz(&mid_i, sfz, &raw_i, args.sample_rate, limits)?;
                 let raw_i_gain = staging.join(format!("{:02}.gain.wav", i + 1));
                 audio::mix(std::slice::from_ref(&raw_i), &raw_i_gain, args.gain)?;
                 track_raws.push(raw_i_gain);
@@ -811,7 +818,7 @@ fn build_one(
             if args.stems {
                 let stems_staging = stems_staging.as_ref().expect("created when --stems");
                 for (i, track) in scene.tracks.iter().enumerate() {
-                    let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
+                    let name = format!("{:02}-{}.{ext}", i + 1, track.id);
                     produce(
                         &track_raws[i],
                         &stems_staging.join(&name),
@@ -844,7 +851,7 @@ fn build_one(
             if args.stems {
                 let staging = stems_staging.as_ref().expect("created when --stems");
                 for (i, track) in scene.tracks.iter().enumerate() {
-                    let name = format!("{:02}-{}.{ext}", i + 1, instrument_name(track));
+                    let name = format!("{:02}-{}.{ext}", i + 1, track.id);
                     let mid_i = staging.join(format!("{:02}.mid", i + 1));
                     let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
                     tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
@@ -954,7 +961,10 @@ fn build_one(
         "audio": audio_name,
         "stems": stem_rel,
         "tracks": scene.tracks.iter().map(|t| json!({
+            "id": t.id,
+            "palette": t.palette,
             "instrument": instrument_name(t),
+            "articulation": t.articulation,
             "pattern": serde_json::to_value(t.pattern).unwrap_or(json!(null)),
             "intensity": t.intensity,
         })).collect::<Vec<_>>(),

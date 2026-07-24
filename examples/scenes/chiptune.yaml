@@ -35,16 +35,20 @@ motifs:
     - { degree: 1, beats: 1 }
 
 tracks:
-  - instrument: square_lead # 0: the classic NES voice
+  - id: lead
+    instrument: square_lead # the classic NES voice
     pattern: melody
     motif: hook
     intensity: 0.7
-  - instrument: saw_lead # 1: chirpy eighth-note motion
+  - id: motion
+    instrument: saw_lead # chirpy eighth-note motion
     pattern: arpeggio
     intensity: 0.45
-  - instrument: synth_bass # 2: driving low end
+  - id: foundation
+    instrument: synth_bass # driving low end
     pattern: bass
     intensity: 0.7
-  - instrument: drums # 3: straight uptempo groove
+  - id: pulse
+    instrument: drums # straight uptempo groove
     pattern: drums
     intensity: 0.65

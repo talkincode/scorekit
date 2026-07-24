@@ -4,8 +4,8 @@
 //! `instrument` + `articulation` vocabulary to concrete `.sfz` sample files
 //! on this machine. Scene YAML never names a sample library path directly —
 //! that would tie a scene to one person's disk layout and defeat the DSL's
-//! whole reason to be diff-friendly, portable text. Swap sound sources by
-//! swapping `--profile`, not by editing scenes.
+//! whole reason to be diff-friendly, portable text. Orchestration profiles
+//! bind logical scene palettes to these leaf profiles at build time.
 
 use crate::error::{Error, Location, Result};
 use crate::schema::{
@@ -46,6 +46,12 @@ pub struct Profile {
 pub struct ResolvedMapping {
     pub instrument: Instrument,
     pub instrument_key: String,
+    pub articulation_key: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedPatch {
     pub articulation_key: String,
     pub path: PathBuf,
 }
@@ -140,12 +146,26 @@ impl Profile {
     /// Resolve one track's instrument+articulation to an absolute `.sfz`
     /// path. Falls back to the instrument's `sustain` mapping when the
     /// requested articulation has no dedicated sample.
+    #[cfg(test)]
     pub fn resolve(
         &self,
         profile_dir: &Path,
         instrument: Instrument,
         articulation: Articulation,
     ) -> Result<PathBuf> {
+        Ok(self
+            .resolve_patch(profile_dir, instrument, articulation)?
+            .path)
+    }
+
+    /// Resolve one patch and retain the effective articulation after the
+    /// profile's explicit sustain fallback.
+    pub fn resolve_patch(
+        &self,
+        profile_dir: &Path,
+        instrument: Instrument,
+        articulation: Articulation,
+    ) -> Result<ResolvedPatch> {
         let ikey = instrument_key(instrument);
         let arts = self
             .instruments
@@ -160,11 +180,14 @@ impl Profile {
         let akey = articulation_key(articulation);
         // `validate()` guarantees `sustain` exists, so this unwrap is safe
         // for any profile that passed `load_profile`.
-        let rel = arts
-            .get(&akey)
-            .or_else(|| arts.get("sustain"))
+        let (articulation_key, rel) = arts
+            .get_key_value(&akey)
+            .or_else(|| arts.get_key_value("sustain"))
             .expect("validate() guarantees a sustain fallback");
-        Ok(self.resolved_root(profile_dir).join(rel))
+        Ok(ResolvedPatch {
+            articulation_key: articulation_key.clone(),
+            path: self.resolved_root(profile_dir).join(rel),
+        })
     }
 
     /// Resolve every mapping explicitly declared in this profile. Validation

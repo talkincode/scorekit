@@ -18,8 +18,9 @@ The corpus follows the anti-homogenization program in
 (section "Sound library & orchestration program"). The load-bearing rules:
 
 1. **Versioned identity.** A library enters the corpus only with a
-   publisher/version (or commit) identity, a license record, and an archive
-   checksum. Unversioned downloads are candidate material, not coverage.
+   publisher/version (or commit) identity, a license record, and checksums.
+   Downloads retain archive checksums; first-party generated libraries retain
+   per-file `SHA256SUMS`, the pinned recipe, and generator provenance.
 2. **Certification before use.** A profile mapping counts as coverage only
    after `scorekit profile check` passes it: rendered twice, deterministic,
    non-silent, golden `render_sha256` recorded.
@@ -30,9 +31,12 @@ The corpus follows the anti-homogenization program in
 4. **Additive mappings.** New libraries add mappings; they never silently
    rebind existing instruments to a different timbre. Rebinding is an
    audible style change and must be an explicit, reviewed edit.
-5. **Only clean licenses.** CC0, CC-BY, GPL-with-sampling-exception, and
-   similar. No `NC`/`ND` variants, no "converted from a commercial
-   SoundFont" material, no per-file-unclear collections.
+5. **License evidence stays literal.** CC0, CC-BY,
+   GPL-with-sampling-exception, and similar are preferred. No `NC`/`ND`
+   variants and no commercial-SoundFont conversions. A public-domain
+   declaration with an incomplete original sample chain can be accepted only
+   when the declaration, missing evidence, and decision are permanently
+   disclosed; it must never be relabelled CC0.
 
 ## Directory contract
 
@@ -46,7 +50,8 @@ The corpus follows the anti-homogenization program in
     libraries/<lib>.yaml            # one manifest per library (identity, path, formats, license)
     patches/                        # diffs for locally repaired upstream files
   profiles/
-    renderers/<name>.yaml           # scorekit renderer profiles (instrument -> .sfz)
+    renderers/<name>.yaml           # scorekit leaf renderer profiles (instrument -> .sfz)
+    orchestrations/<name>.yaml      # scorekit orchestration profiles (palette -> renderers/<name>.yaml)
     textures/<name>.yaml            # scorekit texture profiles (source name -> audio file)
   sf2/                              # SF2 soundfonts (GM tier)
   catalog/                          # generated inventory + stored certification reports
@@ -56,7 +61,9 @@ The corpus follows the anti-homogenization program in
 Two invariants keep the corpus auditable:
 
 - `manifests/sources.tsv` is the append-only acquisition ledger — one line
-  per archive with its official source URL.
+  per downloaded archive with its official source URL. First-party generated
+  libraries instead carry their recipe and `generator.json` in the versioned
+  library directory.
 - `shasum -a 256 -c archive-sha256sums` (run inside `manifests/`) must
   always pass; the certified `profile check --json` report stored under
   `catalog/` doubles as a golden-render baseline for every patch.
@@ -112,9 +119,31 @@ CC0-1.0 unless noted.
 | Library | Version | License | Channel |
 |---|---|---|---|
 | SamsterBirdies Pan Flute | commit `60d4974` | CC0-1.0 | `github.com/SamsterBirdies/panflute` |
+| GM LightCool Fretless Bass | artifact 5323 | Public-Domain-Claimed; original Freesound rights chain undisclosed | `musical-artifacts.com/artifacts/5323` |
+| NeoSoundFonts BMS Pull Slap Bass | commit `d03fc7e` | CC0-1.0 | `github.com/NeoSoundFonts/SP-BMS-Slap-Pull` |
 
-This library ships with a defective SFZ (see next section) — repair it
-before mapping.
+The pan flute ships with a defective SFZ (see next section) — repair it before
+mapping. The two bass sources ship as SF2. Preserve each original, export with
+the pinned Polyphone release, audit paired opcodes and non-silent WAV files,
+retain raw and normalized SFZ checksums, then certify the normalized mapping.
+Artifact 5323's metadata says only that its samples came from Freesound; it
+does not identify those files or their original licenses. Its manifest and
+`SOURCE-DECLARATION.md` therefore keep that limitation visible.
+
+### First-party synthesized (scoredata-forge)
+
+| Library | Version | License | Rebuild source |
+|---|---|---|---|
+| ScoreData Music Box | 1.0.0 | CC0-1.0 | `scoredata-forge/recipes/music-box.toml` |
+| ScoreData Whistle | 1.0.0 | CC0-1.0 | `scoredata-forge/recipes/whistle.toml` |
+
+These two ordinary WAV+SFZ libraries close gaps for structurally simple
+timbres without putting synthesis inside scorekit. Build and verify them in
+the separate `scoredata-forge` repository; install the full versioned output
+directory so `recipe.toml`, `generator.json`, `SHA256SUMS`, and the CC0
+dedication remain with the samples. The producing platform proves a
+byte-identical rebuild with `forge verify`; the installed consumer boundary
+is independently gated by `scorekit profile check`.
 
 ### Textures
 
@@ -122,7 +151,7 @@ The reference texture profile draws ambience/sound-design sources from
 libraries already in the corpus (VCSL ocean drum, wind chimes, bowed brake
 drum, wine glasses; VSCO 2 CE "Miscellania" ambiences) — no additional
 downloads. Texture profiles use the same portable-name-to-local-path model
-as renderer profiles; see [SFZ Renderer Profiles](profiles.md).
+as renderer profiles; see [Orchestration and Renderer Profiles](profiles.md).
 
 ## Repairing defective upstream files
 
@@ -157,7 +186,7 @@ silently substituting a different sound.
 ## Certification workflow
 
 After placing libraries, write a renderer profile mapping scorekit
-instrument names to `.sfz` paths (see [SFZ Renderer
+instrument names to `.sfz` paths (see [Orchestration and Renderer
 Profiles](profiles.md)), then:
 
 ```bash
@@ -175,16 +204,16 @@ Each passing patch reports a `render_sha256`; diffing two stored reports
 pinpoints exactly which patches changed after a library or tool upgrade. A
 failing comparison is retried once in isolation with diagnostics recorded
 (`load_sensitive_flake`) so a loaded machine does not produce false
-nondeterminism verdicts — see [SFZ Renderer Profiles](profiles.md).
+nondeterminism verdicts — see [Orchestration and Renderer Profiles](profiles.md).
 
-The corpus currently certifies **four renderer profiles — 235 mappings
-over 173 unique patches, 0 failures**:
+The corpus currently certifies **four renderer profiles — 239 mappings
+over 177 unique patches, 0 failures**:
 
-- `scoredata-open` — broad reference: 101 mappings / 85 patches, covering
-  56 of the 60 DSL instruments (the remaining gaps — `fretless_bass`,
-  `music_box`, `slap_bass`, `whistle` — have no license-clean open source
-  yet and are deliberately left unmapped rather than faked with
-  substitutes; the GM SF2 tier still resolves them).
+- `scoredata-open` — broad reference: 105 mappings / 89 patches, covering
+  all 60 DSL instruments. First-party CC0 music-box and whistle libraries
+  cover the structurally simple timbres; the declared-public-domain fretless
+  and NeoSoundFonts CC0 pull/slap libraries cover the technique-specific
+  basses. The sample tier and GM SF2 tier now both resolve 60/60.
 - `scoredata-chamber` — one player per part: VPO SOLO strings/winds/brass,
   VSCO 2 CE upright piano and quiet organ, VCSL harpsichord and recorder
   (49 / 42). No percussion, drums, synths or ensemble patches — deliberate
@@ -197,13 +226,17 @@ over 173 unique patches, 0 failures**:
   The acoustic orchestra is intentionally absent.
 
 The chamber/symphonic pair doubles as the documented solo-vs-section
-variant pair: same score, audibly different orchestration identity.
+variant pair: same score, audibly different orchestration identity. Binding
+both under one orchestration profile (e.g. `solo: scoredata-chamber`,
+`ensemble: scoredata-symphonic`) lets a single scene layer a soloist over a
+section without ever naming a local path — see [Orchestration and Renderer
+Profiles](profiles.md).
 
 ## Minimal rebuild walkthrough
 
 ```bash
 ROOT=/path/to/my-sound-corpus
-mkdir -p $ROOT/{libraries,archives,manifests/{libraries,patches},profiles/renderers,catalog/reports,incoming}
+mkdir -p $ROOT/{libraries,archives,manifests/{libraries,patches},profiles/{renderers,orchestrations},catalog/reports,incoming}
 
 # For each library in the tables above:
 #   1. download the pinned version/commit from its channel into incoming/
@@ -217,9 +250,21 @@ mkdir -p $ROOT/{libraries,archives,manifests/{libraries,patches},profiles/render
 # Write a renderer profile over the extracted .sfz files, then certify:
 scorekit profile check $ROOT/profiles/renderers/my-profile.yaml
 
+# Wire it into an orchestration profile (palette -> renderer profile):
+cat > $ROOT/profiles/orchestrations/my-orchestration.yaml <<'EOF'
+schema_version: 1
+name: my-orchestration
+default_palette: main
+palettes:
+  main:
+    profile: ../renderers/my-profile.yaml
+EOF
+scorekit orchestration check $ROOT/profiles/orchestrations/my-orchestration.yaml
+
 # Point scorekit at the corpus:
 export SCOREKIT_SOUND_LIBRARY_DIR=$ROOT
-scorekit build scene.yaml --renderer sfizz --profile $ROOT/profiles/renderers/my-profile.yaml -o out.ogg
+scorekit build scene.yaml --renderer sfizz \
+    --orchestration $ROOT/profiles/orchestrations/my-orchestration.yaml -o out.ogg
 ```
 
 A rebuilt corpus will not be byte-identical to the reference one (different

@@ -141,9 +141,9 @@ motifs:
 tracks:
   # scoredata-open has no `voice` mapping; violin preserves the exposed,
   # lyrical lead role while remaining supported by the renderer profile.
-  - { instrument: violin, pattern: melody, motif: voice_line, intensity: 0.8 }
-  - { instrument: cello, pattern: melody, motif: cello_answer, intensity: 0.55 }
-  - { instrument: violin, pattern: melody, motif: violin_far, intensity: 0.32 }
-  - { instrument: slow_strings, pattern: melody, motif: strings_wide, intensity: 0.6 }
-  - { instrument: harp, pattern: melody, motif: harp_last, intensity: 0.42 }
-  - { instrument: choir_pad, pattern: sustain, intensity: 0.16 } # constant far wind
+  - { id: voice, instrument: violin, pattern: melody, motif: voice_line, intensity: 0.8 }
+  - { id: answer, instrument: cello, pattern: melody, motif: cello_answer, intensity: 0.55 }
+  - { id: distant_violin, instrument: violin, pattern: melody, motif: violin_far, intensity: 0.32 }
+  - { id: wide_strings, instrument: slow_strings, pattern: melody, motif: strings_wide, intensity: 0.6 }
+  - { id: final_harp, instrument: harp, pattern: melody, motif: harp_last, intensity: 0.42 }
+  - { id: wind, instrument: choir_pad, pattern: sustain, intensity: 0.16 } # constant far wind

@@ -10,7 +10,7 @@ The machine interface follows semantic versioning. Within a major version, the f
 - The scene DSL itself, specified normatively in [Scene Protocol](scene-protocol.md) — field semantics, additive-only evolution, and byte-identical compilation for existing scenes.
 - Exit codes: `0` success · `1` I/O failure · `2` invalid input · `3` missing dependency · `4` external tool failure.
 - The `--json` error object shape on stderr (below).
-- The JSON Schemas exported by `scorekit schema`, `schema --grammar`, `schema --profile`, `schema --texture-profile`, and `schema --resolver` (fields are added, not removed or repurposed).
+- The JSON Schemas exported by `scorekit schema`, `schema --grammar`, `schema --profile`, `schema --orchestration`, `schema --texture-profile`, and `schema --resolver` (fields are added, not removed or repurposed).
 - The `meta.json` / `report.json` artifact fields.
 
 Determinism boundary: the same scene + same sound source + same tool versions produces byte-identical MIDI, and audio identical within documented tolerances. Reproducibility across *different* FluidSynth/FFmpeg versions is explicitly **not** promised — pin your toolchain (e.g. in a container image) if you need cross-machine identical audio.
@@ -82,7 +82,7 @@ For the common case you don't need to write the wrapper at all:
 scorekit mcp        # MCP over stdio (newline-delimited JSON-RPC 2.0)
 ```
 
-`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, and `diff` as MCP tools. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers.
+`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, and `diff` as MCP tools. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers. The `build` and `inspect_instruments` tools take `orchestration` (the sfizz routing input) instead of the retired per-build `profile` argument.
 
 Example client registration (Claude Desktop / any MCP client):
 

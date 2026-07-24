@@ -155,18 +155,22 @@ mod tests {
 
     #[test]
     fn identical_scenes_diff_empty() {
-        let a =
-            scene("tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n");
-        let b = scene("bars: 2\ntempo: 100\ntracks:\n  - {instrument: piano, pattern: sustain}\n");
+        let a = scene(
+            "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
+        );
+        let b = scene(
+            "bars: 2\ntempo: 100\ntracks:\n  - {id: piano, instrument: piano, pattern: sustain}\n",
+        );
         assert!(scenes(&a, &b).is_empty());
     }
 
     #[test]
     fn tempo_and_track_changes_are_reported() {
-        let a =
-            scene("tempo: 100\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n");
+        let a = scene(
+            "tempo: 100\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
+        );
         let b = scene(
-            "tempo: 120\nbars: 2\ntracks:\n  - instrument: piano\n    pattern: sustain\n    intensity: 0.9\n  - instrument: drums\n    pattern: drums\n",
+            "tempo: 120\nbars: 2\ntracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n    intensity: 0.9\n  - id: drums\n    instrument: drums\n    pattern: drums\n",
         );
         let d = scenes(&a, &b);
         let lines: Vec<String> = d.iter().map(Change::porcelain).collect();

@@ -62,25 +62,31 @@ time_signature: "4/4"
 bars: 8
 loop: true
 tracks:
-  - instrument: strings
+  - id: harmony
+    instrument: strings
     pattern: sustain
     intensity: 0.4
-  - instrument: piano
+  - id: motion
+    instrument: piano
     pattern: arpeggio
     intensity: 0.55
-  - instrument: bass
+  - id: foundation
+    instrument: bass
     pattern: bass
     intensity: 0.45
-  - instrument: drums
+  - id: pulse
+    instrument: drums
     pattern: drums
     intensity: 0.3
 ```
+
+Every track needs a stable `id` (used by stems, `mute`, `--solo`, and `meta.json`).
 
 ```bash
 scorekit build forest.yaml -o forest.ogg --stems
 ```
 
-Output: `forest.ogg` (loops seamlessly), `forest.stems/01-strings.ogg … 04-drums.ogg`, and `forest.meta.json`. That's the whole workflow.
+Output: `forest.ogg` (loops seamlessly), `forest.stems/01-harmony.ogg … 04-pulse.ogg`, and `forest.meta.json`. That's the whole workflow.
 
 Want a full scene set? Put `sections:` in one file and get `forest-intro.ogg`, `forest-explore.ogg`, `forest-combat.ogg`, `forest-victory.ogg` — all built on the same motifs — plus `forest.ogg`, the main playback file with every section concatenated in order. See [forest_suite.yaml](examples/scenes/forest_suite.yaml).
 
@@ -169,14 +175,25 @@ Violations report measured values, so an Agent can fix the scene directly. Great
 
 ## Real instruments (SFZ sample libraries)
 
-The default SoundFont covers sketching; for release-quality audio, switch the renderer to [sfizz](https://sfz.tools/sfizz/) and a free sample library like [VSCO 2 Community Edition](https://vis.versilstudios.com/vsco-community.html) (CC0):
+The default SoundFont covers sketching; for release-quality audio, switch the renderer to [sfizz](https://sfz.tools/sfizz/) and a free sample library like [VSCO 2 Community Edition](https://vis.versilstudios.com/vsco-community.html) (CC0). Sfizz builds are routed by an **orchestration profile** — a small YAML that maps logical palettes to certified renderer profiles:
 
-```bash
-scorekit build elegy.yaml --renderer sfizz \
-    --profile examples/profiles/vsco2-ce.yaml -o elegy.ogg --stems
+```yaml
+# orchestration.yaml
+schema_version: 1
+name: vsco2-ce
+default_palette: ensemble
+palettes:
+  ensemble:
+    profile: examples/profiles/vsco2-ce.yaml
 ```
 
-Your scene stays portable — it says `instrument: violin`, and a *renderer profile* (a separate file, per machine) maps that to real `.sfz` sample files. See the [profiles manual](https://talkincode.github.io/scorekit/profiles.html).
+```bash
+scorekit orchestration check orchestration.yaml
+scorekit build elegy.yaml --renderer sfizz \
+    --orchestration orchestration.yaml -o elegy.ogg --stems
+```
+
+Your scene stays portable — it says `instrument: violin`, and each track's optional `palette` (defaulting to `default_palette` when omitted) picks which renderer profile in the orchestration resolves it to real `.sfz` sample files. A scene can layer palettes explicitly (e.g. one track pinned to a `solo` palette next to section tracks on `ensemble`) to get a soloist over a section without ever naming a local path. See the [profiles manual](https://talkincode.github.io/scorekit/profiles.html).
 
 ## Style gallery
 
@@ -191,6 +208,10 @@ scorekit batch examples/scenes/*.yaml --out-dir out/
 The technical manual lives at **[talkincode.github.io/scorekit](https://talkincode.github.io/scorekit/)**: [command reference](https://talkincode.github.io/scorekit/commands.html), [rendering & dependencies](https://talkincode.github.io/scorekit/rendering.html), [architecture & guarantees](https://talkincode.github.io/scorekit/architecture.html), and the [machine interface](https://talkincode.github.io/scorekit/machine-interface.html) — the stable contract (exit codes, `--json` errors, schemas, the `scorekit mcp` stdio server) for building integrations on top of the CLI. A pinned [`Dockerfile`](Dockerfile) ships the exact FluidSynth/FFmpeg/SoundFont toolchain for cloud and CI use — published multi-arch on every release as [`talkincode/scorekit`](https://hub.docker.com/r/talkincode/scorekit) (Docker Hub) and `ghcr.io/talkincode/scorekit` (GHCR).
 
 Project profile, non-goals (iron rules), roadmap, and the acceptance matrix binding every tier-1 feature to E2E tests: [docs/roadmap.md](docs/roadmap.md). Contributor hard rules: [AGENTS.md](AGENTS.md).
+
+### Multi-repo workspace
+
+scorekit is the hub of a small constellation — [scorebench](https://github.com/talkincode/scorebench) (workbench), [scorebench-samples](https://github.com/talkincode/scorebench-samples) (sample corpus), [scoredata-forge](https://github.com/talkincode/scoredata-forge) (CC0 sample foundry), and the local `ScoreData` sound-source inventory. The committed map of that constellation is [`scorekit-workspace.json`](scorekit-workspace.json); machine-specific paths go in `scorekit-workspace.local.json` (gitignored) next to it. `python3 scripts/workspace.py doctor` checks the layout on your machine (default convention: sibling directories) and prints clone/provisioning hints; `python3 scripts/workspace.py gen` deterministically regenerates the shared `scorekit.code-workspace` and an env fragment exporting `SCOREKIT_SOUND_LIBRARY_DIR` at the workspace root. This is developer tooling only — the scorekit CLI never reads these files.
 
 ## License
 

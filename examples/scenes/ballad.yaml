@@ -24,16 +24,20 @@ motifs:
     - { degree: 2, beats: 3 }
 
 tracks:
-  - instrument: cello # 0: the singing voice
+  - id: lead
+    instrument: cello # the singing voice
     pattern: melody
     motif: song
     intensity: 0.6
-  - instrument: piano # 1: waltzing broken chords
+  - id: motion
+    instrument: piano # waltzing broken chords
     pattern: arpeggio
     intensity: 0.5
-  - instrument: slow_strings # 2: soft cushion
+  - id: harmony
+    instrument: slow_strings # soft cushion
     pattern: sustain
     intensity: 0.35
-  - instrument: contrabass # 3: quiet floor
+  - id: foundation
+    instrument: contrabass # quiet floor
     pattern: bass
     intensity: 0.3

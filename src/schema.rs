@@ -103,6 +103,14 @@ fn default_texture_gain() -> f32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
+    /// Stable scene-local identity used by routing, sections, stems and metadata.
+    #[schemars(regex(pattern = "^[a-z][a-z0-9_-]{0,63}$"))]
+    pub id: String,
+    /// Logical orchestration palette. Absent uses the orchestration's default.
+    /// Routing metadata only: it never changes compiled MIDI.
+    #[serde(default)]
+    #[schemars(regex(pattern = "^[a-z][a-z0-9_-]{0,63}$"))]
+    pub palette: Option<String>,
     /// General MIDI instrument name, or `drums` for the percussion channel.
     pub instrument: Instrument,
     /// What this track plays. `drums` pattern pairs only with the `drums` instrument.
@@ -114,9 +122,9 @@ pub struct Track {
     #[serde(default = "default_intensity")]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub intensity: f32,
-    /// Playing technique used to pick samples when rendering through an SFZ
-    /// renderer profile (`--renderer sfizz`). Does not change the compiled
-    /// MIDI; SF2 backends ignore it. Default: sustain.
+    /// Playing technique used to pick samples from the leaf renderer profile
+    /// selected by `--orchestration` (`--renderer sfizz`). Does not change the
+    /// compiled MIDI; SF2 backends ignore it. Default: sustain.
     #[serde(default)]
     pub articulation: Articulation,
     /// Stereo position 0.0 (hard left)..=1.0 (hard right), 0.5 = center.
@@ -142,9 +150,9 @@ pub struct Track {
     pub glide: Option<f32>,
 }
 
-/// Playing technique; selects which SFZ file a renderer profile maps the
-/// track to. Purely a sample-selection hint — compiled MIDI is identical
-/// across articulations.
+/// Playing technique; selects which SFZ file the track's orchestration palette
+/// maps to. Purely a sample-selection hint — compiled MIDI is identical across
+/// articulations.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema, Default,
 )]
@@ -196,9 +204,9 @@ pub struct Section {
     #[serde(default)]
     #[schemars(range(min = 20, max = 300))]
     pub tempo: Option<u16>,
-    /// 0-based indices of tracks silenced in this section.
+    /// Stable IDs of tracks silenced in this section.
     #[serde(default)]
-    pub mute: Vec<usize>,
+    pub mute: Vec<String>,
     /// Multiplier applied to every track's intensity. Range: 0.0..=2.0. Default: 1.
     #[serde(default = "default_section_intensity")]
     #[schemars(range(min = 0.0, max = 2.0))]
@@ -634,7 +642,7 @@ impl Scene {
         };
         let has_loop_section = self.r#loop || self.sections.iter().any(|s| s.r#loop);
         for (i, texture) in self.textures.iter().enumerate() {
-            if !crate::texture::valid_source_name(&texture.source) {
+            if !crate::texture::valid_logical_name(&texture.source) {
                 return fail(
                     &format!("textures[{i}].source"),
                     format!(
@@ -736,7 +744,33 @@ impl Scene {
         if drums > 1 {
             return fail("tracks", "at most one drums track is supported".to_owned());
         }
+        let mut track_ids = std::collections::BTreeSet::new();
         for (i, t) in self.tracks.iter().enumerate() {
+            if !crate::texture::valid_logical_name(&t.id) {
+                return fail(
+                    &format!("tracks[{i}].id"),
+                    format!(
+                        "`{}` must match [a-z][a-z0-9_-]{{0,63}} (stable track identity)",
+                        t.id
+                    ),
+                );
+            }
+            if !track_ids.insert(t.id.as_str()) {
+                return fail(
+                    &format!("tracks[{i}].id"),
+                    format!("duplicate track id `{}`", t.id),
+                );
+            }
+            if let Some(palette) = &t.palette
+                && !crate::texture::valid_logical_name(palette)
+            {
+                return fail(
+                    &format!("tracks[{i}].palette"),
+                    format!(
+                        "`{palette}` must match [a-z][a-z0-9_-]{{0,63}} (logical palette name)"
+                    ),
+                );
+            }
             if !(0.0..=1.0).contains(&t.intensity) {
                 return fail(
                     &format!("tracks[{i}].intensity"),
@@ -910,14 +944,15 @@ impl Scene {
                     format!("{} out of range 0.0..=2.0", s.intensity),
                 );
             }
-            let muted: std::collections::BTreeSet<usize> = s.mute.iter().copied().collect();
-            for (j, &m) in s.mute.iter().enumerate() {
-                if m >= self.tracks.len() {
+            let muted: std::collections::BTreeSet<&str> =
+                s.mute.iter().map(String::as_str).collect();
+            for (j, m) in s.mute.iter().enumerate() {
+                if !track_ids.contains(m.as_str()) {
                     return fail(
                         &format!("sections[{i}].mute[{j}]"),
                         format!(
-                            "track index {m} out of range (scene has {})",
-                            self.tracks.len()
+                            "unknown track id `{m}` (defined: {:?})",
+                            self.tracks.iter().map(|t| &t.id).collect::<Vec<_>>()
                         ),
                     );
                 }
@@ -947,9 +982,8 @@ impl Scene {
         derived.tracks = self
             .tracks
             .iter()
-            .enumerate()
-            .filter(|(i, _)| !section.mute.contains(i))
-            .map(|(_, t)| {
+            .filter(|t| !section.mute.contains(&t.id))
+            .map(|t| {
                 let mut t = t.clone();
                 t.intensity = (t.intensity * section.intensity).clamp(0.0, 1.0);
                 t

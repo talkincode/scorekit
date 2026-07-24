@@ -29,16 +29,20 @@ motifs:
     - { degree: 0, beats: 1 } # breath before the phrase returns
 
 tracks:
-  - instrument: violin # 0: the lone voice
+  - id: lead
+    instrument: violin # the lone voice
     pattern: melody
     motif: lament
     intensity: 0.65
-  - instrument: harp # 1: sparse consolation
+  - id: motion
+    instrument: harp # sparse consolation
     pattern: arpeggio
     intensity: 0.3
-  - instrument: slow_strings # 2: barely-there bed
+  - id: harmony
+    instrument: slow_strings # barely-there bed
     pattern: sustain
     intensity: 0.35
-  - instrument: cello # 3: dark floor
+  - id: foundation
+    instrument: cello # dark floor
     pattern: bass
     intensity: 0.35

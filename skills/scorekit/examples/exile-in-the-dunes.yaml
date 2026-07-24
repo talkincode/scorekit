@@ -46,7 +46,7 @@ motifs:
     - { degree: 2, beats: 8 }
 
 tracks:
-  - { instrument: violin, pattern: melody, motif: exile_arc, intensity: 0.58 }
-  - { instrument: harp, pattern: arpeggio, intensity: 0.18 }
-  - { instrument: slow_strings, pattern: sustain, intensity: 0.16 }
-  - { instrument: cello, pattern: bass, intensity: 0.2 }
+  - { id: exile, instrument: violin, pattern: melody, motif: exile_arc, intensity: 0.58 }
+  - { id: motion, instrument: harp, pattern: arpeggio, intensity: 0.18 }
+  - { id: horizon, instrument: slow_strings, pattern: sustain, intensity: 0.16 }
+  - { id: foundation, instrument: cello, pattern: bass, intensity: 0.2 }

@@ -40,7 +40,8 @@ external tool; `scorekit --json doctor` returns the complete dependency and
 platform report, including architecture-specific installation help.
 The default user-managed sound root is `~/.local/share/scorekit/sounds/`
 (`sf2/`, `sfz/`, `profiles/`). FluidSynth and TiMidity use
-`sf2/MuseScore_General.sf2` by default; sfizz requires an explicit `--profile`.
+`sf2/MuseScore_General.sf2` by default; sfizz requires an explicit
+`--orchestration` profile (see below).
 Override the install location with `SCOREKIT_SOUND_LIBRARY_DIR`.
 The default SF2 is `sf2/MuseScore_General.sf2`; omit `--soundfont` to use it,
 or pass an explicit file to override it.
@@ -49,8 +50,10 @@ or pass an explicit file to override it.
 
 1. **Ask the schema, never guess:** `scorekit schema` (scene DSL),
    `scorekit schema --grammar` (grammar profiles),
-   `scorekit schema --texture-profile` (ambience/SFX source mappings), and
-   `scorekit schema --resolver` (instrument-resolver config) print JSON Schema.
+   `scorekit schema --texture-profile` (ambience/SFX source mappings),
+   `scorekit schema --resolver` (instrument-resolver config), `scorekit
+   schema --profile` (leaf renderer profiles), and `scorekit schema
+   --orchestration` (orchestration profiles) print JSON Schema.
 2. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
 3. **Validate:** `scorekit --json validate scene.yaml` — errors are
    machine-readable on stderr with `field` paths and line numbers. Fix and
@@ -84,13 +87,18 @@ Batch many scenes: `scorekit batch a.yaml b.yaml --out-dir assets/` →
 per-scene results in `assets/report.json`, one failure
 doesn't stop the rest.
 
-With `--renderer sfizz`, instruments the profile doesn't map resolve through
-a scored same-family fallback (never silently to strings; exit 2 code
-`resolution` when nothing qualifies). Preview with
-`scorekit inspect-instruments scene.yaml --profile profile.yaml`; tune with
-`--fallback-mode strict|conservative|flexible` or `--resolver <config>`.
-Substitutions print `WARN instrument fallback:` lines and land in
-`meta.json` as `instrument_resolution`.
+With `--renderer sfizz`, pass `--orchestration <file>` (maps logical track
+`palette`s to certified renderer profiles; see `scorekit schema
+--orchestration` and `scorekit orchestration check <file>`). Instruments the
+active palette's renderer profile doesn't map resolve through a scored
+same-family fallback confined to that one palette (never silently to
+strings, never across palettes; exit 2 code `resolution` when nothing
+qualifies). Preview with
+`scorekit inspect-instruments scene.yaml --orchestration orchestration.yaml`;
+tune with `--fallback-mode strict|conservative|flexible` or
+`--resolver <config>`. Substitutions print `WARN instrument fallback:` lines
+and land in `meta.json` as `instrument_resolution`, alongside each track's
+`id`, declared/effective palette, and resolved renderer profile/SFZ path.
 
 Exit codes: `0` ok · `1` io · `2` invalid input / lint violations ·
 `3` missing dependency · `4` external tool failed. Global `--json` flag
@@ -124,16 +132,23 @@ motifs:                        # named melodies, referenced by melody tracks
     - { degree: 1, beats: 3 }  # beats: 0.125..=16 (split longer rests!)
 
 tracks:
-  - { instrument: violin, pattern: melody, motif: lament, intensity: 0.65 }
-  - { instrument: harp,   pattern: arpeggio, intensity: 0.3 }
-  - { instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
-  - { instrument: cello,  pattern: bass, intensity: 0.35 }
-  - { instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
+  - { id: lead, instrument: violin, pattern: melody, motif: lament, intensity: 0.65 }
+  - { id: motion, instrument: harp,   pattern: arpeggio, intensity: 0.3 }
+  - { id: harmony, instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
+  - { id: foundation, instrument: cello,  pattern: bass, intensity: 0.35 }
+  - { id: pulse, instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
+  # optional: palette: solo | ensemble | ... — routes to an orchestration
+  # palette (--orchestration). Omitted = the orchestration's default_palette.
+  # Routing metadata only; never changes compiled MIDI.
 
 textures:                     # optional field recordings / ambience / SFX
   - { source: river, mode: loop, gain: 0.25 }
   - { source: birds, mode: one_shot, at: [2, 10], gain: 0.5 }
 ```
+
+Every track needs a stable, unique `id` (`[a-z][a-z0-9_-]{0,63}`) — used by
+`sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and
+`meta.json`.
 
 Patterns: `melody` (plays its `motif`) · `sustain` (whole-bar chords) ·
 `arpeggio` (broken chords) · `bass` (roots) · `drums` (groove, `drums`

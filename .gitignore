@@ -35,3 +35,9 @@ target
 
 # macOS Finder metadata
 .DS_Store
+
+# Per-machine workspace path overrides (see scorekit-workspace.json)
+scorekit-workspace.local.json
+
+# Python bytecode from scripts/ tooling tests
+__pycache__/
