@@ -116,6 +116,19 @@ pub fn exact_samples(ticks: u32, tempo: u16, sample_rate: u32) -> u64 {
     ((num + den / 2) / den) as u64
 }
 
+/// Smallest tick count whose duration at the quantized MIDI tempo covers at
+/// least `seconds`. Used to pad the MIDI EndOfTrack past the last note-off so
+/// an `--use-eot` render still contains the requested release tail.
+pub fn ticks_covering(seconds: f64, tempo: u16) -> u32 {
+    if seconds <= 0.0 {
+        return 0;
+    }
+    let ticks = (seconds * 1_000_000.0 * f64::from(crate::composer::PPQ)
+        / f64::from(micros_per_beat(tempo)))
+    .ceil();
+    ticks as u32
+}
+
 pub fn to_smf_bytes(ir: &ScoreIr) -> Vec<u8> {
     let header = Header::new(
         Format::Parallel,

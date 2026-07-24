@@ -3,7 +3,58 @@
 
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Watchdog limits for one external tool run. Renderers have misbehaved in
+/// the wild (`sfizz_render` without `--use-eot` keeps rendering until output
+/// power decays below 1e-12 — a non-decaying patch writes an unbounded WAV),
+/// so every run is bounded by wall-clock time and output size.
+///
+/// Env overrides (both optional): `SCOREKIT_TOOL_TIMEOUT_SECS` and
+/// `SCOREKIT_TOOL_MAX_OUTPUT_MB` replace the computed values when set.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolLimits {
+    pub timeout: Duration,
+    pub max_output_bytes: u64,
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name).ok()?.trim().parse().ok()
+}
+
+impl ToolLimits {
+    /// Limits for a render whose audio duration is known in advance:
+    /// generous multiples so slow disks and large sample libraries never
+    /// trip the guard, while a runaway tool is still stopped early.
+    pub fn for_expected_audio(expected_secs: f64, sample_rate: u32) -> Self {
+        let secs = expected_secs.max(0.0);
+        // Stereo 16-bit PCM upper bound for the expected duration.
+        let expected_bytes = (secs * f64::from(sample_rate)).ceil() as u64 * 4;
+        let max_output_bytes = env_u64("SCOREKIT_TOOL_MAX_OUTPUT_MB")
+            .map(|mb| mb.saturating_mul(1024 * 1024))
+            .unwrap_or_else(|| expected_bytes.saturating_mul(10) + 64 * 1024 * 1024);
+        let timeout_secs =
+            env_u64("SCOREKIT_TOOL_TIMEOUT_SECS").unwrap_or(300 + (secs * 30.0).ceil() as u64);
+        Self {
+            timeout: Duration::from_secs(timeout_secs),
+            max_output_bytes,
+        }
+    }
+
+    /// Fallback limits for tools whose output size is not known in advance
+    /// (SF2 renderers, FFmpeg): long timeout, large size cap.
+    pub fn generic() -> Self {
+        let timeout_secs = env_u64("SCOREKIT_TOOL_TIMEOUT_SECS").unwrap_or(1800);
+        let max_output_bytes = env_u64("SCOREKIT_TOOL_MAX_OUTPUT_MB")
+            .map(|mb| mb.saturating_mul(1024 * 1024))
+            .unwrap_or(8 * 1024 * 1024 * 1024);
+        Self {
+            timeout: Duration::from_secs(timeout_secs),
+            max_output_bytes,
+        }
+    }
+}
 
 /// Which external synthesizer turns MIDI + SF2 into PCM. The rest of the
 /// pipeline (loop-seal surgery, stems, export) is renderer-agnostic.
@@ -80,21 +131,29 @@ pub struct ToolDiagnostics {
 /// Run a tool that writes `output`; the tool receives a temp path which is
 /// atomically renamed on success and removed on any failure. `error_markers`
 /// catches tools (FluidSynth) that report fatal errors on stderr yet exit 0.
+/// A watchdog kills the tool when it exceeds `limits` (wall-clock time or
+/// bytes written to the temp file) so a runaway render cannot fill the disk.
 fn run_to_file_capture(
     tool: &str,
     hint: &str,
     error_markers: &[&str],
     build_args: impl FnOnce(&Path) -> Vec<std::ffi::OsString>,
     output: &Path,
+    limits: ToolLimits,
 ) -> Result<ToolDiagnostics> {
     ensure_parent(output)?;
     let tmp = tmp_sibling(output);
     let args = build_args(&tmp);
-    let result = Command::new(tool).args(&args).output();
     let cleanup = || {
         let _ = std::fs::remove_file(&tmp);
     };
-    let out = match result {
+    let spawned = Command::new(tool)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             cleanup();
             return Err(Error::MissingDependency {
@@ -106,15 +165,94 @@ fn run_to_file_capture(
             cleanup();
             return Err(io_err(Path::new(tool), e));
         }
-        Ok(out) => out,
+        Ok(child) => child,
     };
-    let stderr_full = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Drain pipes on threads so a chatty tool cannot deadlock on a full pipe
+    // while the main thread polls the watchdog. Results come back over
+    // channels: when the tool is killed, surviving grandchildren may hold the
+    // pipe open indefinitely, so the kill path only waits briefly for the
+    // drained bytes instead of joining the reader threads.
+    let read_all = |r: Option<Box<dyn std::io::Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = r {
+                let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+            }
+            let _ = tx.send(buf);
+        });
+        rx
+    };
+    let stdout_rx = read_all(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+    let stderr_rx = read_all(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+    let started = Instant::now();
+    let (status, killed) = loop {
+        match child.try_wait() {
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup();
+                return Err(io_err(Path::new(tool), e));
+            }
+            Ok(Some(status)) => break (status, None),
+            Ok(None) => {}
+        }
+        let breach = if started.elapsed() > limits.timeout {
+            Some(format!(
+                "killed: no result within {}s (override with SCOREKIT_TOOL_TIMEOUT_SECS)",
+                limits.timeout.as_secs()
+            ))
+        } else {
+            let written = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+            (written > limits.max_output_bytes).then(|| {
+                format!(
+                    "killed: output exceeded {} MiB cap (override with SCOREKIT_TOOL_MAX_OUTPUT_MB)",
+                    limits.max_output_bytes / (1024 * 1024)
+                )
+            })
+        };
+        if let Some(reason) = breach {
+            let _ = child.kill();
+            let status = child.wait().map_err(|e| io_err(Path::new(tool), e))?;
+            break (status, Some(reason));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let drain = |rx: std::sync::mpsc::Receiver<Vec<u8>>, killed: bool| {
+        if killed {
+            rx.recv_timeout(Duration::from_millis(500))
+                .unwrap_or_default()
+        } else {
+            rx.recv().unwrap_or_default()
+        }
+    };
+    let stdout = drain(stdout_rx, killed.is_some());
+    let stderr = drain(stderr_rx, killed.is_some());
+    let stderr_full = String::from_utf8_lossy(&stderr).into_owned();
     let stderr_tail = tail(&stderr_full, 8);
-    if !out.status.success() {
+    if let Some(reason) = killed {
         cleanup();
         return Err(Error::ToolFailure {
             tool: tool.to_owned(),
-            status: out.status.to_string(),
+            status: reason,
+            stderr: stderr_tail,
+        });
+    }
+    if !status.success() {
+        cleanup();
+        return Err(Error::ToolFailure {
+            tool: tool.to_owned(),
+            status: status.to_string(),
             stderr: stderr_tail,
         });
     }
@@ -141,7 +279,7 @@ fn run_to_file_capture(
         io_err(output, e)
     })?;
     Ok(ToolDiagnostics {
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
         stderr: stderr_full,
     })
 }
@@ -153,7 +291,15 @@ fn run_to_file(
     build_args: impl FnOnce(&Path) -> Vec<std::ffi::OsString>,
     output: &Path,
 ) -> Result<()> {
-    run_to_file_capture(tool, hint, error_markers, build_args, output).map(|_| ())
+    run_to_file_capture(
+        tool,
+        hint,
+        error_markers,
+        build_args,
+        output,
+        ToolLimits::generic(),
+    )
+    .map(|_| ())
 }
 
 /// Cheap structural check: an SF2 is a RIFF container with the `sfbk` form type.
@@ -285,11 +431,18 @@ fn renderer_tool(renderer: Renderer) -> &'static str {
 /// plays every note through one loaded instrument — there's no bank/program
 /// concept. A scene with several instruments is therefore rendered one track
 /// at a time and mixed in-process (`audio::mix`); see `pipeline::build_one`.
+///
+/// `--use-eot` stops the render at the MIDI EndOfTrack message. Without it,
+/// sfizz_render keeps rendering until output power decays below 1e-12, so a
+/// patch that never decays (looping organ/string sustains) writes an
+/// unbounded WAV. Callers pad the MIDI end past the last note-off when they
+/// need a release tail. `limits` bounds the run as defence in depth.
 pub fn render_sfz_with_diagnostics(
     midi: &Path,
     sfz: &Path,
     output: &Path,
     sample_rate: u32,
+    limits: ToolLimits,
 ) -> Result<ToolDiagnostics> {
     require_file(midi, "midi")?;
     require_file(sfz, "--profile")?;
@@ -307,9 +460,11 @@ pub fn render_sfz_with_diagnostics(
                 tmp.as_os_str().to_owned(),
                 "-s".into(),
                 sample_rate.to_string().into(),
+                "--use-eot".into(),
             ]
         },
         output,
+        limits,
     )?;
     // Same "exit 0 but zero audio frames" backstop `render` applies below,
     // duplicated here because this path never reaches that shared check.
@@ -327,8 +482,14 @@ pub fn render_sfz_with_diagnostics(
     Ok(diagnostics)
 }
 
-pub fn render_sfz(midi: &Path, sfz: &Path, output: &Path, sample_rate: u32) -> Result<()> {
-    render_sfz_with_diagnostics(midi, sfz, output, sample_rate).map(|_| ())
+pub fn render_sfz(
+    midi: &Path,
+    sfz: &Path,
+    output: &Path,
+    sample_rate: u32,
+    limits: ToolLimits,
+) -> Result<()> {
+    render_sfz_with_diagnostics(midi, sfz, output, sample_rate, limits).map(|_| ())
 }
 
 /// Convert audio via FFmpeg. The codec follows the output extension:

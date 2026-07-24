@@ -107,6 +107,20 @@ fn validation(path: &str, message: String) -> Error {
 
 /// Compile a scene to SMF bytes with loop passes and optional track solo.
 pub fn midi_bytes(scene: &Scene, passes: u8, solo: Option<usize>) -> Result<Vec<u8>> {
+    midi_bytes_padded(scene, passes, solo, 0)
+}
+
+/// `midi_bytes` with the EndOfTrack pushed `eot_pad_ticks` past the musical
+/// end. No notes are added — the pad only extends how long an `--use-eot`
+/// renderer (sfizz_render) keeps rendering, so release tails land in the raw
+/// WAV instead of being cut at the last bar line. SF2 renderers and MIDI
+/// export use a zero pad: their track end stays pinned to the bar boundary.
+pub fn midi_bytes_padded(
+    scene: &Scene,
+    passes: u8,
+    solo: Option<usize>,
+    eot_pad_ticks: u32,
+) -> Result<Vec<u8>> {
     if let Some(i) = solo
         && i >= scene.tracks.len()
     {
@@ -123,6 +137,7 @@ pub fn midi_bytes(scene: &Scene, passes: u8, solo: Option<usize>) -> Result<Vec<
         composer::solo(&mut ir, i);
     }
     composer::repeat(&mut ir, passes);
+    ir.total_ticks = ir.total_ticks.saturating_add(eot_pad_ticks);
     Ok(midi::to_smf_bytes(&ir))
 }
 
@@ -748,6 +763,22 @@ fn build_one(
             })?;
             cleanup.dirs.push(staging.clone());
 
+            // sfizz renders stop at EndOfTrack (`--use-eot`), so push the EOT
+            // past the musical end: the extract window still needs the loop
+            // seal / release-tail material after the last bar line. One extra
+            // beat absorbs tick→sample rounding at the window edge.
+            let eot_pad_ticks = if scene.r#loop {
+                composer::PPQ
+            } else {
+                midi::ticks_covering(args.tail, scene.tempo).saturating_add(composer::PPQ)
+            };
+            let expected_frames = total_raw_frames
+                + midi::exact_samples(eot_pad_ticks, scene.tempo, args.sample_rate);
+            let limits = tools::ToolLimits::for_expected_audio(
+                expected_frames as f64 / f64::from(args.sample_rate),
+                args.sample_rate,
+            );
+
             let mut track_raws: Vec<PathBuf> = Vec::with_capacity(scene.tracks.len());
             for (i, track) in scene.tracks.iter().enumerate() {
                 // The resolver may have substituted an available instrument
@@ -762,12 +793,15 @@ fn build_one(
                 let sfz = profile.resolve(&profile_dir, target, track.articulation)?;
                 let mid_i = staging.join(format!("{:02}.mid", i + 1));
                 let raw_i = staging.join(format!("{:02}.raw.wav", i + 1));
-                tools::write_atomic(&mid_i, &midi_bytes(scene, passes, Some(i))?)?;
+                tools::write_atomic(
+                    &mid_i,
+                    &midi_bytes_padded(scene, passes, Some(i), eot_pad_ticks)?,
+                )?;
                 // sfizz_render has no gain flag (unlike fluidsynth -g / timidity
                 // -A), so gain is applied here in-process instead — on each
                 // track individually, so stems and the mixed-down full track
                 // carry the same gain and still sum correctly.
-                tools::render_sfz(&mid_i, &sfz, &raw_i, args.sample_rate)?;
+                tools::render_sfz(&mid_i, &sfz, &raw_i, args.sample_rate, limits)?;
                 let raw_i_gain = staging.join(format!("{:02}.gain.wav", i + 1));
                 audio::mix(std::slice::from_ref(&raw_i), &raw_i_gain, args.gain)?;
                 track_raws.push(raw_i_gain);

@@ -22,6 +22,11 @@ use std::time::Instant;
 
 const SILENCE_PEAK: u32 = 1;
 const DETERMINISM_TOLERANCE: f64 = 1.0e-6;
+const PROBE_TEMPO: u16 = 240;
+/// 16 probe notes × 240 ticks each + 960 ticks of release-tail pad past the
+/// last note-off; the EndOfTrack lands here and `--use-eot` renders exactly
+/// this long (2.5s at tempo 240), keeping probe renders bounded.
+const PROBE_TOTAL_TICKS: u32 = 16 * 240 + 960;
 
 /// Environment + evidence snapshot for one failed render-pair attempt.
 #[derive(Debug, Clone, Serialize)]
@@ -104,8 +109,17 @@ struct Scratch {
 
 impl Scratch {
     fn create() -> Result<Self> {
-        let path =
-            std::env::temp_dir().join(format!("scorekit-profile-check-{}", std::process::id()));
+        // Probe renders can be large; `SCOREKIT_TMPDIR` relocates them (e.g.
+        // to an external disk) without touching the system-wide TMPDIR.
+        let root = std::env::var_os("SCOREKIT_TMPDIR")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        std::fs::create_dir_all(&root).map_err(|source| Error::Io {
+            path: root.display().to_string(),
+            source,
+        })?;
+        let path = root.join(format!("scorekit-profile-check-{}", std::process::id()));
         std::fs::create_dir(&path).map_err(|source| Error::Io {
             path: path.display().to_string(),
             source,
@@ -218,8 +232,9 @@ fn probe_midi(drum_channel: bool) -> Vec<u8> {
         })
         .collect();
     let total_ticks = keys.len() as u32 * step + 960;
+    debug_assert_eq!(total_ticks, PROBE_TOTAL_TICKS);
     midi::to_smf_bytes(&ScoreIr {
-        tempo: 240,
+        tempo: PROBE_TEMPO,
         ts: TimeSig { num: 4, den: 4 },
         total_ticks,
         tracks: vec![TrackIr {
@@ -327,11 +342,14 @@ fn render_pair(
 ) -> Result<PairResult> {
     let a_path = scratch.join(format!("{index:04}-{tag}-a.wav"));
     let b_path = scratch.join(format!("{index:04}-{tag}-b.wav"));
+    let probe_secs = midi::exact_samples(PROBE_TOTAL_TICKS, PROBE_TEMPO, sample_rate) as f64
+        / f64::from(sample_rate);
+    let limits = tools::ToolLimits::for_expected_audio(probe_secs, sample_rate);
     let mut diagnostics = Vec::with_capacity(2);
     let mut times_ms = [0u64; 2];
     for (slot, out_path) in [(0usize, &a_path), (1, &b_path)] {
         let started = Instant::now();
-        match tools::render_sfz_with_diagnostics(midi, sfz, out_path, sample_rate) {
+        match tools::render_sfz_with_diagnostics(midi, sfz, out_path, sample_rate, limits) {
             Err(e @ Error::MissingDependency { .. }) => return Err(e),
             Err(e) => return Ok(PairResult::Failed(e.to_string())),
             Ok(diag) => diagnostics.push(diag),

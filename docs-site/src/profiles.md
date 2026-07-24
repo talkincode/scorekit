@@ -22,7 +22,9 @@ scorekit profile check profile.yaml
 scorekit --json profile check profile.yaml > profile-report.json
 ```
 
-The check deduplicates shared patch paths, renders melodic or drum probes twice, rejects missing and silent patches, captures sfizz warnings, and checks repeatability. Each passing patch reports a `render_sha256` golden hash, so a saved report acts as a baseline: re-running the check after a tool or library change and diffing the hashes reveals exactly which patches drifted. If a comparison fails on the first attempt, the check records diagnostics (load average, tool identity, both render hashes, timings) and re-runs that patch once in isolation — a pass is reported as `ok` with a `load_sensitive_flake` warning and the evidence kept under `flake_diagnostics`; a repeat failure is final. Temporary probe files are removed on success and failure.
+The check deduplicates shared patch paths, renders melodic or drum probes twice, rejects missing and silent patches, captures sfizz warnings, and checks repeatability. Each passing patch reports a `render_sha256` golden hash, so a saved report acts as a baseline: re-running the check after a tool or library change and diffing the hashes reveals exactly which patches drifted. If a comparison fails on the first attempt, the check records diagnostics (load average, tool identity, both render hashes, timings) and re-runs that patch once in isolation — a pass is reported as `ok` with a `load_sensitive_flake` warning and the evidence kept under `flake_diagnostics`; a repeat failure is final. Temporary probe files are removed on success and failure; set `SCOREKIT_TMPDIR` to place them on another disk (created if absent, otherwise the system temp dir is used).
+
+Probe renders are bounded: `sfizz_render` runs with `--use-eot` (stop at the MIDI end instead of waiting for output silence, which a looping sustain patch never reaches), and a watchdog kills any tool that exceeds its wall-clock timeout or output-size cap, reporting the patch as `render_failed`. `SCOREKIT_TOOL_TIMEOUT_SECS` and `SCOREKIT_TOOL_MAX_OUTPUT_MB` override the limits.
 
 Use the profile with the sfizz backend:
 

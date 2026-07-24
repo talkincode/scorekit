@@ -126,10 +126,12 @@ as renderer profiles; see [SFZ Renderer Profiles](profiles.md).
 
 ## Repairing defective upstream files
 
-Occasionally an upstream file is broken as shipped (the pan flute's SFZ was
-exported with every `lokey/hikey`, `lovel/hivel`, and
-`loop_start/loop_end` pair reversed — every region empty, rendering
-silence). The repair convention:
+Occasionally an upstream file is broken as shipped. Two repairs exist so
+far: the pan flute's SFZ was exported with every `lokey/hikey`,
+`lovel/hivel`, and `loop_start/loop_end` pair reversed (every region empty,
+rendering silence), and the MuldjordKit SFZ uses DrumGizmo's nonstandard
+drum keymap (kick on 48, snare on 50…) instead of General MIDI (remapped
+to GM keys: kick 36, snare 38, hats 42/46…). The repair convention:
 
 1. Keep the upstream file **byte-intact**.
 2. Place the repaired copy alongside it with a `.scoredata-fixN.` infix and
@@ -142,6 +144,15 @@ silence). The repair convention:
 Anyone rebuilding the corpus can re-apply the published patch or re-derive
 the fix from its description; nothing about the repair lives only in git
 history or someone's memory.
+
+Not every defect is repairable. VPO's `all-brass-SEC-sustain`,
+`all-brass-SOLO-sustain` and `all-strings-SOLO-sustain` ensemble files
+hang sfizz 1.2.3 (rendering never finishes); bisecting shows any 4 of a
+file's 7 groups render fine while any 5 hang — a cumulative voice-count
+interaction with no single broken opcode to patch. Such files are recorded
+as do-not-map in the library manifest's `notes:` and profiles re-orchestrate
+around them visibly (map the individual section patches instead) — never by
+silently substituting a different sound.
 
 ## Certification workflow
 
@@ -166,12 +177,27 @@ failing comparison is retried once in isolation with diagnostics recorded
 (`load_sensitive_flake`) so a loaded machine does not produce false
 nondeterminism verdicts — see [SFZ Renderer Profiles](profiles.md).
 
-The reference profile built from the channels above currently certifies
-**101 mappings over 85 unique patches, 0 failures**, covering 56 of the 60
-DSL instruments (the remaining gaps — `fretless_bass`, `music_box`,
-`slap_bass`, `whistle` — have no license-clean open source yet and are
-deliberately left unmapped rather than faked with substitutes; the GM SF2
-tier still resolves them).
+The corpus currently certifies **four renderer profiles — 235 mappings
+over 173 unique patches, 0 failures**:
+
+- `scoredata-open` — broad reference: 101 mappings / 85 patches, covering
+  56 of the 60 DSL instruments (the remaining gaps — `fretless_bass`,
+  `music_box`, `slap_bass`, `whistle` — have no license-clean open source
+  yet and are deliberately left unmapped rather than faked with
+  substitutes; the GM SF2 tier still resolves them).
+- `scoredata-chamber` — one player per part: VPO SOLO strings/winds/brass,
+  VSCO 2 CE upright piano and quiet organ, VCSL harpsichord and recorder
+  (49 / 42). No percussion, drums, synths or ensemble patches — deliberate
+  identity gaps.
+- `scoredata-symphonic` — full sections: VPO SEC strings/winds/brass,
+  orchestral percussion, harp, celesta and choirs, VCSL Steinway B, VSCO 2
+  CE loud organ (64 / 54). No synths or electric instruments.
+- `scoredata-synth` — FreePats synth basses/leads/pads/strings, Karoryfer
+  electric guitar and bass, Wurlitzer EP200, MuldjordKit drums (21 / 15).
+  The acoustic orchestra is intentionally absent.
+
+The chamber/symphonic pair doubles as the documented solo-vs-section
+variant pair: same score, audibly different orchestration identity.
 
 ## Minimal rebuild walkthrough
 

@@ -2466,6 +2466,163 @@ fn profile_check_persistent_nondeterminism_fails_with_both_diagnostics() {
     assert_eq!(flakes[1]["observed_status"], "nondeterministic");
 }
 
+/// A patch that never decays used to make `sfizz_render` write an unbounded
+/// WAV (44 GB observed) because nothing stopped the render. The watchdog must
+/// kill the tool at the output-size cap, report a structured render failure,
+/// and leave no partial files behind.
+#[cfg(unix)]
+#[test]
+fn profile_check_kills_runaway_render_at_size_cap_without_residue() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    // Ignores --use-eot and appends 1 MiB chunks forever, like a render whose
+    // output power never decays.
+    let script = "#!/bin/sh\nout=\"\"; prev=\"\"\nfor a in \"$@\"; do\n  [ \"$prev\" = \"--wav\" ] && out=\"$a\"\n  prev=\"$a\"\ndone\nwhile :; do\n  dd if=/dev/zero bs=1048576 count=1 >> \"$out\" 2>/dev/null\n  sleep 0.05\ndone\n";
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: runaway\ninstruments:\n  violin:\n    sustain: any.sfz\n",
+    )
+    .unwrap();
+    fs::write(work.join("any.sfz"), "<region> sample=*sine\n").unwrap();
+    let tmp = dir.path().join("tmp");
+    fs::create_dir_all(&tmp).unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", &tmp)
+        .env("SCOREKIT_TOOL_MAX_OUTPUT_MB", "1")
+        .assert()
+        .code(4);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(v["code"], "profile_check");
+    let patch = &v["report"]["patches"][0];
+    assert_eq!(patch["status"], "render_failed");
+    let error = patch["error"].as_str().unwrap();
+    assert!(
+        error.contains("exceeded 1 MiB cap"),
+        "error should name the size cap: {error}"
+    );
+    // No scratch dir, no partial/giant WAV may survive the kill.
+    assert_dir_contains_exactly(&tmp, &[]);
+}
+
+/// A render that produces no output at all (hung tool) must be killed at the
+/// wall-clock timeout instead of blocking `profile check` forever.
+#[cfg(unix)]
+#[test]
+fn profile_check_kills_stuck_render_at_timeout_without_residue() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, "#!/bin/sh\nsleep 30\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: stuck\ninstruments:\n  violin:\n    sustain: any.sfz\n",
+    )
+    .unwrap();
+    fs::write(work.join("any.sfz"), "<region> sample=*sine\n").unwrap();
+    let tmp = dir.path().join("tmp");
+    fs::create_dir_all(&tmp).unwrap();
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", &tmp)
+        .env("SCOREKIT_TOOL_TIMEOUT_SECS", "1")
+        .assert()
+        .code(4);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let patch = &v["report"]["patches"][0];
+    assert_eq!(patch["status"], "render_failed");
+    let error = patch["error"].as_str().unwrap();
+    assert!(
+        error.contains("no result within 1s"),
+        "error should name the timeout: {error}"
+    );
+    assert_dir_contains_exactly(&tmp, &[]);
+}
+
+/// The render invocation must pass `--use-eot` (stop at EndOfTrack — the fix
+/// that makes runaway renders impossible by construction), and the probe
+/// scratch dir must honor `SCOREKIT_TMPDIR` so temp renders can be pointed at
+/// another disk.
+#[cfg(unix)]
+#[test]
+fn profile_check_passes_use_eot_and_honors_scorekit_tmpdir() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    write_const_wav(&fake_bin.join("w1.wav"), 1000, 4410);
+    // Records every argument, then emits a constant WAV (deterministic pass).
+    let script = "#!/bin/sh\ndir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nout=\"\"; prev=\"\"\nfor a in \"$@\"; do\n  printf '%s\\n' \"$a\" >> \"$dir/args.log\"\n  [ \"$prev\" = \"--wav\" ] && out=\"$a\"\n  prev=\"$a\"\ndone\ncp \"$dir/w1.wav\" \"$out\"\n";
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: eot\ninstruments:\n  violin:\n    sustain: any.sfz\n",
+    )
+    .unwrap();
+    fs::write(work.join("any.sfz"), "<region> sample=*sine\n").unwrap();
+    // SCOREKIT_TMPDIR does not exist yet: the check must create it and use it
+    // even though TMPDIR points elsewhere.
+    let sk_tmp = dir.path().join("sk-tmp");
+    let sys_tmp = dir.path().join("sys-tmp");
+    fs::create_dir_all(&sys_tmp).unwrap();
+    bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", &sys_tmp)
+        .env("SCOREKIT_TMPDIR", &sk_tmp)
+        .assert()
+        .success();
+    let log = fs::read_to_string(fake_bin.join("args.log")).unwrap();
+    let args: Vec<&str> = log.lines().collect();
+    assert!(
+        args.contains(&"--use-eot"),
+        "sfizz_render must be invoked with --use-eot: {args:?}"
+    );
+    let wav = args
+        .iter()
+        .position(|a| *a == "--wav")
+        .map(|i| args[i + 1])
+        .expect("--wav argument recorded");
+    assert!(
+        Path::new(wav).starts_with(&sk_tmp),
+        "probe render {wav} must live under SCOREKIT_TMPDIR {}",
+        sk_tmp.display()
+    );
+    // Scratch cleanup applies to the relocated dir too.
+    assert_dir_contains_exactly(&sk_tmp, &[]);
+    assert_dir_contains_exactly(&sys_tmp, &[]);
+}
+
 // ---- diff: semantic scene comparison (M4) ----
 
 #[test]
