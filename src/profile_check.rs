@@ -579,7 +579,7 @@ fn merge_probe_reports(
                     .expect("passing probe has a hash")
                     .as_bytes(),
             );
-            hasher.update([b'\n']);
+            hasher.update(b"\n");
         }
         hasher
             .finalize()
