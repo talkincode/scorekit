@@ -37,11 +37,19 @@ Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
 flag is independent of the musical renderer: it works alongside either an
 SF2 `--soundfont` or an sfizz `--orchestration` profile.
 
+Standalone `midi` can encode melodic instruments with exact GM programs plus
+channel-10 `drums`/`tabla`. It rejects profile-only melodic identities before
+writing the output: the command has no renderer-profile input, and omitting a
+program change would make a generic GM player select piano. Use
+`build --renderer sfizz --orchestration <file>` to render those identities.
+
 ## Instrument resolution
 
 `build` and `batch` resolve every track's instrument against what the
 selected backend actually provides before anything is rendered. SF2 backends
-carry the full General MIDI vocabulary, so everything resolves exactly; with
+resolve the 60-instrument core plus exact named extension programs
+(shakuhachi, sitar, shamisen); non-GM world identities fail rather than
+defaulting to piano. With
 `--renderer sfizz` availability is each track's effective palette's leaf
 renderer profile (routed through `--orchestration <file>`, the only sfizz
 routing input for `build`/`batch`/`inspect-instruments`), and unmapped
@@ -58,6 +66,8 @@ the same orchestration happens to map the same instrument:
   candidate it refused to use.
 - `--fallback-mode flexible` also reaches related families and synth
   stand-ins.
+- World instruments are exact-source-only under every mode: no fallback may
+  enter, leave, or occur within that family.
 - `--resolver <file>` supplies a config (see `scorekit schema --resolver`)
   with `default_mode`, `minimum_score`, `allow_cross_family`, `allow_synth`,
   `allowed_families`, and `excluded_families`.

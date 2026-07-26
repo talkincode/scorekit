@@ -90,6 +90,26 @@ Output: `forest.ogg` (loops seamlessly), `forest.stems/01-harmony.ogg … 04-pul
 
 Want a full scene set? Put `sections:` in one file and get `forest-intro.ogg`, `forest-explore.ogg`, `forest-combat.ogg`, `forest-victory.ogg` — all built on the same motifs — plus `forest.ogg`, the main playback file with every section concatenated in order. See [forest_suite.yaml](examples/scenes/forest_suite.yaml).
 
+## World instruments without fake substitutes
+
+The portable vocabulary also includes `erhu`, `pipa`, `guzheng`, `dizi`,
+`shakuhachi`, `shamisen`, `sitar`, `tabla`, `oud`, `ney`, and `duduk`.
+MuseScore General supplies exact GM programs for shakuhachi, sitar, and
+shamisen. The reference ScoreData profile additionally certifies real CC0
+erhu and CC BY 4.0 tabla sources. Every other identity requires an exact local
+renderer-profile mapping and fails visibly when absent — scorekit never turns
+a guzheng into a koto or an erhu into a generic fiddle.
+
+Tabla is a dedicated channel-10 instrument with `pattern: tabla`, a
+deterministic 16-beat theka distinct from the GM drum-kit groove. For a
+30-second solo-erhu example, see
+[`old_spring_lament.yaml`](examples/scenes/old_spring_lament.yaml).
+Standalone `scorekit midi` has no renderer-profile input, so it rejects
+profile-only melodic identities before writing a file rather than publish MIDI
+that a GM player would interpret as piano. Render those scenes through
+`build --renderer sfizz --orchestration <file>` instead; Tabla remains a
+channel-10 MIDI instrument.
+
 ## Field recordings, ambience, and SFX
 
 Non-instrument sound can be part of the composition too. A scene names
@@ -101,20 +121,48 @@ textures:
   - { source: forest_birds, mode: one_shot, at: [2, 14, 27.5], gain: 0.5 }
 ```
 
-A separate machine-local profile maps those names to recordings:
+A separate machine-local profile maps those names to recordings — and
+describes each one, so an agent can choose without opening the files:
 
 ```yaml
 # textures.yaml
+schema_version: 1
 name: forest-field-recordings
 root: /Volumes/Samples
 sources:
-  river: ambience/river.flac
-  forest_birds: wildlife/birds.wav
+  river:
+    path: ambience/river.flac
+    description: Wide river bed, mid-distance, no bird calls
+    category: organic
+    tags: [water, flowing, continuous]
+    playback: { modes: [loop], default_mode: loop }
+    use_cases: [forest, travel]
+    provenance: { library: field-recordings@2024.1 }
+  forest_birds:
+    path: wildlife/birds.wav
+    description: Single dawn chorus swell, ends on silence
+    category: organic
+    tags: [wildlife, chirping]
+    playback: { modes: [one_shot], default_mode: one_shot }
+    use_cases: [forest, dawn]
+    provenance: { library: field-recordings@2024.1 }
 ```
 
+Existing path-only bindings such as `river: ambience/river.flac` remain
+build-compatible. They are intentionally unavailable to `texture inspect` and
+`texture check` until migrated to the structured form above; scorekit never
+invents discovery metadata for a legacy entry.
+
 ```bash
+scorekit texture inspect textures.yaml --category organic --tag water
+scorekit texture check textures.yaml
 scorekit build forest.yaml --texture-profile textures.yaml -o forest.ogg --stems
 ```
+
+`texture inspect` filters exactly and conjunctively — no similarity ranking,
+so "nothing fits" is an answer you can trust rather than a plausible wrong
+pick. `texture check` proves every source exists, decodes, and is audible,
+and records a `sha256` of each recording.
 
 FFmpeg normalizes each recording to the build sample rate; scorekit only
 performs deterministic placement and gain-applied summation. Runtime sounds
@@ -200,7 +248,11 @@ Your scene stays portable — it says `instrument: violin`, and each track's opt
 Ready-to-build references in [examples/scenes/](examples/scenes/): [chiptune](examples/scenes/chiptune.yaml) (8-bit), [dance](examples/scenes/dance.yaml), [epic](examples/scenes/epic.yaml), [ballad](examples/scenes/ballad.yaml) (3/4), [elegy](examples/scenes/elegy.yaml) (violin), [dunes](examples/scenes/dunes.yaml) (film-score texture, conforms to the [grief grammar](examples/grammars/grief.yaml)).
 
 ```bash
-scorekit batch examples/scenes/*.yaml --out-dir out/
+scorekit batch \
+  examples/scenes/chiptune.yaml examples/scenes/dance.yaml \
+  examples/scenes/epic.yaml examples/scenes/ballad.yaml \
+  examples/scenes/elegy.yaml examples/scenes/dunes.yaml \
+  --out-dir out/
 ```
 
 ## For engineers

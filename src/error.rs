@@ -41,6 +41,16 @@ pub enum Error {
         /// Complete machine-readable report, including passing patches.
         report: serde_json::Value,
     },
+    #[error("{count} texture source check failure(s) in `{profile}`")]
+    TextureCheck {
+        profile: String,
+        count: usize,
+        status_code: u8,
+        /// Pre-rendered human-readable lines, one per failed source.
+        porcelain: Vec<String>,
+        /// Complete machine-readable report, including passing sources.
+        report: serde_json::Value,
+    },
     #[error("{count} unresolved instrument(s) in `{scene}`")]
     Resolution {
         scene: String,
@@ -75,6 +85,7 @@ impl Error {
             Error::Validation { .. } => "validation",
             Error::Lint { .. } => "lint",
             Error::ProfileCheck { .. } => "profile_check",
+            Error::TextureCheck { .. } => "texture_check",
             Error::Resolution { .. } => "resolution",
             Error::Doctor { .. } => "doctor",
             Error::MissingDependency { .. } => "missing_dependency",
@@ -90,7 +101,9 @@ impl Error {
             | Error::Validation { .. }
             | Error::Lint { .. }
             | Error::Resolution { .. } => 2,
-            Error::ProfileCheck { status_code, .. } => *status_code,
+            Error::ProfileCheck { status_code, .. } | Error::TextureCheck { status_code, .. } => {
+                *status_code
+            }
             Error::Doctor { .. } => 3,
             Error::MissingDependency { .. } => 3,
             Error::ToolFailure { .. } => 4,
@@ -122,6 +135,9 @@ impl Error {
             return;
         }
         if let Error::ProfileCheck {
+            porcelain, report, ..
+        }
+        | Error::TextureCheck {
             porcelain, report, ..
         }
         | Error::Resolution {

@@ -22,6 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Scoring weights (sum = 1.0). Family dominates by design: an in-family
 /// candidate always outranks a cross-family one on this axis, and strings
@@ -193,9 +194,28 @@ pub fn build_policy(
 }
 
 /// What a sound source provides: instrument → articulations with dedicated
-/// samples. `None` elsewhere means "GM world" (SF2 backends): every
-/// instrument in the vocabulary is available.
+/// samples. `None` at call sites selects the exact General MIDI vocabulary,
+/// not every scorekit instrument.
 pub type Available = BTreeMap<Instrument, BTreeSet<Articulation>>;
+
+/// Instruments an SF2 General MIDI backend can represent without lying about
+/// identity. Profile-only world instruments are intentionally absent.
+pub fn gm_available() -> &'static Available {
+    static GM: OnceLock<Available> = OnceLock::new();
+    GM.get_or_init(|| {
+        instrument::ALL
+            .iter()
+            .copied()
+            .filter(|instrument| instrument.has_exact_gm_sound())
+            .map(|instrument| {
+                (
+                    instrument,
+                    spec(instrument).articulations.iter().copied().collect(),
+                )
+            })
+            .collect()
+    })
+}
 
 /// Availability as declared by a renderer profile. Explicit profile mappings
 /// are the profile author's own (visible, diffable) choices — the resolver
@@ -321,7 +341,7 @@ fn role_of(track: &Track) -> Role {
     match track.pattern {
         Pattern::Melody => Role::Melody,
         Pattern::Bass => Role::Bass,
-        Pattern::Drums => Role::Rhythm,
+        Pattern::Drums | Pattern::Tabla => Role::Rhythm,
         Pattern::Sustain | Pattern::Arpeggio => Role::HarmonicSupport,
     }
 }
@@ -351,8 +371,11 @@ fn score_candidate(
 
     // Hard eligibility gates. All are still *scored* so reports can show
     // what would have been chosen and why it was not.
-    if candidate == Instrument::Drums || requested == Instrument::Drums {
+    if candidate.is_percussion() || requested.is_percussion() {
         reject("percussion_kit_is_never_substituted", &mut rejected);
+    }
+    if req.family == Family::Ethnic || cand.family == Family::Ethnic {
+        reject("world_instrument_requires_exact_source", &mut rejected);
     }
     if policy.excluded_families.contains(&cand.family) {
         reject("family_excluded", &mut rejected);
@@ -495,38 +518,18 @@ fn resolve_track(
         alias_reasons.push("alias_normalized".to_owned());
     }
 
-    // GM world: the SF2 soundfont serves every GM program, so everything in
-    // the vocabulary is available by construction.
-    let Some(available) = available else {
-        return Resolution {
-            track: index,
-            track_id: track.id.clone(),
-            requested,
-            canonical: canonical.clone(),
-            resolved: Some(canonical),
-            status: base_status,
-            score: 1.0,
-            reasons: {
-                let mut r = vec!["available".to_owned()];
-                r.extend(alias_reasons);
-                r
-            },
-            warnings: Vec::new(),
-            best_candidate: None,
-            candidates: Vec::new(),
-            palette: None,
-            profile: None,
-            profile_path: None,
-            requested_articulation: None,
-            articulation: None,
-            sfz: None,
-            target: Some(track.instrument),
-        };
+    let general_midi = available.is_none();
+    let available = match available {
+        Some(available) => available,
+        None => gm_available(),
     };
 
     if let Some(arts) = available.get(&track.instrument) {
         let mut warnings = Vec::new();
-        if track.articulation != Articulation::Sustain && !arts.contains(&track.articulation) {
+        if !general_midi
+            && track.articulation != Articulation::Sustain
+            && !arts.contains(&track.articulation)
+        {
             warnings.push(format!(
                 "articulation `{}` has no dedicated sample; the `sustain` mapping will sound",
                 articulation_key(track.articulation)
@@ -541,7 +544,14 @@ fn resolve_track(
             status: base_status,
             score: 1.0,
             reasons: {
-                let mut r = vec!["mapped_by_profile".to_owned()];
+                let mut r = vec![
+                    if general_midi {
+                        "general_midi_exact"
+                    } else {
+                        "mapped_by_profile"
+                    }
+                    .to_owned(),
+                ];
                 r.extend(alias_reasons);
                 r
             },
@@ -855,14 +865,25 @@ impl SceneResolution {
                 )
             })
             .collect();
-        porcelain.push(match self.mode {
-            FallbackMode::Strict => "hint: strict mode performs no substitution; map the \
-                                     instrument in the renderer profile or drop --fallback-mode \
-                                     strict"
-                .to_owned(),
-            _ => "hint: map the instrument in the renderer profile, pick another instrument, or \
-                  widen the fallback policy (see `scorekit inspect-instruments`)"
-                .to_owned(),
+        let exact_source_required = failed.iter().any(|resolution| {
+            parse_instrument_key(&resolution.canonical)
+                .map(|instrument| spec(instrument).family == Family::Ethnic)
+                .unwrap_or(false)
+        });
+        porcelain.push(if exact_source_required {
+            "hint: world instruments require an exact General MIDI program or renderer-profile \
+             mapping; acquire/map the real source or choose a different instrument explicitly"
+                .to_owned()
+        } else {
+            match self.mode {
+                FallbackMode::Strict => "hint: strict mode performs no substitution; map the \
+                                         instrument in the renderer profile or drop \
+                                         --fallback-mode strict"
+                    .to_owned(),
+                _ => "hint: map the instrument in the renderer profile, pick another instrument, \
+                      or widen the fallback policy (see `scorekit inspect-instruments`)"
+                    .to_owned(),
+            }
         });
         Some(Error::Resolution {
             scene: scene.to_owned(),
@@ -999,11 +1020,42 @@ mod tests {
     }
 
     #[test]
-    fn gm_world_serves_everything() {
+    fn gm_world_serves_only_exact_programs() {
         let t = track(Instrument::Ocarina, Pattern::Sustain, Articulation::Sustain);
         let r = resolve(&t, None, None, &FallbackPolicy::default());
         assert!(matches!(r.status, ResolutionStatus::Exact));
         assert_eq!(r.score, 1.0);
+
+        let t = track(
+            Instrument::Shakuhachi,
+            Pattern::Sustain,
+            Articulation::Sustain,
+        );
+        let r = resolve(&t, None, None, &FallbackPolicy::default());
+        assert!(matches!(r.status, ResolutionStatus::Exact));
+
+        let t = track(Instrument::Erhu, Pattern::Sustain, Articulation::Sustain);
+        let r = resolve(&t, None, None, &FallbackPolicy::default());
+        assert!(matches!(r.status, ResolutionStatus::Missing));
+        assert!(r.resolved.is_none());
+        assert_eq!(
+            r.best_candidate.unwrap().rejected.as_deref(),
+            Some("world_instrument_requires_exact_source")
+        );
+    }
+
+    #[test]
+    fn world_instruments_are_exact_source_only_even_in_flexible_mode() {
+        let a = avail(&[Instrument::Sitar, Instrument::Guitar]);
+        let t = track(Instrument::Pipa, Pattern::Sustain, Articulation::Sustain);
+        let mut policy = FallbackPolicy::for_mode(FallbackMode::Flexible);
+        policy.allowed_families.insert(Family::Ethnic);
+        let r = resolve(&t, None, Some(&a), &policy);
+        assert!(matches!(r.status, ResolutionStatus::Missing));
+        assert!(
+            r.candidates.is_empty(),
+            "non-verbose resolution should not retain candidates"
+        );
     }
 
     #[test]
@@ -1154,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn drums_are_never_substituted_in_either_direction() {
+    fn percussion_instruments_are_never_substituted_in_either_direction() {
         // Kit missing: melodic instruments must not stand in.
         let a = avail(&[Instrument::Timpani, Instrument::Marimba]);
         let t = track(Instrument::Drums, Pattern::Drums, Articulation::Sustain);
@@ -1163,6 +1215,11 @@ mod tests {
         // Melodic request: the kit must never be a candidate.
         let a = avail(&[Instrument::Drums]);
         let t = track(Instrument::Marimba, Pattern::Sustain, Articulation::Sustain);
+        let r = resolve(&t, None, Some(&a), &FallbackPolicy::default());
+        assert!(matches!(r.status, ResolutionStatus::Missing));
+
+        let a = avail(&[Instrument::Drums, Instrument::Timpani]);
+        let t = track(Instrument::Tabla, Pattern::Tabla, Articulation::Sustain);
         let r = resolve(&t, None, Some(&a), &FallbackPolicy::default());
         assert!(matches!(r.status, ResolutionStatus::Missing));
     }

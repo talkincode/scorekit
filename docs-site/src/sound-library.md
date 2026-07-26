@@ -130,6 +130,51 @@ Artifact 5323's metadata says only that its samples came from Freesound; it
 does not identify those files or their original licenses. Its manifest and
 `SOURCE-DECLARATION.md` therefore keep that limitation visible.
 
+### World instruments
+
+The world-instrument vocabulary is additive: the original 60-instrument
+coverage target stays intact, while each of these 11 identities is admitted
+only with an exact source.
+
+| Instrument | Certified source | License / status |
+|---|---|---|
+| Erhu | AliExpress Erhu v1.000, tag/commit `6615047b`, corrected sustain keymap + upstream short program | CC0-1.0; release archive SHA-256 `2f54cc1a19ccd842f1c05eeb136416e680633ff4112201d14f6bf9931aad3fe0` |
+| Tabla | Subodh Deolekar, [Tabla strokes dataset](https://doi.org/10.5281/zenodo.4327350), 650 original WAVs + deterministic 550-region SFZ | CC-BY-4.0; archive SHA-256 `513ea8b7cae6e5ec7038a1dd3e3054e061739c64c13603faa6c3df8ea1468fa2` |
+| Shakuhachi | MuseScore General zero-based GM program 77 | MIT SoundFont; exact SF2 tier |
+| Sitar | MuseScore General zero-based GM program 104 | MIT SoundFont; exact SF2 tier |
+| Shamisen | MuseScore General zero-based GM program 106 | MIT SoundFont; exact SF2 tier |
+| Pipa, guzheng, dizi | — | Pending an exact, primary-source licensed payload |
+| Oud, ney, duduk | — | Pending an exact, primary-source licensed payload |
+
+Acquire Erhu from the pinned
+[`v1.000` release](https://github.com/sfzinstruments/aliexpress-erhu/releases/tag/v1.000);
+the tag resolves to commit
+`6615047b2fd06126877483e97b8bb4af9d00b080`.
+`manifests/recipes/build_erhu_clean_sfz.py` maps the unchanged sustain WAVs
+one octave higher to their measured MIDI pitches, removes the upstream
+synthetic wobble/unison layers, restores velocity response, and sets the bend
+range to two semitones. The profile uses the generated clean patch for sustain
+and `03-erhu_short.sfz` for staccato. The upstream marcato program layers those
+two recordings and is not relabelled as another technique.
+
+For Tabla, retain the Zenodo archive and all 650 WAV files byte-for-byte.
+`manifests/recipes/build_tabla_sfz.py` verifies the complete Zenodo MD5
+inventory plus 44.1 kHz/stereo/16-bit PCM structure, then writes 11 keys
+(MIDI 36–46), each using 50 sequential `seq_position` takes. It performs no
+normalization, trimming, resampling, effects, or random selection. Attribution
+to Subodh Deolekar and the CC BY 4.0 license stay beside the payload.
+
+#### Private/commercial source boundary
+
+A locally licensed source may close any remaining identity without changing
+the DSL: keep its payload outside the scorekit repository, give it a versioned
+manifest in the corpus, map the exact instrument in a private leaf renderer
+profile, and run `scorekit profile check`. Only vendor-supplied SFZ or an
+explicitly permitted WAV/SFZ export is admissible. Do not extract or convert
+Kontakt/Pianobook packages whose terms forbid sampler conversion, and never
+commit their samples. Until such a payload exists, the identity must remain
+unmapped and fail visibly.
+
 ### First-party synthesized (scoredata-forge)
 
 | Library | Version | License | Rebuild source |
@@ -147,11 +192,71 @@ is independently gated by `scorekit profile check`.
 
 ### Textures
 
-The reference texture profile draws ambience/sound-design sources from
-libraries already in the corpus (VCSL ocean drum, wind chimes, bowed brake
-drum, wine glasses; VSCO 2 CE "Miscellania" ambiences) — no additional
-downloads. Texture profiles use the same portable-name-to-local-path model
-as renderer profiles; see [Orchestration and Renderer Profiles](profiles.md).
+The reference texture profile exposes 93 certified sources from libraries
+already in the corpus — VCSL and VSCO 2 CE "Miscellania" — spanning 2
+ambiences, 9 foley gestures, 25 impacts, 12 transitions, 15 tonal gestures,
+12 industrial mechanisms, and 18 abstract sound-design sources. Every source
+has a unique path and source hash; three are authored for looping and the
+rest are explicit one-shots. A full scan of the other manifested libraries
+found no honest additions: they contain melodic multisamples, release
+triggers, or round-robin drum banks rather than standalone textures, so they
+were not bulk-imported merely to inflate the count. The `organic` category
+remains an explicit gap in this **open reference profile**: simulated surf from
+an ocean drum is labelled as such rather than presented as a natural field
+recording. Texture profiles use the same portable-name-to-local-path model as
+renderer profiles, plus required discovery metadata (description, category,
+tags, playback modes, use cases, provenance) so an agent can pick a source
+without opening the files; see
+[Orchestration and Renderer Profiles](profiles.md).
+
+A texture source enters the corpus the same way an instrument does: acquire
+→ manifest → map → certify. `scorekit texture check` is the texture-side
+counterpart of `scorekit profile check` — it proves every declared source
+exists, decodes, and is audible before a scene depends on it, and records a
+`sha256` of the source file so a swapped recording is detectable.
+
+#### Optional private nature profile
+
+The local ScoreData corpus also has a deliberately isolated, non-commercial
+nature layer. It acquires 775 unique upstream files and maps 774 one-shot
+sources after quality gating: 720 ESC-50 WAV excerpts, 49 National Park
+Service recordings, and 5 NOAA PMEL underwater recordings. The resulting
+`scoredata-nature-personal` profile contains 530 `organic` and 244 `ambience`
+sources; `scoredata-personal-all` combines those 774 with the 93-source open
+reference set for 867/867 certified sources. One NPS stream recording remains
+in the archive but is not mapped because MP3 decoding overshoots 0 dBFS.
+
+This layer does **not** close the open-profile organic gap:
+
+- ESC-50 is pinned at commit
+  `33c8ce9eb2cf0b1c2f8bcf322eb349b6be34dbb6` (archive SHA-256
+  `661183a6f53ef04f12c9bd618fed0ddc1713280d6c94a5a5431e844ba6f6a21f`).
+  Select the 18 categories `cat`, `chirping_birds`, `cow`,
+  `crackling_fire`, `crickets`, `crow`, `dog`, `frog`, `hen`, `insects`,
+  `pig`, `rain`, `rooster`, `sea_waves`, `sheep`, `thunderstorm`,
+  `water_drops`, and `wind`. Preserve the WAV bytes, `LICENSE`, README,
+  complete metadata CSV, per-file Freesound IDs, and attribution. The
+  dataset-wide license is CC BY-NC 3.0, so these sources must never enter
+  commercial work or the default open profile.
+- Crawl only the Amphibians, Birds, Geological, Hydrological, Insects,
+  Mammals, Meteorological, and Reptiles sections of the
+  [NPS Natural Sounds Gallery](https://www.nps.gov/subjects/sound/gallery.htm).
+  Save the gallery's public-domain declaration, each detail page, direct audio
+  URL, NPS credit, and source checksum. Fifty files are acquired; Singing
+  Sands exposes no downloadable audio and the clipping gate excludes one
+  stream file, leaving 49 mapped sources.
+- Download the five WAV links exposed by the
+  [NOAA PMEL Acoustics gallery](https://www.pmel.noaa.gov/acoustics/multimedia.html).
+  NOAA pages can contain partner material, so these remain tagged
+  `rights_review` until each asset's rights chain is independently cleared.
+
+Keep the three libraries in separate versioned directories and retain an
+attribution ledger. After generating either personal profile, certify it with:
+
+```bash
+scorekit texture check profiles/textures/scoredata-nature-personal.yaml
+scorekit texture check profiles/textures/scoredata-personal-all.yaml
+```
 
 ## Repairing defective upstream files
 
@@ -206,14 +311,16 @@ failing comparison is retried once in isolation with diagnostics recorded
 (`load_sensitive_flake`) so a loaded machine does not produce false
 nondeterminism verdicts — see [Orchestration and Renderer Profiles](profiles.md).
 
-The corpus currently certifies **four renderer profiles — 239 mappings
-over 177 unique patches, 0 failures**:
+The corpus currently certifies **four renderer profiles — 242 mappings
+over 180 unique patches, 0 failures**:
 
-- `scoredata-open` — broad reference: 105 mappings / 89 patches, covering
-  all 60 DSL instruments. First-party CC0 music-box and whistle libraries
+- `scoredata-open` — broad reference: 108 mappings / 92 patches, covering
+  all 60 core DSL instruments plus exact Erhu (sustain/staccato) and Tabla.
+  First-party CC0 music-box and whistle libraries
   cover the structurally simple timbres; the declared-public-domain fretless
   and NeoSoundFonts CC0 pull/slap libraries cover the technique-specific
-  basses. The sample tier and GM SF2 tier now both resolve 60/60.
+  basses. The sample tier and GM SF2 tier both retain 60/60 core coverage;
+  world coverage is tracked separately (2/11 sample tier, 3/11 exact GM).
 - `scoredata-chamber` — one player per part: VPO SOLO strings/winds/brass,
   VSCO 2 CE upright piano and quiet organ, VCSL harpsichord and recorder
   (49 / 42). No percussion, drums, synths or ensemble patches — deliberate

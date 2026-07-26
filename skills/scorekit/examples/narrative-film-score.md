@@ -49,6 +49,10 @@ Do not add `character`, `hope`, `memory`, or `narrative` keys to the scene.
 Those ideas guide decisions; the DSL records only decisions with deterministic
 compile semantics.
 
+The solo-violin/strings palette here is dictated by *this* brief. It is not
+a template: for any other story, run the palette declaration in
+[../palettes.md](../palettes.md) before writing tracks.
+
 ## Produce the artifact
 
 Use [exile-in-the-dunes.yaml](exile-in-the-dunes.yaml). Copy it from the skill

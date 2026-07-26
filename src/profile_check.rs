@@ -12,7 +12,7 @@
 use crate::composer::{NoteEvent, ScoreIr, TrackIr};
 use crate::error::{Error, Result};
 use crate::profile;
-use crate::schema::{Instrument, TimeSig};
+use crate::schema::TimeSig;
 use crate::{midi, tools};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -47,6 +47,9 @@ pub struct FlakeDiagnostics {
 pub struct PatchReport {
     pub path: String,
     pub mappings: Vec<String>,
+    /// MIDI channel probes required by the mappings sharing this physical
+    /// patch. A mixed melodic/percussion patch must pass both.
+    pub probes: Vec<String>,
     pub status: String,
     pub peak_abs: u32,
     pub rms: f64,
@@ -62,6 +65,21 @@ pub struct PatchReport {
     pub flake_diagnostics: Vec<FlakeDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Probe {
+    Melodic,
+    Percussion,
+}
+
+impl Probe {
+    fn key(self) -> &'static str {
+        match self {
+            Probe::Melodic => "melodic",
+            Probe::Percussion => "percussion",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,12 +269,14 @@ fn probe_midi(drum_channel: bool) -> Vec<u8> {
 fn render_failure(
     path: &Path,
     mappings: Vec<String>,
+    probes: Vec<String>,
     status: &str,
     error: impl Into<String>,
 ) -> PatchReport {
     PatchReport {
         path: path.display().to_string(),
         mappings,
+        probes,
         status: status.to_owned(),
         peak_abs: 0,
         rms: 0.0,
@@ -392,21 +412,233 @@ fn flake_snapshot(attempt: &str, outcome: &PairOutcome) -> FlakeDiagnostics {
     }
 }
 
+fn certify_probe(
+    midi: &Path,
+    path: &Path,
+    scratch: &Path,
+    index: usize,
+    probe: Probe,
+    mappings: Vec<String>,
+    sample_rate: u32,
+) -> Result<PatchReport> {
+    let probe_name = probe.key();
+    let first_tag = format!("{probe_name}-first");
+    let first = match render_pair(midi, path, scratch, index, &first_tag, sample_rate)? {
+        PairResult::Failed(error) => {
+            return Ok(render_failure(
+                path,
+                mappings,
+                vec![probe_name.to_owned()],
+                "render_failed",
+                format!("{probe_name} probe: {error}"),
+            ));
+        }
+        PairResult::Rendered(outcome) => outcome,
+    };
+
+    if first.verdict == Verdict::Pass {
+        return Ok(PatchReport {
+            path: path.display().to_string(),
+            mappings,
+            probes: vec![probe_name.to_owned()],
+            status: "ok".to_owned(),
+            peak_abs: first.peak_abs,
+            rms: first.rms,
+            deterministic: true,
+            difference_rms_ratio: first.difference_rms_ratio,
+            render_sha256: Some(first.hashes[0].clone()),
+            warnings: warnings(&first.diagnostics),
+            flake_diagnostics: Vec::new(),
+            error: None,
+        });
+    }
+
+    let first_snapshot = flake_snapshot("first", &first);
+    let recheck_tag = format!("{probe_name}-recheck");
+    let recheck = match render_pair(midi, path, scratch, index, &recheck_tag, sample_rate)? {
+        PairResult::Failed(error) => {
+            let mut report = render_failure(
+                path,
+                mappings,
+                vec![probe_name.to_owned()],
+                "render_failed",
+                format!("{probe_name} probe: {error}"),
+            );
+            report.flake_diagnostics = vec![first_snapshot];
+            return Ok(report);
+        }
+        PairResult::Rendered(outcome) => outcome,
+    };
+
+    if recheck.verdict == Verdict::Pass {
+        let mut patch_warnings = warnings(&recheck.diagnostics);
+        patch_warnings.push(format!(
+            "load_sensitive_flake: {probe_name} probe first attempt was {} (RMS ratio {:.8}); \
+             isolated recheck passed — see flake_diagnostics",
+            first_snapshot.observed_status, first_snapshot.difference_rms_ratio,
+        ));
+        return Ok(PatchReport {
+            path: path.display().to_string(),
+            mappings,
+            probes: vec![probe_name.to_owned()],
+            status: "ok".to_owned(),
+            peak_abs: recheck.peak_abs,
+            rms: recheck.rms,
+            deterministic: true,
+            difference_rms_ratio: recheck.difference_rms_ratio,
+            render_sha256: Some(recheck.hashes[0].clone()),
+            warnings: patch_warnings,
+            flake_diagnostics: vec![first_snapshot],
+            error: None,
+        });
+    }
+
+    let recheck_snapshot = flake_snapshot("recheck", &recheck);
+    let error = match recheck.verdict {
+        Verdict::Silent => format!("{probe_name} probe produced no audible PCM"),
+        _ => format!(
+            "{probe_name} probe renders differ (RMS ratio {:.8}); isolated recheck failed too",
+            recheck.difference_rms_ratio
+        ),
+    };
+    Ok(PatchReport {
+        path: path.display().to_string(),
+        mappings,
+        probes: vec![probe_name.to_owned()],
+        status: recheck.verdict.status().to_owned(),
+        peak_abs: recheck.peak_abs,
+        rms: recheck.rms,
+        deterministic: false,
+        difference_rms_ratio: recheck.difference_rms_ratio,
+        render_sha256: None,
+        warnings: warnings(&recheck.diagnostics),
+        flake_diagnostics: vec![first_snapshot, recheck_snapshot],
+        error: Some(error),
+    })
+}
+
+fn merge_probe_reports(
+    path: &Path,
+    mappings: Vec<String>,
+    mut reports: Vec<PatchReport>,
+) -> PatchReport {
+    if reports.len() == 1 {
+        let mut report = reports.pop().expect("one report");
+        report.mappings = mappings;
+        return report;
+    }
+
+    let all_passed = reports.iter().all(|report| report.status == "ok");
+    let status = reports
+        .iter()
+        .find(|report| report.status != "ok")
+        .map(|report| report.status.clone())
+        .unwrap_or_else(|| "ok".to_owned());
+    let probes = reports
+        .iter()
+        .flat_map(|report| report.probes.iter().cloned())
+        .collect::<Vec<_>>();
+    let warnings = reports
+        .iter()
+        .flat_map(|report| {
+            let probe = report.probes[0].clone();
+            report
+                .warnings
+                .iter()
+                .map(move |warning| format!("{probe}: {warning}"))
+        })
+        .collect();
+    let flake_diagnostics = reports
+        .iter()
+        .flat_map(|report| {
+            let probe = report.probes[0].clone();
+            report
+                .flake_diagnostics
+                .iter()
+                .cloned()
+                .map(move |mut item| {
+                    item.attempt = format!("{probe}:{}", item.attempt);
+                    item
+                })
+        })
+        .collect();
+    let errors = reports
+        .iter()
+        .filter_map(|report| report.error.as_ref())
+        .cloned()
+        .collect::<Vec<_>>();
+    let render_sha256 = all_passed.then(|| {
+        let mut hasher = Sha256::new();
+        for report in &reports {
+            hasher.update(report.probes[0].as_bytes());
+            hasher.update([0]);
+            hasher.update(
+                report
+                    .render_sha256
+                    .as_deref()
+                    .expect("passing probe has a hash")
+                    .as_bytes(),
+            );
+            hasher.update([b'\n']);
+        }
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    });
+
+    PatchReport {
+        path: path.display().to_string(),
+        mappings,
+        probes,
+        status,
+        peak_abs: reports
+            .iter()
+            .map(|report| report.peak_abs)
+            .min()
+            .unwrap_or(0),
+        rms: reports
+            .iter()
+            .map(|report| report.rms)
+            .reduce(f64::min)
+            .unwrap_or(0.0),
+        deterministic: reports.iter().all(|report| report.deterministic),
+        difference_rms_ratio: reports
+            .iter()
+            .map(|report| report.difference_rms_ratio)
+            .reduce(f64::max)
+            .unwrap_or(f64::INFINITY),
+        render_sha256,
+        warnings,
+        flake_diagnostics,
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
+    }
+}
+
 pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
     let loaded = profile::load_profile(profile_path)?;
     let profile_dir = profile_path.parent().unwrap_or_else(|| Path::new("."));
     let mappings = loaded.resolved_mappings(profile_dir);
     let mapping_count = mappings.len();
 
-    let mut patches: BTreeMap<PathBuf, (Vec<String>, bool)> = BTreeMap::new();
+    let mut patches: BTreeMap<PathBuf, BTreeMap<Probe, Vec<String>>> = BTreeMap::new();
     for mapping in mappings {
         let path = std::fs::canonicalize(&mapping.path).unwrap_or(mapping.path);
-        let entry = patches.entry(path).or_default();
-        entry.0.push(format!(
-            "{}.{}",
-            mapping.instrument_key, mapping.articulation_key
-        ));
-        entry.1 |= mapping.instrument == Instrument::Drums;
+        let probe = if mapping.instrument.is_percussion() {
+            Probe::Percussion
+        } else {
+            Probe::Melodic
+        };
+        patches
+            .entry(path)
+            .or_default()
+            .entry(probe)
+            .or_default()
+            .push(format!(
+                "{}.{}",
+                mapping.instrument_key, mapping.articulation_key
+            ));
     }
 
     let unique_patches = patches.len();
@@ -417,99 +649,46 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
     tools::write_atomic(&drum_midi, &probe_midi(true))?;
 
     let mut reports = Vec::with_capacity(unique_patches);
-    for (index, (path, (mapping_names, drums))) in patches.into_iter().enumerate() {
+    for (index, (path, mut mapping_groups)) in patches.into_iter().enumerate() {
+        for names in mapping_groups.values_mut() {
+            names.sort();
+        }
+        let mapping_names = mapping_groups
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        let probes = mapping_groups
+            .keys()
+            .map(|probe| probe.key().to_owned())
+            .collect::<Vec<_>>();
         if !path.is_file() {
             reports.push(render_failure(
                 &path,
                 mapping_names,
+                probes,
                 "missing",
                 format!("SFZ file not found: {}", path.display()),
             ));
             continue;
         }
-        let midi = if drums { &drum_midi } else { &melodic_midi };
-        let first = match render_pair(midi, &path, &scratch.path, index, "first", sample_rate)? {
-            PairResult::Failed(e) => {
-                reports.push(render_failure(&path, mapping_names, "render_failed", e));
-                continue;
-            }
-            PairResult::Rendered(outcome) => outcome,
-        };
-
-        if first.verdict == Verdict::Pass {
-            reports.push(PatchReport {
-                path: path.display().to_string(),
-                mappings: mapping_names,
-                status: "ok".to_owned(),
-                peak_abs: first.peak_abs,
-                rms: first.rms,
-                deterministic: true,
-                difference_rms_ratio: first.difference_rms_ratio,
-                render_sha256: Some(first.hashes[0].clone()),
-                warnings: warnings(&first.diagnostics),
-                flake_diagnostics: Vec::new(),
-                error: None,
-            });
-            continue;
+        let mut probe_reports = Vec::with_capacity(mapping_groups.len());
+        for (probe, names) in mapping_groups {
+            let midi = match probe {
+                Probe::Melodic => &melodic_midi,
+                Probe::Percussion => &drum_midi,
+            };
+            probe_reports.push(certify_probe(
+                midi,
+                &path,
+                &scratch.path,
+                index,
+                probe,
+                names,
+                sample_rate,
+            )?);
         }
-
-        // Failed comparison: capture evidence, then one recorded isolated
-        // recheck of this single patch (see module docs).
-        let first_snapshot = flake_snapshot("first", &first);
-        let recheck = match render_pair(midi, &path, &scratch.path, index, "recheck", sample_rate)?
-        {
-            PairResult::Failed(e) => {
-                let mut report = render_failure(&path, mapping_names, "render_failed", e);
-                report.flake_diagnostics = vec![first_snapshot];
-                reports.push(report);
-                continue;
-            }
-            PairResult::Rendered(outcome) => outcome,
-        };
-
-        if recheck.verdict == Verdict::Pass {
-            let mut patch_warnings = warnings(&recheck.diagnostics);
-            patch_warnings.push(format!(
-                "load_sensitive_flake: first attempt was {} (RMS ratio {:.8}); isolated recheck passed — see flake_diagnostics",
-                first_snapshot.observed_status, first_snapshot.difference_rms_ratio,
-            ));
-            reports.push(PatchReport {
-                path: path.display().to_string(),
-                mappings: mapping_names,
-                status: "ok".to_owned(),
-                peak_abs: recheck.peak_abs,
-                rms: recheck.rms,
-                deterministic: true,
-                difference_rms_ratio: recheck.difference_rms_ratio,
-                render_sha256: Some(recheck.hashes[0].clone()),
-                warnings: patch_warnings,
-                flake_diagnostics: vec![first_snapshot],
-                error: None,
-            });
-            continue;
-        }
-
-        let recheck_snapshot = flake_snapshot("recheck", &recheck);
-        let error = match recheck.verdict {
-            Verdict::Silent => "probe produced no audible PCM".to_owned(),
-            _ => format!(
-                "two renders differ (RMS ratio {:.8}); isolated recheck failed too",
-                recheck.difference_rms_ratio
-            ),
-        };
-        reports.push(PatchReport {
-            path: path.display().to_string(),
-            mappings: mapping_names,
-            status: recheck.verdict.status().to_owned(),
-            peak_abs: recheck.peak_abs,
-            rms: recheck.rms,
-            deterministic: false,
-            difference_rms_ratio: recheck.difference_rms_ratio,
-            render_sha256: None,
-            warnings: warnings(&recheck.diagnostics),
-            flake_diagnostics: vec![first_snapshot, recheck_snapshot],
-            error: Some(error),
-        });
+        reports.push(merge_probe_reports(&path, mapping_names, probe_reports));
     }
 
     let passed = reports.iter().filter(|patch| patch.status == "ok").count();

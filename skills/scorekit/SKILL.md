@@ -7,7 +7,9 @@ description: >
   against aesthetic grammar profiles. Use when the user asks for game BGM,
   background music, a music loop, adaptive-music stems, film-style scoring,
   a scene.yaml, or scorekit itself (game score, background music, looping
-  music, stems, generated music, composing a piece).
+  music, stems, generated music, composing a piece). Also use it to audit,
+  review, or critique an existing arrangement/scene (arrangement audit,
+  编曲审计) — standalone or as the post-build self-check.
   Not for singing with lyrics, audio analysis, or editing existing recordings.
 ---
 
@@ -54,14 +56,18 @@ or pass an explicit file to override it.
    `scorekit schema --resolver` (instrument-resolver config), `scorekit
    schema --profile` (leaf renderer profiles), and `scorekit schema
    --orchestration` (orchestration profiles) print JSON Schema.
-2. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
-3. **Validate:** `scorekit --json validate scene.yaml` — errors are
+2. **Declare a palette first** ([palettes.md](palettes.md)): name your
+   inertia answer, weigh 2–3 candidate palettes against the brief, pick
+   one for stated reasons, and note which variation axes differ from your
+   recent pieces. Orchestral strings must win this step, never inherit it.
+3. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
+4. **Validate:** `scorekit --json validate scene.yaml` — errors are
    machine-readable on stderr with `field` paths and line numbers. Fix and
    repeat until exit 0.
-4. **Lint (if the project has grammar profiles):**
+5. **Lint (if the project has grammar profiles):**
    `scorekit lint scene.yaml --grammar grammars/<style>.yaml` — violations
    report measured vs wanted values; edit the scene until it conforms.
-5. **Build:**
+6. **Build:**
    ```bash
    scorekit build scene.yaml -o out/scene.ogg
    ```
@@ -69,7 +75,10 @@ or pass an explicit file to override it.
    game audio), `--renderer timidity` for the alternate backend. Non-loop
    scenes get a reverb tail (`--tail`, default 4s). A scene declaring
    `textures` also needs `--texture-profile <file>`.
-6. **Iterate by ear:** play the file for the user; when revising, keep the
+7. **Self-audit:** run the arrangement audit ([audit.md](audit.md)) —
+   deterministic gates (G1–G5) plus the craft rubric — and fix or justify
+   every finding before reporting completion.
+8. **Iterate by ear:** play the file for the user; when revising, keep the
    scene under version control — `scorekit diff old.yaml new.yaml` shows
    semantic changes only.
 
@@ -80,8 +89,11 @@ then translate only deterministic musical decisions into the DSL. The worked
 artifact is [examples/exile-in-the-dunes.yaml](examples/exile-in-the-dunes.yaml).
 
 Completion gate: `doctor` is ready, the scene passes `validate`, any requested
-grammar passes `lint`, `build` succeeds, and the response names the scene,
-audio, metadata, and stem paths plus the motif/orchestration choices made.
+grammar passes `lint`, `build` succeeds, and the **arrangement audit**
+([audit.md](audit.md)) ran self-check — deterministic gates pass, craft
+findings carry a fix or a justification. The response names the scene,
+audio, metadata, and stem paths plus the motif/orchestration choices made,
+and ends with the audit verdict line.
 
 Batch many scenes: `scorekit batch a.yaml b.yaml --out-dir assets/` →
 per-scene results in `assets/report.json`, one failure
@@ -102,7 +114,9 @@ and land in `meta.json` as `instrument_resolution`, alongside each track's
 
 Exit codes: `0` ok · `1` io · `2` invalid input / lint violations ·
 `3` missing dependency · `4` external tool failed. Global `--json` flag
-turns every error into one structured JSON object on stderr.
+turns every error into one structured JSON object on stderr. For MCP
+clients, `scorekit mcp` serves the same commands as stdio MCP tools — a
+pure adapter, same contract as the CLI.
 
 ## Scene cheat sheet
 
@@ -137,6 +151,9 @@ tracks:
   - { id: harmony, instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
   - { id: foundation, instrument: cello,  pattern: bass, intensity: 0.35 }
   - { id: pulse, instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
+  # ^ example wiring only — do NOT default to this string-quartet palette.
+  #   Pick a palette deliberately from palettes.md (chiptune, jazz-noir,
+  #   music-box, synth-ambient, east-asian, …) before writing tracks.
   # optional: palette: solo | ensemble | ... — routes to an orchestration
   # palette (--orchestration). Omitted = the orchestration's default_palette.
   # Routing metadata only; never changes compiled MIDI.
@@ -152,27 +169,64 @@ Every track needs a stable, unique `id` (`[a-z][a-z0-9_-]{0,63}`) — used by
 
 Patterns: `melody` (plays its `motif`) · `sustain` (whole-bar chords) ·
 `arpeggio` (broken chords) · `bass` (roots) · `drums` (groove, `drums`
-instrument only). ~57 GM instruments in snake_case (`piano`, `epiano`,
-`music_box`, `slow_strings`, `choir`, `voice`, `pan_flute`, `square_lead`,
-`warm_pad`, `choir_pad`, …) — full table in [reference.md](reference.md).
+instrument only) · `tabla` (fixed 16-beat theka, `tabla` instrument only).
+The vocabulary contains the 60-instrument core plus 11 exact-source world
+identities (`erhu`, `pipa`, `guzheng`, `dizi`, `shakuhachi`, `shamisen`,
+`sitar`, `tabla`, `oud`, `ney`, `duduk`). Only shakuhachi, sitar, and shamisen
+have exact GM programs; the others require real renderer-profile mappings and
+must never be replaced by a related-looking instrument. Core examples include
+`piano`, `epiano`, `music_box`, `slow_strings`, `choir`, `voice`,
+`pan_flute`, `square_lead`, `warm_pad`, and `choir_pad`; the full table is in
+[reference.md](reference.md).
+Standalone `scorekit midi` rejects profile-only melodic identities because it
+has no renderer-profile input; use an sfizz `build` for those scenes. Tabla is
+the channel-10 exception.
 `choir`/`voice`/`choir_pad` are sampled vowels (ahh/ooh), not lyrics.
 
-Texture `source` names are portable keys, never paths. Bind them externally:
+Texture `source` names are portable keys, never paths. Bind them externally
+in a profile that also *describes* each source, so you can pick one without
+opening the files:
 
 ```yaml
+schema_version: 1
 name: forest
 root: /path/to/recordings
-sources: { river: river.flac, birds: birds.wav }
+sources:
+  river:
+    path: river.flac
+    description: Wide river bed, mid-distance
+    category: organic          # closed enum — see schema --texture-profile
+    tags: [water, flowing]     # open vocabulary
+    playback: { modes: [loop], default_mode: loop }
+    use_cases: [forest]
+    provenance: { library: field-recordings@2024.1 }
 ```
 
-`loop` repeats continuously; `one_shot` triggers at quarter-note beats. Keep
-runtime/world-driven audio (distance, weather, RPM) in the game engine.
+**Never guess a source name.** Enumerate and filter first:
+
+```bash
+scorekit texture inspect textures.yaml --category organic --tag water
+scorekit texture check textures.yaml     # certify: exists, decodes, audible
+```
+
+Filters are exact and conjunctive (repeated `--tag` intersects); there is no
+similarity ranking, so `no_match` means re-orchestrate or add a real source
+— not "pick the closest one". `loop` repeats continuously; `one_shot`
+triggers at quarter-note beats, and a mode the profile does not declare in
+`playback.modes` is rejected at build time. Keep runtime/world-driven audio
+(distance, weather, RPM) in the game engine.
 
 Suites (multi-section pieces sharing motifs — intro/explore/combat/victory)
 use `sections:`; see [reference.md](reference.md).
 
 ## Composition craft (learned from real scoring sessions)
 
+- **Break palette inertia first.** The examples in this skill lean
+  strings because they came from film briefs — that is not a default.
+  [palettes.md](palettes.md) is the antidote: name your habitual answer,
+  make palettes compete, vary ≥3 axes between consecutive pieces
+  (palette, key/mode, tempo class, meter, lead timbre, pulse, harmony
+  color, density).
 - **Entrances/exits are melody-only.** `sustain`/`arpeggio`/`bass`/`drums`
   fill the whole scene. To bring an instrument in and out mid-piece, give it
   `pattern: melody` and write rests (`degree: 0`) around its material. This
@@ -219,6 +273,26 @@ Shipped reference pair: `examples/grammars/grief.yaml` +
 project, sadness sounds like…"), capture it as a grammar file and lint every
 new scene against it — the aesthetic then survives model changes.
 
+## Arrangement audit (self-check + standalone)
+
+[audit.md](audit.md) is the review protocol: deterministic gates
+(`validate`, `lint`, `inspect-instruments`, `texture inspect/check`,
+`meta.json` evidence — blocking) plus a measured craft rubric (motif
+economy, voice discipline, breathing, emotional curve, role coverage,
+register spacing, loop seal, determinism hygiene, story alignment, source
+honesty, style independence vs your recent pieces — advisory). Two modes:
+
+- **Self-check:** mandatory after every completed compose/build — part of
+  the completion gate above. A failed gate blocks completion; craft
+  findings ship only with a fix or a one-line justification.
+- **Standalone:** when the user asks to audit/review/critique an existing
+  scene (with or without composing anything), run the same protocol and
+  deliver the report — `measured` vs `want`, verdict
+  `BLOCKED | SHIP WITH NOTES | CLEAN` — without editing the scene.
+
+Recurring craft findings graduate into grammar rules (see above), turning
+advisory review into a deterministic gate.
+
 ## Game asset conventions
 
 - `build` writes `meta.json` next to the audio: exact sample counts, loop
@@ -231,3 +305,5 @@ new scene against it — the aesthetic then survives model changes.
 
 Full DSL field tables, instrument list, command flags, grammar rule
 semantics, and meta.json layout: [reference.md](reference.md).
+Arrangement-audit gates, craft rubric, and report format: [audit.md](audit.md).
+Palette catalog, inertia rule, and variation axes: [palettes.md](palettes.md).

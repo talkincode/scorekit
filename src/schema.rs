@@ -56,7 +56,8 @@ pub struct Scene {
     #[serde(default)]
     #[schemars(length(max = 16))]
     pub textures: Vec<TextureTrack>,
-    /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one drums.
+    /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one
+    /// percussion track (`drums` or `tabla`).
     #[schemars(length(min = 1, max = 16))]
     pub tracks: Vec<Track>,
     /// Suite sections. When present, `build` emits one asset per section
@@ -111,9 +112,11 @@ pub struct Track {
     #[serde(default)]
     #[schemars(regex(pattern = "^[a-z][a-z0-9_-]{0,63}$"))]
     pub palette: Option<String>,
-    /// General MIDI instrument name, or `drums` for the percussion channel.
+    /// Portable instrument identity. Some require an exact renderer-profile
+    /// source because General MIDI has no matching program.
     pub instrument: Instrument,
-    /// What this track plays. `drums` pattern pairs only with the `drums` instrument.
+    /// What this track plays. `drums` and `tabla` each pair only with their
+    /// namesake percussion instrument.
     pub pattern: Pattern,
     /// Motif name to play; required with (and only with) pattern `melody`.
     #[serde(default)]
@@ -336,6 +339,8 @@ pub enum Pattern {
     /// Plays the motif named by the track's `motif` field, looped/truncated
     /// to fill the section.
     Melody,
+    /// Deterministic 16-beat tabla theka, cycled across the scene.
+    Tabla,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
@@ -401,74 +406,99 @@ pub enum Instrument {
     HaloPad,
     SweepPad,
     Drums,
+    Erhu,
+    Pipa,
+    Guzheng,
+    Dizi,
+    Shakuhachi,
+    Shamisen,
+    Sitar,
+    Tabla,
+    Oud,
+    Ney,
+    Duduk,
 }
 
 impl Instrument {
-    /// General MIDI program number; `None` for the percussion channel.
+    /// Exact General MIDI program number. `None` means the instrument needs a
+    /// renderer-profile mapping (or uses the percussion channel).
     pub fn gm_program(self) -> Option<u8> {
         use Instrument::*;
-        Some(match self {
-            Piano => 0,
-            BrightPiano => 1,
-            Epiano => 4,
-            Harpsichord => 6,
-            Celesta => 8,
-            Glockenspiel => 9,
-            MusicBox => 10,
-            Vibraphone => 11,
-            Marimba => 12,
-            Xylophone => 13,
-            TubularBells => 14,
-            Organ => 19,
-            Accordion => 21,
-            Guitar => 24,
-            SteelGuitar => 25,
-            ElectricGuitar => 27,
-            MutedGuitar => 28,
-            Bass => 33,
-            PickedBass => 34,
-            FretlessBass => 35,
-            SlapBass => 36,
-            SynthBass => 38,
-            Violin => 40,
-            Viola => 41,
-            Cello => 42,
-            Contrabass => 43,
-            TremoloStrings => 44,
-            Pizzicato => 45,
-            Harp => 46,
-            Timpani => 47,
-            Strings => 48,
-            SlowStrings => 49,
-            SynthStrings => 50,
-            Choir => 52,
-            Voice => 53,
-            Trumpet => 56,
-            Trombone => 57,
-            Tuba => 58,
-            Horn => 60,
-            Brass => 61,
-            Sax => 65,
-            Oboe => 68,
-            EnglishHorn => 69,
-            Bassoon => 70,
-            Clarinet => 71,
-            Piccolo => 72,
-            Flute => 73,
-            Recorder => 74,
-            PanFlute => 75,
-            Whistle => 78,
-            Ocarina => 79,
-            SquareLead => 80,
-            SawLead => 81,
-            Pad => 88,
-            WarmPad => 89,
-            ChoirPad => 91,
-            BowedPad => 92,
-            HaloPad => 94,
-            SweepPad => 95,
-            Drums => return None,
-        })
+        match self {
+            Piano => Some(0),
+            BrightPiano => Some(1),
+            Epiano => Some(4),
+            Harpsichord => Some(6),
+            Celesta => Some(8),
+            Glockenspiel => Some(9),
+            MusicBox => Some(10),
+            Vibraphone => Some(11),
+            Marimba => Some(12),
+            Xylophone => Some(13),
+            TubularBells => Some(14),
+            Organ => Some(19),
+            Accordion => Some(21),
+            Guitar => Some(24),
+            SteelGuitar => Some(25),
+            ElectricGuitar => Some(27),
+            MutedGuitar => Some(28),
+            Bass => Some(33),
+            PickedBass => Some(34),
+            FretlessBass => Some(35),
+            SlapBass => Some(36),
+            SynthBass => Some(38),
+            Violin => Some(40),
+            Viola => Some(41),
+            Cello => Some(42),
+            Contrabass => Some(43),
+            TremoloStrings => Some(44),
+            Pizzicato => Some(45),
+            Harp => Some(46),
+            Timpani => Some(47),
+            Strings => Some(48),
+            SlowStrings => Some(49),
+            SynthStrings => Some(50),
+            Choir => Some(52),
+            Voice => Some(53),
+            Trumpet => Some(56),
+            Trombone => Some(57),
+            Tuba => Some(58),
+            Horn => Some(60),
+            Brass => Some(61),
+            Sax => Some(65),
+            Oboe => Some(68),
+            EnglishHorn => Some(69),
+            Bassoon => Some(70),
+            Clarinet => Some(71),
+            Piccolo => Some(72),
+            Flute => Some(73),
+            Recorder => Some(74),
+            PanFlute => Some(75),
+            Whistle => Some(78),
+            Ocarina => Some(79),
+            SquareLead => Some(80),
+            SawLead => Some(81),
+            Pad => Some(88),
+            WarmPad => Some(89),
+            ChoirPad => Some(91),
+            BowedPad => Some(92),
+            HaloPad => Some(94),
+            SweepPad => Some(95),
+            Shakuhachi => Some(77),
+            Sitar => Some(104),
+            Shamisen => Some(106),
+            Drums | Erhu | Pipa | Guzheng | Dizi | Tabla | Oud | Ney | Duduk => None,
+        }
+    }
+
+    /// Unpitched instruments that reserve MIDI channel 10.
+    pub fn is_percussion(self) -> bool {
+        matches!(self, Instrument::Drums | Instrument::Tabla)
+    }
+
+    /// Whether a General MIDI sound source can represent this identity exactly.
+    pub fn has_exact_gm_sound(self) -> bool {
+        self == Instrument::Drums || self.gm_program().is_some()
     }
 }
 
@@ -732,17 +762,20 @@ impl Scene {
         let melodic = self
             .tracks
             .iter()
-            .filter(|t| t.instrument != Instrument::Drums)
+            .filter(|t| !t.instrument.is_percussion())
             .count();
-        let drums = self.tracks.len() - melodic;
+        let percussion = self.tracks.len() - melodic;
         if melodic > 15 {
             return fail(
                 "tracks",
                 format!("{melodic} melodic tracks exceed the 15-channel limit"),
             );
         }
-        if drums > 1 {
-            return fail("tracks", "at most one drums track is supported".to_owned());
+        if percussion > 1 {
+            return fail(
+                "tracks",
+                "at most one percussion track (`drums` or `tabla`) is supported".to_owned(),
+            );
         }
         let mut track_ids = std::collections::BTreeSet::new();
         for (i, t) in self.tracks.iter().enumerate() {
@@ -807,23 +840,32 @@ impl Scene {
                     );
                 }
             }
-            match (
-                t.instrument == Instrument::Drums,
-                t.pattern == Pattern::Drums,
-            ) {
-                (true, false) => {
+            match t.instrument {
+                Instrument::Drums if t.pattern != Pattern::Drums => {
                     return fail(
                         &format!("tracks[{i}].pattern"),
                         "instrument `drums` requires pattern `drums`".to_owned(),
                     );
                 }
-                (false, true) => {
+                Instrument::Tabla if t.pattern != Pattern::Tabla => {
                     return fail(
                         &format!("tracks[{i}].pattern"),
-                        "pattern `drums` requires instrument `drums`".to_owned(),
+                        "instrument `tabla` requires pattern `tabla`".to_owned(),
                     );
                 }
                 _ => {}
+            }
+            if t.pattern == Pattern::Drums && t.instrument != Instrument::Drums {
+                return fail(
+                    &format!("tracks[{i}].pattern"),
+                    "pattern `drums` requires instrument `drums`".to_owned(),
+                );
+            }
+            if t.pattern == Pattern::Tabla && t.instrument != Instrument::Tabla {
+                return fail(
+                    &format!("tracks[{i}].pattern"),
+                    "pattern `tabla` requires instrument `tabla`".to_owned(),
+                );
             }
             match (t.pattern == Pattern::Melody, &t.motif) {
                 (true, None) => {

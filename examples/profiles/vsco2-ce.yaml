@@ -14,10 +14,9 @@
 #      beside your copy of this file.
 #
 # VSCO 2 CE is acoustic/orchestral-only — it has no synth or vocal patches.
-# Instruments the DSL supports but VSCO2 doesn't provide a natural sample
-# for are mapped to an orchestral substitute (noted per entry below); this
-# keeps every example in examples/scenes/ renderable through one free
-# library instead of leaving some scenes without an sfizz path.
+# Generic instruments that VSCO2 doesn't provide are mapped to an orchestral
+# substitute (noted per entry below). Region-specific world instruments are
+# exact-source-only and intentionally omitted rather than impersonated.
 name: vsco2-ce
 description: >-
   VSCO 2 Community Edition (CC0 orchestral samples) — see

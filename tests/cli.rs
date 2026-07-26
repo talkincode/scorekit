@@ -147,6 +147,16 @@ fn tiny_sfizz_scene(dir: &Path) -> PathBuf {
     scene
 }
 
+fn world_sfizz_scene(dir: &Path) -> PathBuf {
+    let scene = dir.join("world.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\nloop: false\ntracks:\n  - id: erhu\n    instrument: erhu\n    pattern: sustain\n  - id: tabla\n    instrument: tabla\n    pattern: tabla\n",
+    )
+    .unwrap();
+    scene
+}
+
 /// A short single-track MIDI (2 bars @ 120 BPM, ~4s) — deliberately not
 /// `make_midi(forest())`'s full 4-track scene, which would push hundreds of
 /// simultaneous notes through one tiny single-cycle sine region and take
@@ -1083,6 +1093,59 @@ fn write_texture_wave(path: &Path, frequency: f64, seconds: f64) {
     writer.finalize().unwrap();
 }
 
+/// One structured texture source. Every discovery field is mandatory in the
+/// format, so an agent can rely on all of them being present for every
+/// source rather than on whichever the author felt like filling in.
+fn texture_source_yaml(
+    name: &str,
+    path: &str,
+    category: &str,
+    tags: &[&str],
+    modes: &[&str],
+    use_cases: &[&str],
+) -> String {
+    format!(
+        "  {name}:\n    path: {path}\n    description: Test recording {name}\n    \
+         category: {category}\n    tags: [{}]\n    playback:\n      modes: [{}]\n      \
+         default_mode: {}\n    use_cases: [{}]\n    provenance:\n      \
+         library: test-fixtures@1.0.0\n",
+        tags.join(", "),
+        modes.join(", "),
+        modes[0],
+        use_cases.join(", "),
+    )
+}
+
+fn texture_profile_yaml(name: &str, sources: &str) -> String {
+    format!("schema_version: 1\nname: {name}\nsources:\n{sources}")
+}
+
+/// The two-source profile most texture build tests bind against.
+fn river_birds_profile() -> String {
+    texture_profile_yaml(
+        "field-recordings",
+        &format!(
+            "{}{}",
+            texture_source_yaml(
+                "river",
+                "river.wav",
+                "organic",
+                &["water", "flowing"],
+                &["loop"],
+                &["forest"]
+            ),
+            texture_source_yaml(
+                "birds",
+                "birds.wav",
+                "organic",
+                &["wildlife", "chirping"],
+                &["one_shot"],
+                &["forest"]
+            ),
+        ),
+    )
+}
+
 #[test]
 fn build_full_chain_scene_to_ogg() {
     let dir = tempfile::tempdir().unwrap();
@@ -1340,11 +1403,7 @@ fn build_textures_normalizes_places_mixes_and_emits_stems() {
     write_texture_wave(&river, 137.0, 0.2);
     write_texture_wave(&birds, 733.0, 0.08);
     let profile = dir.path().join("textures.yaml");
-    fs::write(
-        &profile,
-        "name: field-recordings\nsources:\n  river: river.wav\n  birds: birds.wav\n",
-    )
-    .unwrap();
+    fs::write(&profile, river_birds_profile()).unwrap();
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
@@ -1435,7 +1494,17 @@ fn build_missing_texture_source_leaves_no_partial_artifact() {
     let profile = dir.path().join("textures.yaml");
     fs::write(
         &profile,
-        "name: missing-source\nsources:\n  river: missing.wav\n",
+        texture_profile_yaml(
+            "missing-source",
+            &texture_source_yaml(
+                "river",
+                "missing.wav",
+                "organic",
+                &["water"],
+                &["loop"],
+                &["forest"],
+            ),
+        ),
     )
     .unwrap();
     bin()
@@ -1461,7 +1530,17 @@ fn suite_failure_rolls_back_all_previously_built_sections() {
     let profile = dir.path().join("textures.yaml");
     fs::write(
         &profile,
-        "name: rollback-test\nsources:\n  long_bell: long-bell.wav\n",
+        texture_profile_yaml(
+            "rollback-test",
+            &texture_source_yaml(
+                "long_bell",
+                "long-bell.wav",
+                "tonal",
+                &["bell", "metallic"],
+                &["one_shot"],
+                &["ritual"],
+            ),
+        ),
     )
     .unwrap();
     let scene = dir.path().join("suite.yaml");
@@ -2010,6 +2089,52 @@ fn build_sfizz_happy_path_produces_stems_and_sums_to_mix() {
         "sfizz stems do not sum to mix: RMS ratio {ratio:.4}"
     );
     let _ = ch;
+}
+
+#[test]
+fn build_sfizz_world_instruments_renders_erhu_and_tabla_stems() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = world_sfizz_scene(dir.path());
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("world-profile.yaml");
+    fs::write(
+        &profile,
+        "name: world-test\ninstruments:\n  erhu:\n    sustain: mini.sfz\n  tabla:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+    let wav = dir.path().join("world.wav");
+
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(&wav)
+        .arg("--stems")
+        .args(["--tail", "0"])
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+
+    let stems = dir.path().join("world.stems");
+    assert_dir_contains_exactly(&stems, &["01-erhu.wav", "02-tabla.wav"]);
+    for name in ["01-erhu.wav", "02-tabla.wav"] {
+        let (_, samples) = read_frames(&stems.join(name));
+        assert!(
+            samples.iter().any(|&sample| sample.abs() > 50),
+            "{name} is silent"
+        );
+    }
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("world.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["instrument_resolution"]["summary"]["exact"], 2);
+    assert_eq!(
+        meta["instrument_resolution"]["tracks"][1]["canonical"],
+        "tabla"
+    );
 }
 
 #[test]
@@ -2675,8 +2800,7 @@ fn alias_and_canonical_scene_produce_identical_midi() {
     );
 }
 
-/// SF2 backends carry the full General MIDI vocabulary: every instrument
-/// resolves exactly, and the meta report says so.
+/// SF2 backends carry the original 60-instrument core vocabulary exactly.
 #[test]
 fn build_sf2_resolution_is_all_exact() {
     let dir = tempfile::tempdir().unwrap();
@@ -2696,6 +2820,185 @@ fn build_sf2_resolution_is_all_exact() {
     assert_eq!(summary["fallback"], 0);
     assert_eq!(summary["missing"], 0);
     assert_eq!(summary["rejected"], 0);
+}
+
+#[test]
+fn world_instrument_vocabulary_and_tabla_pattern_validate() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("world.yaml");
+    fs::write(
+        &scene,
+        "tempo: 100\nbars: 1\ntracks:\n  - { id: erhu, instrument: erhu, pattern: sustain }\n  - { id: pipa, instrument: pipa, pattern: sustain }\n  - { id: guzheng, instrument: guzheng, pattern: sustain }\n  - { id: dizi, instrument: dizi, pattern: sustain }\n  - { id: shakuhachi, instrument: shakuhachi, pattern: sustain }\n  - { id: shamisen, instrument: shamisen, pattern: sustain }\n  - { id: sitar, instrument: sitar, pattern: sustain }\n  - { id: tabla, instrument: tabla, pattern: tabla }\n  - { id: oud, instrument: oud, pattern: sustain }\n  - { id: ney, instrument: ney, pattern: sustain }\n  - { id: duduk, instrument: duduk, pattern: sustain }\n",
+    )
+    .unwrap();
+    bin().arg("validate").arg(&scene).assert().success();
+
+    let bad = dir.path().join("bad-tabla.yaml");
+    fs::write(
+        &bad,
+        "tempo: 100\nbars: 1\ntracks:\n  - { id: tabla, instrument: tabla, pattern: drums }\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&bad)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "tracks[0].pattern");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("requires pattern `tabla`")
+    );
+}
+
+#[test]
+fn tabla_midi_is_a_deterministic_16_beat_channel_10_theka() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("tabla.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 4\ntracks:\n  - { id: tabla, instrument: tabla, pattern: tabla }\n",
+    )
+    .unwrap();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    for output in [&a, &b] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&a).unwrap();
+    assert_eq!(bytes, fs::read(&b).unwrap());
+
+    let smf = midly::Smf::parse(&bytes).expect("tabla MIDI parses");
+    let mut note_ons = Vec::new();
+    let mut programs = 0;
+    for track in &smf.tracks {
+        let mut tick = 0u32;
+        for event in track {
+            tick += event.delta.as_int();
+            if let midly::TrackEventKind::Midi { channel, message } = event.kind {
+                match message {
+                    midly::MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
+                        note_ons.push((tick, channel.as_int(), key.as_int()));
+                    }
+                    midly::MidiMessage::ProgramChange { .. } => programs += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let expected_keys = [
+        36, 37, 37, 36, 36, 37, 37, 36, 36, 38, 38, 39, 39, 37, 37, 36,
+    ];
+    assert_eq!(note_ons.len(), expected_keys.len());
+    for (index, ((tick, channel, key), expected_key)) in
+        note_ons.iter().zip(expected_keys).enumerate()
+    {
+        assert_eq!(*tick, index as u32 * 480);
+        assert_eq!(*channel, 9, "MIDI channel 10 is zero-based channel 9");
+        assert_eq!(*key, expected_key);
+    }
+    assert_eq!(
+        programs, 0,
+        "profile-only tabla must not emit a false GM program"
+    );
+}
+
+#[test]
+fn midi_rejects_profile_only_melodic_instrument_without_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("erhu.yaml");
+    let midi = dir.path().join("erhu.mid");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: erhu, instrument: erhu, pattern: sustain }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "midi"])
+        .arg(&scene)
+        .arg("-o")
+        .arg(&midi)
+        .assert()
+        .failure()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "tracks[0].instrument");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("program 0 (piano)")
+    );
+    assert!(!midi.exists());
+}
+
+#[test]
+fn build_sf2_exact_world_programs_render_without_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("gm-world.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: shakuhachi, instrument: shakuhachi, pattern: sustain }\n  - { id: sitar, instrument: sitar, pattern: arpeggio }\n  - { id: shamisen, instrument: shamisen, pattern: arpeggio }\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("gm-world.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .args(["--tail", "0"])
+        .assert()
+        .success();
+
+    let (_, samples) = read_frames(&wav);
+    assert!(samples.iter().any(|&sample| sample.abs() > 50));
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("gm-world.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["instrument_resolution"]["summary"]["exact"], 3);
+    assert_eq!(meta["instrument_resolution"]["summary"]["fallback"], 0);
+}
+
+#[test]
+fn build_sf2_profile_only_world_instrument_fails_without_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("erhu.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: erhu, instrument: erhu, pattern: sustain }\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(dir.path().join("erhu.wav"))
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "resolution");
+    assert_eq!(error["report"]["missing_instruments"][0], "erhu");
+    assert_eq!(
+        error["report"]["tracks"][0]["best_candidate"]["rejected"],
+        "world_instrument_requires_exact_source"
+    );
+    assert_dir_contains_exactly(dir.path(), &["erhu.yaml"]);
 }
 
 /// Low-level single-instrument path: `render --renderer sfizz --sfz ...`,
@@ -2878,6 +3181,50 @@ fn install_counted_sfizz(fake_bin: &Path, outputs: &[i16]) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_probes_shared_melodic_and_percussion_patch_separately() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    // Melodic pair passes. The percussion pair and its isolated recheck are
+    // silent. A path-only deduplication bug would run just the first pair and
+    // falsely certify the shared patch.
+    install_counted_sfizz(&fake_bin, &[1000, 1000, 0, 0, 0, 0]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("shared.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: mixed\ninstruments:\n  violin:\n    sustain: shared.sfz\n  tabla:\n    sustain: shared.sfz\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("TMPDIR", dir.path())
+        .assert()
+        .failure()
+        .code(2);
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let report = &report["report"];
+    assert_eq!(report["unique_patches"], 1);
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["patches"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["patches"][0]["probes"],
+        serde_json::json!(["melodic", "percussion"])
+    );
+    assert_eq!(
+        report["patches"][0]["mappings"],
+        serde_json::json!(["violin.sustain", "tabla.sustain"])
+    );
+    assert_eq!(report["patches"][0]["status"], "silent");
+    assert_eq!(fs::read_to_string(fake_bin.join("count")).unwrap(), "6");
 }
 
 #[test]
@@ -3834,6 +4181,8 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
         "diff",
         "inspect_instruments",
         "orchestration_check",
+        "inspect_textures",
+        "texture_check",
     ] {
         assert!(
             tools.contains(&expected),
@@ -3856,6 +4205,632 @@ fn mcp_initialize_lists_tools_and_validates_scene() {
         texture_schema["properties"]["sources"].is_object(),
         "texture profile schema: {texture_schema}"
     );
+}
+
+/// The MCP surface must expose texture discovery, otherwise an agent driving
+/// scorekit over MCP is back to guessing source names from a bare path map.
+#[test]
+fn mcp_exposes_texture_inspect_and_check() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.4);
+    write_texture_wave(&dir.path().join("birds.wav"), 900.0, 0.2);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, river_birds_profile()).unwrap();
+
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "inspect_textures",
+                       "arguments": {"profile": profile.to_str().unwrap(),
+                                     "category": "organic",
+                                     "tags": ["water"]}}}),
+    ]);
+    assert_eq!(replies.len(), 2);
+
+    let tools = replies[0]["result"]["tools"].as_array().unwrap();
+    let find = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap();
+    let inspect = find("inspect_textures");
+    for arg in ["profile", "category", "tags", "mode", "use_case"] {
+        assert!(
+            inspect["inputSchema"]["properties"][arg].is_object(),
+            "inspect_textures must accept {arg}: {inspect}"
+        );
+    }
+    assert!(find("texture_check")["inputSchema"]["properties"]["profile"].is_object());
+
+    assert_eq!(replies[1]["result"]["isError"], false);
+    let text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let report: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["status"], "match");
+    let names: Vec<&str> = report["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["source"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["river"], "conjunctive filter over MCP: {report}");
+}
+
+#[test]
+fn mcp_rejects_malformed_texture_filters() {
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "inspect_textures",
+                       "arguments": {"profile": "textures.yaml",
+                                     "category": 7}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "inspect_textures",
+                       "arguments": {"profile": "textures.yaml",
+                                     "tags": "water"}}}),
+    ]);
+    assert_eq!(replies.len(), 2);
+    for reply in &replies {
+        assert_eq!(reply["error"]["code"], -32602);
+    }
+    assert!(
+        replies[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("category")
+    );
+    assert!(
+        replies[1]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("array of strings")
+    );
+}
+
+// ---- textures: source discovery and certification (M11) ----
+
+/// The published schema is the contract an agent reads before authoring a
+/// profile. It must show that a source is a structured object with required
+/// discovery metadata, and enumerate the closed category vocabulary — not
+/// leave the agent to infer either from examples.
+#[test]
+fn texture_profile_schema_publishes_required_discovery_metadata() {
+    let out = bin()
+        .args(["--json", "schema", "--texture-profile"])
+        .assert()
+        .success();
+    let schema: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+
+    assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+    assert_eq!(
+        schema["properties"]["sources"]["additionalProperties"]["$ref"],
+        "#/$defs/TextureSourceBinding"
+    );
+    let binding = schema["$defs"]["TextureSourceBinding"]["anyOf"]
+        .as_array()
+        .unwrap();
+    assert!(
+        binding.iter().any(|variant| variant["type"] == "string")
+            && binding
+                .iter()
+                .any(|variant| variant["$ref"] == "#/$defs/TextureSource"),
+        "the additive schema must preserve path-only profiles while publishing the structured form: {schema}"
+    );
+    assert!(
+        !schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "schema_version"),
+        "adding schema_version must not invalidate legacy profiles: {schema}"
+    );
+
+    let source = &schema["$defs"]["TextureSource"];
+    let required: Vec<&str> = source["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for field in [
+        "path",
+        "description",
+        "category",
+        "tags",
+        "playback",
+        "use_cases",
+        "provenance",
+    ] {
+        assert!(
+            required.contains(&field),
+            "{field} must be required: {source}"
+        );
+    }
+    assert_eq!(source["additionalProperties"], false);
+
+    // Each category is published with its meaning inline, so an agent can pick
+    // the right one without reverse-engineering it from existing profiles.
+    let variants = schema["$defs"]["Category"]["oneOf"].as_array().unwrap();
+    let categories: Vec<&str> = variants
+        .iter()
+        .map(|v| v["const"].as_str().unwrap())
+        .collect();
+    assert!(
+        categories.contains(&"ambience") && categories.contains(&"foley"),
+        "category vocabulary must be published: {categories:?}"
+    );
+    for variant in variants {
+        assert!(
+            !variant["description"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty(),
+            "each category must document what it means: {variant}"
+        );
+    }
+
+    // Physics is measured by `texture check`, never declared here: a
+    // hand-written duration is a fact nothing can verify and every re-export
+    // silently invalidates.
+    for measured in ["duration_seconds", "sample_rate", "channels", "peak"] {
+        assert!(
+            source["properties"][measured].is_null(),
+            "{measured} is measured, not declared: {source}"
+        );
+    }
+}
+
+/// Enumeration is the primitive the flat map could not offer. A large
+/// inventory must come back complete and byte-identical across runs: an agent
+/// that gets a truncated or reordered list cannot reason about coverage, and
+/// non-determinism would break the project's core guarantee.
+#[test]
+fn texture_inspect_enumerates_large_inventory_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let categories = ["ambience", "foley", "impact", "tonal"];
+    let mut sources = String::new();
+    for i in 0..1200 {
+        sources.push_str(&texture_source_yaml(
+            &format!("src_{i:04}"),
+            &format!("wav/{i:04}.wav"),
+            categories[i % categories.len()],
+            &["bulk"],
+            &["loop"],
+            &["stress"],
+        ));
+    }
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, texture_profile_yaml("bulk", &sources)).unwrap();
+
+    let run = || {
+        let out = bin()
+            .args(["--json", "texture", "inspect"])
+            .arg(&profile)
+            .assert()
+            .success();
+        String::from_utf8(out.get_output().stdout.clone()).unwrap()
+    };
+    let first = run();
+    assert_eq!(first, run(), "inspect output must be byte-identical");
+
+    let report: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(report["total"], 1200);
+    assert_eq!(report["matched"], 1200);
+    let names: Vec<&str> = report["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["source"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 1200, "no truncation");
+    assert_eq!(names[0], "src_0000");
+    assert_eq!(names[1199], "src_1199");
+
+    // Full metadata travels with every entry, so one call is enough to choose
+    // a source rather than probing each candidate separately.
+    let entry = &report["sources"][0];
+    assert_eq!(entry["category"], "ambience");
+    assert_eq!(entry["playback"]["modes"][0], "loop");
+    assert!(entry["description"].is_string());
+    assert!(
+        entry["resolved_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("0000.wav")
+    );
+}
+
+/// Filters are exact and conjunctive by design: scorekit answers "which
+/// sources satisfy all of these constraints", never "which is most similar".
+/// A truthful `no_match` is the useful answer; a plausible wrong pick is not.
+#[test]
+fn texture_inspect_filters_exactly_and_admits_no_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let sources = format!(
+        "{}{}{}",
+        texture_source_yaml(
+            "rain_soft",
+            "rain.wav",
+            "ambience",
+            &["rain", "soft"],
+            &["loop"],
+            &["night"]
+        ),
+        texture_source_yaml(
+            "rain_hit",
+            "hit.wav",
+            "impact",
+            &["rain", "sharp"],
+            &["one_shot"],
+            &["night"]
+        ),
+        texture_source_yaml(
+            "door",
+            "door.wav",
+            "foley",
+            &["wood"],
+            &["one_shot"],
+            &["interior"]
+        ),
+    );
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, texture_profile_yaml("mixed", &sources)).unwrap();
+
+    let names = |args: &[&str]| -> Vec<String> {
+        let out = bin()
+            .args(["--json", "texture", "inspect"])
+            .arg(&profile)
+            .args(args)
+            .assert()
+            .success();
+        let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        report["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["source"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&["--tag", "rain"]), ["rain_hit", "rain_soft"]);
+    assert_eq!(names(&["--category", "impact"]), ["rain_hit"]);
+    assert_eq!(names(&["--mode", "loop"]), ["rain_soft"]);
+    assert_eq!(names(&["--use-case", "interior"]), ["door"]);
+    // Repeated --tag intersects; it does not widen the result set.
+    assert_eq!(
+        names(&["--tag", "rain", "--tag", "soft"]),
+        ["rain_soft"],
+        "multiple tags must be conjunctive"
+    );
+
+    // An unsatisfiable query is a legitimate answer, not a failure: like
+    // `diff`, reporting the absence of a match is not an error.
+    let out = bin()
+        .args([
+            "--json", "texture", "inspect", "--tag", "wood", "--mode", "loop",
+        ])
+        .arg(&profile)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["status"], "no_match");
+    assert_eq!(report["matched"], 0);
+    assert_eq!(report["total"], 3);
+
+    // A category outside the closed vocabulary is a typo, not an empty result
+    // set — returning nothing would silently hide the mistake.
+    let out = bin()
+        .args(["--json", "texture", "inspect", "--category", "ambient"])
+        .arg(&profile)
+        .assert()
+        .failure()
+        .code(2);
+    let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(err["code"], "validation");
+    assert_eq!(err["field"], "--category");
+    assert!(
+        err["message"].as_str().unwrap().contains("ambience"),
+        "message must list the valid vocabulary: {err}"
+    );
+}
+
+/// Existing path-only profiles remain valid for the build behavior published
+/// before source discovery existed. Discovery refuses to invent metadata for
+/// them, so compatibility does not turn into a plausible but dishonest catalog.
+#[test]
+fn legacy_texture_profile_builds_but_discovery_requires_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.5);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, "name: legacy\nsources:\n  river: river.wav\n").unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntextures:\n  - { source: river, mode: loop, gain: 0.25 }\ntracks:\n  - { id: piano, instrument: piano, pattern: sustain }\n",
+    )
+    .unwrap();
+    let output = dir.path().join("scene.wav");
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .success();
+    assert!(output.is_file());
+
+    let out = bin()
+        .args(["--json", "texture", "inspect"])
+        .arg(&profile)
+        .assert()
+        .failure()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "sources.river");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("legacy binding")
+    );
+}
+
+/// Structured profiles must carry complete discovery metadata. The additive
+/// schema version field defaults to v1 when omitted, but unsupported versions
+/// and incomplete structured entries still fail with precise field paths.
+#[test]
+fn texture_profile_rejects_incomplete_discovery_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("textures.yaml");
+    let complete = texture_source_yaml(
+        "river",
+        "river.wav",
+        "organic",
+        &["water"],
+        &["loop"],
+        &["forest"],
+    );
+
+    let reject = |yaml: String, expect: &str| {
+        fs::write(&profile, &yaml).unwrap();
+        let out = bin()
+            .args(["--json", "texture", "inspect"])
+            .arg(&profile)
+            .assert()
+            .failure()
+            .code(2);
+        let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+        let code = err["code"].as_str().unwrap();
+        assert!(
+            code == "validation" || code == "parse",
+            "expected a structured input rejection, got {code}: {err}"
+        );
+        let detail = format!(
+            "{} {}",
+            err["field"].as_str().unwrap_or_default(),
+            err["message"].as_str().unwrap_or_default()
+        );
+        assert!(
+            detail.contains(expect),
+            "rejection {detail:?} should name {expect:?} for:\n{yaml}"
+        );
+    };
+
+    fs::write(&profile, format!("name: additive\nsources:\n{complete}")).unwrap();
+    bin()
+        .args(["texture", "inspect"])
+        .arg(&profile)
+        .assert()
+        .success();
+
+    reject(
+        format!("schema_version: 2\nname: future\nsources:\n{complete}"),
+        "schema_version",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("category: organic", "category: ambient"),
+        ),
+        "category",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("    description: Test recording river\n", ""),
+        ),
+        "description",
+    );
+    reject(
+        texture_profile_yaml("p", &complete.replace("tags: [water]", "tags: []")),
+        "tags",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("      default_mode: loop", "      default_mode: one_shot"),
+        ),
+        "default_mode",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("use_cases: [forest]", "use_cases: [Forest]"),
+        ),
+        "use_cases",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("      library: test-fixtures@1.0.0\n", ""),
+        ),
+        "provenance",
+    );
+    reject(
+        texture_profile_yaml("p", &complete.replace("path: river.wav", "path: \"\"")),
+        "path",
+    );
+    reject(
+        texture_profile_yaml(
+            "p",
+            &complete.replace("library: test-fixtures@1.0.0", "library: unversioned"),
+        ),
+        "provenance.library",
+    );
+}
+
+/// A profile declares intent; `texture check` measures physics. The command
+/// exists so an agent can prove a source exists, decodes and is audible before
+/// a scene depends on it, instead of discovering the problem mid-build.
+#[test]
+fn texture_check_measures_physics_of_declared_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.5);
+    write_texture_wave(&dir.path().join("birds.wav"), 900.0, 0.25);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, river_birds_profile()).unwrap();
+
+    let out = bin()
+        .args(["--json", "texture", "check"])
+        .arg(&profile)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["profile"], "field-recordings");
+    assert_eq!(report["sources"], 2);
+    assert_eq!(report["passed"], 2);
+    assert_eq!(report["failed"], 0);
+
+    let entries = report["entries"].as_array().unwrap();
+    let river = entries.iter().find(|e| e["source"] == "river").unwrap();
+    assert_eq!(river["status"], "ok");
+    assert_eq!(river["sha256"].as_str().unwrap().len(), 64);
+    let duration = river["duration_seconds"].as_f64().unwrap();
+    assert!(
+        (duration - 0.5).abs() < 0.02,
+        "measured duration {duration} should match the 0.5s source"
+    );
+    assert!(river["peak_abs"].as_u64().unwrap() > 0);
+    assert!(river["rms"].as_f64().unwrap() > 0.0);
+    // Declared intent travels with the measurement, so one report answers
+    // both "is it usable" and "what is it for".
+    assert_eq!(river["category"], "organic");
+    assert_eq!(river["modes"][0], "loop");
+
+    // A measurement is a fact about the file, so it must be reproducible.
+    let again = bin()
+        .args(["--json", "texture", "check"])
+        .arg(&profile)
+        .assert()
+        .success();
+    let repeat: serde_json::Value = serde_json::from_slice(&again.get_output().stdout).unwrap();
+    assert_eq!(report, repeat, "check must be deterministic");
+}
+
+/// Certification must fail loudly on missing and silent sources — a silent
+/// file is the failure mode that survives every structural check and only
+/// surfaces as a missing layer in the finished mix — and must leave no
+/// scratch residue behind when it does.
+#[test]
+fn texture_check_rejects_missing_and_silent_sources_without_residue() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("good.wav"), 220.0, 0.3);
+    write_const_wav(&dir.path().join("silent.wav"), 0, 6615);
+    let sources = format!(
+        "{}{}{}",
+        texture_source_yaml("good", "good.wav", "tonal", &["tone"], &["loop"], &["test"]),
+        texture_source_yaml(
+            "gone",
+            "gone.wav",
+            "foley",
+            &["absent"],
+            &["one_shot"],
+            &["test"]
+        ),
+        texture_source_yaml(
+            "silent",
+            "silent.wav",
+            "ambience",
+            &["quiet"],
+            &["loop"],
+            &["test"]
+        ),
+    );
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, texture_profile_yaml("broken", &sources)).unwrap();
+
+    let scratch = dir.path().join("sk-tmp");
+    let out = bin()
+        .args(["--json", "texture", "check"])
+        .arg(&profile)
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .failure()
+        .code(2);
+    let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(err["code"], "texture_check");
+    let report = &err["report"];
+    assert_eq!(report["passed"], 1);
+    assert_eq!(report["failed"], 2);
+    let status = |name: &str| -> String {
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["source"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {report}"))["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(status("good"), "ok");
+    assert_eq!(status("gone"), "missing");
+    assert_eq!(status("silent"), "silent");
+
+    // The scratch root is honored and swept, so a corpus-sized check cannot
+    // accumulate normalized copies of every source on failure.
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+/// `playback.modes` is a claim about how a recording behaves. Honoring it in
+/// the build turns that declaration into an enforced constraint: looping a
+/// one-shot bell produces an audible seam no structural check would catch.
+#[test]
+fn build_rejects_texture_mode_the_profile_does_not_declare() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("birds.wav"), 900.0, 0.3);
+    write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.5);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, river_birds_profile()).unwrap();
+
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 2\ntextures:\n  - source: birds\n    mode: loop\n\
+         tracks:\n  - id: piano\n    instrument: piano\n    pattern: sustain\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("out").join("scene.wav"))
+        .assert()
+        .failure()
+        .code(2);
+    let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(err["code"], "validation");
+    assert_eq!(err["field"], "textures[0].mode");
+    let message = err["message"].as_str().unwrap();
+    assert!(
+        message.contains("birds") && message.contains("one_shot"),
+        "message must name the source and its declared modes: {message}"
+    );
+    // Rejection happens before staging, so no directory is even created.
+    assert!(!dir.path().join("out").exists(), "no partial artifact");
 }
 
 #[test]

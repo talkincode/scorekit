@@ -1,0 +1,55 @@
+# An original solo-erhu lament using broad traits of traditional Chinese
+# slow-bow repertoire: low pentatonic register, sighing descents, long breaths,
+# unforced note transitions, and silence. It does not quote an existing melody.
+title: Old Spring Lament
+story: A solitary erhu voice remembers an old spring after the road has gone quiet.
+tempo: 64
+key: D_minor
+time_signature: "4/4"
+bars: 8
+loop: false
+
+performance:
+  humanize: { timing_ms: 20, velocity: 8, seed: 227 }
+  dynamics: { start: pp, peak: f }
+
+motifs:
+  solitary_voice:
+    # Bars 1-2: the first call rises reluctantly, then releases its breath.
+    - { degree: -7, beats: 2.5 }
+    - { degree: -5, beats: 0.75 }
+    - { degree: -4, beats: 0.75 }
+    - { degree: -3, beats: 2 }
+    - { degree: -4, beats: 1 }
+    - { degree: 0, beats: 1 }
+    # Bars 3-4: a quieter answer falls back toward the open-string tonic.
+    - { degree: -5, beats: 1.5 }
+    - { degree: -7, beats: 2.5 }
+    - { degree: -5, beats: 1 }
+    - { degree: -4, beats: 1 }
+    - { degree: -7, beats: 1 }
+    - { degree: 0, beats: 1 }
+    # Bars 5-6: the only crest, touching the upper pentatonic note once.
+    - { degree: -4, beats: 1 }
+    - { degree: -3, beats: 2 }
+    - { degree: -1, beats: 1 }
+    - { degree: -3, beats: 1 }
+    - { degree: -4, beats: 1 }
+    - { degree: -5, beats: 1 }
+    - { degree: 0, beats: 1 }
+    # Bars 7-8: no flourish, only a long return and two beats of silence.
+    - { degree: -3, beats: 0.75 }
+    - { degree: -4, beats: 0.75 }
+    - { degree: -5, beats: 1.5 }
+    - { degree: -7, beats: 3 }
+    - { degree: 0, beats: 2 }
+
+tracks:
+  - id: erhu
+    instrument: erhu
+    pattern: melody
+    motif: solitary_voice
+    intensity: 0.74
+    articulation: sustain
+    pan: 0.5
+    reverb: 0.18

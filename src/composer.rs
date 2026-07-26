@@ -3,8 +3,7 @@
 //! no hash maps, no randomness, no time or environment reads.
 
 use crate::schema::{
-    Instrument, Key, Pattern, Performance, Scene, TimeSig, parse_key, parse_numeral,
-    parse_time_signature,
+    Key, Pattern, Performance, Scene, TimeSig, parse_key, parse_numeral, parse_time_signature,
 };
 
 pub const PPQ: u32 = 480;
@@ -12,6 +11,14 @@ const DRUM_CHANNEL: u8 = 9;
 const KICK: u8 = 36;
 const SNARE: u8 = 38;
 const HIHAT: u8 = 42;
+const TABLA_DHA: u8 = 36;
+const TABLA_DHIN: u8 = 37;
+const TABLA_TIN: u8 = 38;
+const TABLA_TA: u8 = 39;
+const TABLA_THEKA: [u8; 16] = [
+    TABLA_DHA, TABLA_DHIN, TABLA_DHIN, TABLA_DHA, TABLA_DHA, TABLA_DHIN, TABLA_DHIN, TABLA_DHA,
+    TABLA_DHA, TABLA_TIN, TABLA_TIN, TABLA_TA, TABLA_TA, TABLA_DHIN, TABLA_DHIN, TABLA_DHA,
+];
 
 #[derive(Debug, Clone, Copy)]
 pub struct NoteEvent {
@@ -31,7 +38,7 @@ pub struct BendEvent {
 #[derive(Debug)]
 pub struct TrackIr {
     pub channel: u8,
-    /// GM program; `None` on the drum channel.
+    /// Exact GM program; `None` for percussion or profile-only instruments.
     pub program: Option<u8>,
     /// CC10 value at track start; `None` emits no controller.
     pub pan: Option<u8>,
@@ -270,9 +277,20 @@ pub fn compose(scene: &Scene) -> ScoreIr {
                         });
                     }
                 }
+                Pattern::Tabla => {
+                    for beat in 0..u32::from(ts.num) {
+                        let absolute_beat = bar * u32::from(ts.num) + beat;
+                        notes.push(NoteEvent {
+                            tick: start + beat * beat_ticks,
+                            dur: beat_ticks.min(120),
+                            key: TABLA_THEKA[(absolute_beat as usize) % TABLA_THEKA.len()],
+                            vel,
+                        });
+                    }
+                }
             }
         }
-        let channel = if track.instrument == Instrument::Drums {
+        let channel = if track.instrument.is_percussion() {
             DRUM_CHANNEL
         } else {
             // Skip the reserved drum channel for melodic tracks.

@@ -15,6 +15,7 @@ mod resolver;
 mod schema;
 mod soundfont;
 mod texture;
+mod texture_check;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -77,6 +78,11 @@ enum Command {
     Orchestration {
         #[command(subcommand)]
         command: OrchestrationCommand,
+    },
+    /// Discover and certify the sources of a texture profile
+    Texture {
+        #[command(subcommand)]
+        command: TextureCommand,
     },
     /// Compile a scene to a Standard MIDI File
     Midi {
@@ -226,7 +232,7 @@ enum Command {
     InspectInstruments {
         scene: PathBuf,
         /// Multi-profile orchestration whose palettes define per-track availability;
-        /// without it, availability is the full General MIDI vocabulary.
+        /// without it, availability is the exact General MIDI subset.
         #[arg(long)]
         orchestration: Option<PathBuf>,
         /// Instrument-resolver configuration (YAML); see `scorekit schema --resolver`
@@ -255,6 +261,35 @@ enum ProfileCommand {
 enum OrchestrationCommand {
     /// Validate palette bindings, leaf profiles and referenced SFZ files
     Check { orchestration: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum TextureCommand {
+    /// Enumerate texture sources, filtered by exact declared properties
+    Inspect {
+        profile: PathBuf,
+        /// Exact portable source name
+        #[arg(long)]
+        source: Option<String>,
+        /// Sound family; see `scorekit schema --texture-profile` for the list
+        #[arg(long)]
+        category: Option<String>,
+        /// Required tag; repeat the flag to require several (AND)
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Scheduling mode the source must declare support for
+        #[arg(long, value_parser = ["loop", "one_shot"])]
+        mode: Option<String>,
+        /// Required scene use case
+        #[arg(long)]
+        use_case: Option<String>,
+    },
+    /// Verify every declared source exists, decodes and is audible
+    Check {
+        profile: PathBuf,
+        #[arg(long, default_value_t = 44100)]
+        sample_rate: u32,
+    },
 }
 
 fn compile_midi(
@@ -301,6 +336,21 @@ fn compile_midi(
                 })
         })
         .transpose()?;
+    if let Some((index, track)) = scene.tracks.iter().enumerate().find(|(index, track)| {
+        solo.is_none_or(|solo_index| solo_index == *index)
+            && !track.instrument.is_percussion()
+            && track.instrument.gm_program().is_none()
+    }) {
+        return Err(error::Error::Validation {
+            path: format!("tracks[{index}].instrument"),
+            message: format!(
+                "instrument `{}` has no exact General MIDI program; standalone MIDI export \
+                 would be interpreted as program 0 (piano). Use an exact-GM instrument or \
+                 render with `scorekit build --renderer sfizz --orchestration <file>`",
+                schema::instrument_key(track.instrument)
+            ),
+        });
+    }
     let bytes = pipeline::midi_bytes(&scene, passes, solo)?;
     tools::write_atomic(output, &bytes)
 }
@@ -418,6 +468,38 @@ fn raw_instrument_spellings(path: &Path, tracks: usize) -> Vec<Option<String>> {
     out
 }
 
+/// Translate CLI selection flags into an exact texture filter, rejecting
+/// vocabulary that cannot match anything so a typo never silently returns
+/// "no source exists".
+fn build_texture_filter(
+    source: Option<&str>,
+    category: Option<&str>,
+    tags: &[String],
+    mode: Option<&str>,
+    use_case: Option<&str>,
+) -> Result<texture::Filter> {
+    let category = category
+        .map(|key| {
+            texture::Category::parse(key).ok_or_else(|| {
+                invalid_option(
+                    "--category",
+                    format!(
+                        "unknown category `{key}` (known: {})",
+                        texture::Category::keys().join(", ")
+                    ),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(texture::Filter {
+        source: source.map(str::to_owned),
+        category,
+        tags: tags.to_vec(),
+        mode: mode.and_then(texture::parse_mode),
+        use_case: use_case.map(str::to_owned),
+    })
+}
+
 fn run(command: &Command, json: bool) -> Result<String> {
     match command {
         Command::Doctor => {
@@ -515,6 +597,50 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 Ok(orchestration.to_json().to_string())
             } else {
                 Ok(orchestration.summary())
+            }
+        }
+        Command::Texture {
+            command:
+                TextureCommand::Inspect {
+                    profile,
+                    source,
+                    category,
+                    tags,
+                    mode,
+                    use_case,
+                },
+        } => {
+            let loaded = texture::load_profile(profile)?;
+            let filter = build_texture_filter(
+                source.as_deref(),
+                category.as_deref(),
+                tags,
+                mode.as_deref(),
+                use_case.as_deref(),
+            )?;
+            let report = texture::inspect(&loaded, &texture::profile_dir(profile), &filter)?;
+            // A query nothing satisfies is an answer, not a failure: the
+            // command exists so an agent can establish that no exact
+            // candidate is available instead of settling for a near miss.
+            if json {
+                Ok(report.to_json().to_string())
+            } else {
+                Ok(report.summary())
+            }
+        }
+        Command::Texture {
+            command:
+                TextureCommand::Check {
+                    profile,
+                    sample_rate,
+                },
+        } => {
+            validate_sample_rate(*sample_rate)?;
+            let report = texture_check::check(profile, *sample_rate)?;
+            if json {
+                Ok(report.to_json().to_string())
+            } else {
+                Ok(report.summary())
             }
         }
         Command::Midi {

@@ -238,6 +238,7 @@ pub fn schema_json() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instrument::{Family, spec};
     use crate::schema::Articulation;
 
     fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
@@ -383,11 +384,9 @@ mod tests {
     }
 
     /// Guards a shipped renderer profile against schema drift and against
-    /// silently falling out of sync with the instruments the shipped
-    /// example scenes actually use — the whole point of a renderer profile
-    /// is that it stays valid without the real (multi-GB, not checked in)
-    /// sample library present, so this never touches disk beyond the
-    /// profile YAML itself.
+    /// silently falling out of sync with generic examples. World instruments
+    /// are deliberately excluded: their exact-source-only contract forbids
+    /// wiring an unrelated VSCO patch merely to make every scene render.
     fn assert_shipped_profile_covers_shipped_scenes(profile_file: &str) {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let profile_path = manifest_dir.join("examples/profiles").join(profile_file);
@@ -398,6 +397,9 @@ mod tests {
             let instrument = parse_instrument_key(key).unwrap_or_else(|| {
                 panic!("`{key}` (used in a shipped scene) is not a known instrument")
             });
+            if spec(instrument).family == Family::Ethnic {
+                continue;
+            }
             profile
                 .resolve(
                     profile_path.parent().unwrap(),

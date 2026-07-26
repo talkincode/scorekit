@@ -59,7 +59,7 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `motifs` | `{name: [note, …]}` | `{}` | melodies referenced by `pattern: melody` tracks; map is order-insensitive (sorted for determinism) |
 | `performance` | object | absent | deterministic humanization (below); absent = exact mechanical rendering |
 | `textures` | `[texture, …]`, ≤16 | `[]` | deterministic ambience/SFX layers; source names bind through `--texture-profile` at build time and never affect MIDI |
-| `tracks` | `[track, …]`, 1..=16 | required | ≤15 melodic + ≤1 drums |
+| `tracks` | `[track, …]`, 1..=16 | required | ≤15 melodic + ≤1 percussion (`drums` or `tabla`) |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite; one output asset per section |
 
 ## Track
@@ -68,8 +68,8 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | --- | --- | --- | --- |
 | `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity referenced by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and every `meta.json`/`inspect-instruments` report; itself never affects compiled MIDI |
 | `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration-palette selector (`--orchestration`, `--renderer sfizz` only); pure routing metadata — **never changes compiled MIDI** and has no effect on SF2/TiMidity backends |
-| `instrument` | GM name (see `scorekit schema` for the enum) or `drums` | required | program change at tick 0; `drums` ↔ channel 10 |
-| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` | required | note-generation algorithm (below) |
+| `instrument` | portable name from `scorekit schema` | required | exact GM program when one exists; standalone `midi` rejects profile-only melodic identities, while sfizz's internal MIDI emits no false program; `drums`/`tabla` use channel 10 |
+| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` | required | note-generation algorithm (below); `drums` and `tabla` pair only with their namesake instruments |
 | `motif` | motif name | — | required iff `pattern: melody`; must exist in `motifs` |
 | `intensity` | 0.0..=1.0 | 0.6 | scales note velocities |
 | `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time SFZ sample selector only; **never changes the compiled MIDI** |
@@ -141,7 +141,15 @@ These are observable guarantees an integration may rely on; changing any of them
 
 **Time and encoding.** Output is SMF format 1, PPQ 480. A bar is `N × (480·4/D)` ticks. Events are encoded in the canonical order `(tick, kind rank: note-off < pitch-bend < note-on, key)` — this ordering *is* the byte-determinism guarantee.
 
-**Channels and programs.** Melodic tracks take channels in declaration order (0, 1, 2, …), skipping channel 10 (index 9), which is reserved for the single `drums` track. Each track opens with its GM program change; `pan`/`reverb` CCs follow immediately at tick 0. Channel state persists across loop passes, so CCs are emitted once.
+**Channels and programs.** Melodic tracks take channels in declaration order
+(0, 1, 2, …), skipping channel 10 (index 9), which is reserved for the single
+percussion track (`drums` or `tabla`). An exact GM identity opens with its
+program change. Internal MIDI rendered against an exact sfizz patch leaves a
+profile-only melodic channel programless; standalone `scorekit midi` rejects
+that case before writing a file rather than publish MIDI that generic players
+interpret as program 0 (piano). Tabla remains programless on channel 10.
+`pan`/`reverb` CCs follow immediately at tick 0. Channel state persists across
+loop passes, so CCs are emitted once.
 
 **Patterns.**
 
@@ -149,6 +157,7 @@ These are observable guarantees an integration may rely on; changing any of them
 - `arpeggio` — eighth notes cycling chord tones in the fixed order root, third, fifth, third.
 - `bass` — chord root two octaves down; two half-bar notes when the meter's numerator is even and ≥4, else one whole-bar note.
 - `drums` — kick on beat 1 (plus the midpoint beat when N ≥ 4), snare on off-beats, closed hi-hat on every beat and half-beat.
+- `tabla` — one channel-10 stroke per notated beat, cycling the fixed 16-beat sequence `dha dhin dhin dha | dha dhin dhin dha | dha tin tin ta | ta dhin dhin dha` across bar boundaries.
 - `melody` — the named motif, looped or truncated to exactly fill the length; degrees resolve in the scene key.
 
 **Transform order.** `swing → dynamics → legato → humanize`, then `glide` bend computation (it must observe final onsets), then loop-pass duplication. Loop math is applied last so looped scenes stay sample-exact under every transform.

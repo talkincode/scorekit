@@ -1,6 +1,6 @@
 # scorekit reference
 
-Verified against scorekit v0.3. When in doubt, trust the binary:
+Verified against scorekit v0.6. When in doubt, trust the binary:
 `scorekit schema` / `scorekit schema --grammar` /
 `scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
@@ -19,15 +19,18 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
 | `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → leaf renderer profile; `--orchestration` → orchestration profile; `--texture-profile` → texture-source profile; `--resolver` → instrument-resolver config |
-| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); global `--json` emits the full report |
+| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); a shared melodic/percussion patch must pass both probes; global `--json` emits the full report |
 | `orchestration check <file>` | validate palette bindings and every referenced leaf renderer profile + SFZ file | global `--json` emits `{name, default_palette, palettes: [{name, profile, profile_path, mappings, patches}]}` |
+| `texture inspect <profile>` | enumerate/filter texture sources before writing `textures[].source` | `--category`, `--tag` (repeatable, AND), `--mode loop\|one_shot`, `--use-case`, `--source`; exact conjunctive matching only, never similarity ranking; exits 0 with `"status": "no_match"` when nothing satisfies the query, exit 2 on an unknown category; global `--json` emits the full report |
+| `texture check <profile>` | certify every declared source exists, decodes, and is audible | `--sample-rate` (44100); reports `sha256`/`duration_seconds`/`frames`/`peak_abs`/`rms` per source; exit 4 if undecodable, 2 for `missing`/`silent`; global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
-| `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track id>`, `--section <name>` |
+| `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track id>`, `--section <name>`; profile-only melodic identities are rejected before writing because no renderer profile is available |
 | `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
 | `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz only; routes each track's `palette` to a certified leaf renderer profile); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
-| `inspect-instruments <scene>` | resolve instruments, report per-track palette/profile/SFZ routing | `--orchestration <file>` (omit = GM, all exact), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
+| `inspect-instruments <scene>` | resolve instruments, report per-track palette/profile/SFZ routing | `--orchestration <file>` (omit = exact GM subset; non-GM world identities remain missing), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
+| `mcp` | serve MCP over stdio (newline-delimited JSON-RPC 2.0); exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, `diff` as tools, each re-invoking the CLI with `--json` and passing structured output through verbatim | — |
 | `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export/resolver flags |
 
 Individual file writes are atomic (temp + rename). Suite builds additionally
@@ -51,7 +54,7 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `performance` | object | absent | see below; absent = raw compile (bit-stable) |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies for `pattern: melody` tracks |
 | `textures` | `[texture, …]` | `[]` | field recordings/ambience/SFX; portable source names bind through `--texture-profile` |
-| `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic + ≤1 drums) |
+| `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic + ≤1 percussion: `drums` or `tabla`) |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite |
 
 ### Track
@@ -60,8 +63,8 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | --- | --- | --- | --- |
 | `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity; used by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and `meta.json`/`inspect-instruments` reports |
 | `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration palette (`--orchestration`, `--renderer sfizz` only); routing metadata only — never changes MIDI or affects SF2/TiMidity backends |
-| `instrument` | enum (below) | required | `drums` instrument ↔ `drums` pattern, exclusively both ways |
-| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` | required | melody plays the named motif, looped/truncated to fill |
+| `instrument` | enum (below) | required | `drums` and `tabla` each pair exclusively with their namesake pattern |
+| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` | required | melody plays the named motif; tabla cycles its deterministic 16-beat theka |
 | `motif` | motif name | — | required iff `pattern: melody` |
 | `intensity` | 0.0..=1.0 | 0.6 | velocity scale |
 | `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity; under `--renderer sfizz --orchestration ...` selects the `.sfz` file the track's effective palette's leaf profile resolves to (falls back to the instrument's `sustain` mapping if unmapped) |
@@ -83,21 +86,48 @@ only take effect if the `.sfz` maps those CCs.
 | `at` | 1..=64 quarter-note beats | — | required for one-shot; schedule repeats per loop pass |
 | `gain` | 0.0..=1.0 | 1.0 | linear gain before summation |
 
-Texture profile:
+Texture profile — every source carries required discovery metadata, so an
+agent can enumerate and filter instead of guessing names:
 
 ```yaml
+schema_version: 1
 name: forest
 root: /path/to/recordings
 sources:
-  river: ambience/river.flac
-  birds: wildlife/birds.wav
+  river:
+    path: ambience/river.flac
+    description: Wide river bed, mid-distance, no bird calls
+    category: organic
+    tags: [water, flowing, continuous]
+    playback: { modes: [loop], default_mode: loop }
+    use_cases: [forest, travel]
+    provenance: { library: field-recordings@2024.1 }
+  birds:
+    path: wildlife/birds.wav
+    description: Single dawn chorus swell, ends on silence
+    category: organic
+    tags: [wildlife, chirping]
+    playback: { modes: [one_shot], default_mode: one_shot }
+    use_cases: [forest, dawn]
+    provenance: { library: field-recordings@2024.1 }
 ```
+
+`category` is a closed enum (`ambience`, `foley`, `impact`, `transition`,
+`tonal`, `industrial`, `organic`, `sound_design`) documented per value in
+`schema --texture-profile`; `tags`/`use_cases` are open tokens matching
+`[a-z][a-z0-9_-]{0,31}` (1–16 entries). Physics is never declared here —
+`texture check` measures duration, loudness, and `sha256`.
+Legacy `name: path` bindings remain usable by `build`, but `texture inspect`
+and `texture check` reject them until they are migrated; no discovery metadata
+is inferred.
 
 FFmpeg normalizes sources to stereo 16-bit PCM at the build sample rate;
 scorekit then performs deterministic placement only. With `--stems`, texture
 stems follow instrument stems (`03-texture-river.wav`, etc.) and are the same
-exact length. World-driven audio such as positional water, weather, or engine
-RPM belongs to the game runtime, not texture tracks.
+exact length. A `textures[i].mode` outside the source's declared
+`playback.modes` fails the build before staging. World-driven audio such as
+positional water, weather, or engine RPM belongs to the game runtime, not
+texture tracks.
 
 ### Motif note
 
@@ -144,7 +174,13 @@ duplication — loop math stays sample-exact.
 - **Brass:** `trumpet` (56), `trombone` (57), `tuba` (58), `horn` (60), `brass` (61)
 - **Winds:** `sax` (65), `oboe` (68), `english_horn` (69), `bassoon` (70), `clarinet` (71), `piccolo` (72), `flute` (73), `recorder` (74), `pan_flute` (75), `whistle` (78), `ocarina` (79)
 - **Synth:** `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
-- **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` only
+- **World, exact GM:** `shakuhachi` (77), `sitar` (104), `shamisen` (106)
+- **World, renderer-profile source required:** `erhu`, `pipa`, `guzheng`, `dizi`, `oud`, `ney`, `duduk`
+- **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` only; `tabla` — exact profile source on channel 10, `pattern: tabla` only
+
+The 11 world identities are exact-source-only. Missing mappings never fall
+back to another world instrument or into/out of the world family; use a real
+source or re-orchestrate visibly.
 
 Common alias spellings are accepted and normalized before compilation
 (`french_horn`→`horn`, `fiddle`→`violin`, `contrabass`/`double_bass`,
@@ -252,9 +288,10 @@ Every leaf profile is still independently certified with
 `scorekit profile check <profile.yaml>` before it is wired into any
 orchestration — this is unchanged. The check deduplicates shared patch
 paths, renders broad melodic or GM-drum probes at varied velocities twice,
-rejects missing and silent patches, captures sfizz warnings, and verifies
-repeatability. It writes no persistent audio; command-scoped probe files
-are removed on success and failure. Use
+and requires both when one physical patch backs melodic and percussion
+mappings. It rejects missing and silent patches, captures sfizz warnings, and
+verifies repeatability. It writes no persistent audio; command-scoped probe
+files are removed on success and failure. Use
 `scorekit --json profile check <profile.yaml>` to retain a machine-readable
 certification report.
 

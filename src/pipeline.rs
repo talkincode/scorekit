@@ -412,10 +412,42 @@ fn render_texture_tracks(
         )
     })?;
     let profile = crate::texture::load_profile(profile_path)?;
-    let profile_dir = profile_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let profile_dir = crate::texture::profile_dir(profile_path);
+
+    // Resolve and check every declared source *before* creating any staging
+    // directory: a scene naming an unmapped source, a missing file, or a
+    // scheduling mode the curator never sanctioned must fail with nothing
+    // written at all, not with a staging tree that cleanup has to undo.
+    for (i, texture) in scene.textures.iter().enumerate() {
+        let declared = profile.source(&texture.source)?;
+        if let Some(modes) = declared.declared_modes()
+            && !modes.contains(&texture.mode)
+        {
+            return Err(validation(
+                &format!("textures[{i}].mode"),
+                format!(
+                    "source `{}` declares mode(s) {} in texture profile `{}`; `{}` is not one of \
+                     them — pick a source that supports it rather than forcing this one",
+                    texture.source,
+                    modes
+                        .iter()
+                        .map(|mode| crate::texture::mode_key(*mode))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    profile.name,
+                    crate::texture::mode_key(texture.mode),
+                ),
+            ));
+        }
+        let source = profile.resolve(&profile_dir, &texture.source)?;
+        if !source.is_file() {
+            return Err(validation(
+                &format!("texture_profile.sources.{}", texture.source),
+                format!("texture source file does not exist: {}", source.display()),
+            ));
+        }
+    }
+
     let staging = output.with_extension(format!("textures.tmp-{}", std::process::id()));
     std::fs::create_dir_all(&staging).map_err(|source| Error::Io {
         path: staging.display().to_string(),
@@ -430,12 +462,6 @@ fn render_texture_tracks(
             path.clone()
         } else {
             let source = profile.resolve(&profile_dir, &texture.source)?;
-            if !source.is_file() {
-                return Err(validation(
-                    &format!("texture_profile.sources.{}", texture.source),
-                    format!("texture source file does not exist: {}", source.display()),
-                ));
-            }
             let path = staging.join(format!("source-{}.wav", texture.source));
             tools::normalize_texture(&source, &path, args.sample_rate)?;
             normalized.insert(texture.source.clone(), path.clone());

@@ -37,8 +37,8 @@ pub enum Family {
     Guitars,
     Bass,
     Synth,
-    /// Reserved: no built-in instrument maps here yet; valid in resolver
-    /// configuration so policies stay stable as the vocabulary grows.
+    /// Region-specific acoustic instruments. This family is exact-source-only:
+    /// the resolver never substitutes into, out of, or within it.
     Ethnic,
     Vocals,
     /// Reserved: ambience/SFX live in the texture system, not the melodic
@@ -139,9 +139,24 @@ impl InstrumentSpec {
     }
 }
 
+/// The original sample-tier coverage baseline. New extension vocabularies do
+/// not rewrite its 60/60 acceptance target.
+#[cfg(test)]
+pub const CORE_INSTRUMENT_COUNT: usize = 60;
+
+/// Additive world-instrument vocabulary. These identities require exact
+/// sources; the resolver never uses another member as a substitute.
+#[cfg(test)]
+pub const WORLD_INSTRUMENTS: [Instrument; 11] = {
+    use Instrument::*;
+    [
+        Erhu, Pipa, Guzheng, Dizi, Shakuhachi, Shamisen, Sitar, Tabla, Oud, Ney, Duduk,
+    ]
+};
+
 /// Every `Instrument` variant, in enum declaration order. Guarded by a test
 /// against the exported JSON schema so it cannot silently fall out of sync.
-pub const ALL: [Instrument; 60] = {
+pub const ALL: [Instrument; 71] = {
     use Instrument::*;
     [
         Piano,
@@ -204,6 +219,17 @@ pub const ALL: [Instrument; 60] = {
         HaloPad,
         SweepPad,
         Drums,
+        Erhu,
+        Pipa,
+        Guzheng,
+        Dizi,
+        Shakuhachi,
+        Shamisen,
+        Sitar,
+        Tabla,
+        Oud,
+        Ney,
+        Duduk,
     ]
 };
 
@@ -237,6 +263,11 @@ const ART_PIZZ: &[Articulation] = &[
     Articulation::Pizzicato,
 ];
 const ART_PAD: &[Articulation] = &[Articulation::Sustain];
+const ART_WORLD_PLUCK: &[Articulation] = &[
+    Articulation::Sustain,
+    Articulation::Staccato,
+    Articulation::Tremolo,
+];
 
 const SUS_MED: Envelope = Envelope {
     attack: Speed::Medium,
@@ -1033,6 +1064,138 @@ pub fn spec(i: Instrument) -> InstrumentSpec {
             0.50,
             0.40,
         ),
+        I::Erhu => s(
+            F::Ethnic,
+            "chinese_bowed",
+            62,
+            98,
+            ART_BOWED,
+            SUS_MED,
+            &[RM, RC, RH],
+            false,
+            0.62,
+            0.68,
+        ),
+        I::Pipa => s(
+            F::Ethnic,
+            "chinese_lute",
+            45,
+            98,
+            ART_WORLD_PLUCK,
+            DECAY_MED,
+            &[RM, RC, RH, RR],
+            false,
+            0.72,
+            0.48,
+        ),
+        I::Guzheng => s(
+            F::Ethnic,
+            "chinese_zither",
+            38,
+            98,
+            ART_WORLD_PLUCK,
+            DECAY_LONG,
+            &[RM, RC, RH],
+            false,
+            0.68,
+            0.55,
+        ),
+        I::Dizi => s(
+            F::Ethnic,
+            "chinese_flute",
+            62,
+            98,
+            ART_BASIC,
+            SUS_MED_FAST,
+            &[RM, RC],
+            false,
+            0.80,
+            0.38,
+        ),
+        I::Shakuhachi => s(
+            F::Ethnic,
+            "japanese_flute",
+            62,
+            86,
+            ART_BASIC,
+            SUS_MED,
+            &[RM, RC],
+            false,
+            0.42,
+            0.76,
+        ),
+        I::Shamisen => s(
+            F::Ethnic,
+            "japanese_lute",
+            48,
+            84,
+            ART_WORLD_PLUCK,
+            DECAY_FAST,
+            &[RM, RC, RH, RR],
+            false,
+            0.76,
+            0.38,
+        ),
+        I::Sitar => s(
+            F::Ethnic,
+            "indian_lute",
+            36,
+            84,
+            ART_WORLD_PLUCK,
+            DECAY_LONG,
+            &[RM, RC, RH],
+            false,
+            0.70,
+            0.58,
+        ),
+        I::Tabla => s(
+            F::Ethnic,
+            "indian_drums",
+            36,
+            46,
+            ART_PAD,
+            DECAY_FAST,
+            &[RR],
+            false,
+            0.58,
+            0.58,
+        ),
+        I::Oud => s(
+            F::Ethnic,
+            "middle_eastern_lute",
+            40,
+            84,
+            ART_WORLD_PLUCK,
+            DECAY_MED,
+            &[RM, RC, RH, RR],
+            false,
+            0.54,
+            0.72,
+        ),
+        I::Ney => s(
+            F::Ethnic,
+            "middle_eastern_flute",
+            62,
+            98,
+            ART_BASIC,
+            SUS_MED,
+            &[RM, RC],
+            false,
+            0.46,
+            0.72,
+        ),
+        I::Duduk => s(
+            F::Ethnic,
+            "armenian_reed",
+            57,
+            81,
+            ART_BASIC,
+            SUS_MED,
+            &[RM, RC],
+            false,
+            0.36,
+            0.86,
+        ),
     }
 }
 
@@ -1109,6 +1272,16 @@ const ALIASES: &[(&str, Instrument)] = &[
     ("upright_bass", Instrument::Contrabass),
     ("vibes", Instrument::Vibraphone),
     ("voice_oohs", Instrument::Voice),
+    ("armenian_duduk", Instrument::Duduk),
+    ("arabic_ney", Instrument::Ney),
+    ("arabic_oud", Instrument::Oud),
+    ("chinese_lute", Instrument::Pipa),
+    ("chinese_violin", Instrument::Erhu),
+    ("chinese_zither", Instrument::Guzheng),
+    ("dizi_flute", Instrument::Dizi),
+    ("indian_tabla", Instrument::Tabla),
+    ("japanese_lute", Instrument::Shamisen),
+    ("shakuhachi_flute", Instrument::Shakuhachi),
 ];
 
 /// Lowercase, trim, and map separators (`-`, space) to `_` so that
@@ -1225,6 +1398,12 @@ mod tests {
             ALL.iter().map(|&i| instrument_key(i)).collect();
         assert_eq!(names, ours);
         assert_eq!(ALL.len(), names.len(), "duplicate entries in ALL");
+        assert_eq!(ALL.len(), CORE_INSTRUMENT_COUNT + WORLD_INSTRUMENTS.len());
+        assert_eq!(
+            &ALL[CORE_INSTRUMENT_COUNT..],
+            &WORLD_INSTRUMENTS,
+            "world vocabulary must stay an additive extension after the core baseline"
+        );
     }
 
     #[test]

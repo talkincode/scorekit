@@ -104,7 +104,7 @@ fn tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "scene": { "type": "string", "description": "Path to the scene YAML file" },
-                    "orchestration": { "type": "string", "description": "Orchestration profile defining per-track availability (omit for the full General MIDI vocabulary)" },
+                    "orchestration": { "type": "string", "description": "Orchestration profile defining per-track availability (omit for exact General MIDI identities only)" },
                     "resolver": { "type": "string", "description": "Resolver configuration YAML" },
                     "fallback_mode": {
                         "type": "string",
@@ -131,6 +131,53 @@ fn tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "inspect_textures",
+            description: "Enumerate a texture profile's sources and filter them by exact declared \
+                          properties (category, tags, playback mode, scene use case). Filters are \
+                          conjunctive and exact — never a similarity ranking — so an empty result \
+                          (`status: \"no_match\"`) is a definitive answer that no suitable source \
+                          exists rather than an invitation to substitute an approximation.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Path to the texture profile YAML" },
+                    "source": { "type": "string", "description": "Exact portable source name" },
+                    "category": {
+                        "type": "string",
+                        "enum": crate::texture::Category::keys(),
+                        "description": "Sound family"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Tags the source must carry (all of them)"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["loop", "one_shot"],
+                        "description": "Scheduling mode the source must declare support for"
+                    },
+                    "use_case": { "type": "string", "description": "Scene use case the source must declare" }
+                },
+                "required": ["profile"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: "texture_check",
+            description: "Certify every source in a texture profile: the file exists, decodes \
+                          through FFmpeg normalization, and carries audible PCM. Reports measured \
+                          duration, checksum and loudness per source.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Path to the texture profile YAML" }
+                },
+                "required": ["profile"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
             name: "diff",
             description: "Semantic diff of two scene files (musical meaning, not text).",
             schema: json!({
@@ -151,6 +198,14 @@ fn required_str(args: &Value, key: &str) -> std::result::Result<String, String> 
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("missing required string argument `{key}`"))
+}
+
+fn optional_str<'a>(args: &'a Value, key: &str) -> std::result::Result<Option<&'a str>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(format!("`{key}` must be a string")),
+    }
 }
 
 /// Translate one MCP tool call into CLI argv (without the leading `--json`).
@@ -233,6 +288,39 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             argv.push("orchestration".into());
             argv.push("check".into());
             argv.push(required_str(args, "orchestration")?);
+        }
+        "inspect_textures" => {
+            argv.push("texture".into());
+            argv.push("inspect".into());
+            argv.push(required_str(args, "profile")?);
+            for (key, flag) in [
+                ("source", "--source"),
+                ("category", "--category"),
+                ("mode", "--mode"),
+                ("use_case", "--use-case"),
+            ] {
+                if let Some(value) = optional_str(args, key)? {
+                    argv.push(flag.into());
+                    argv.push(value.to_owned());
+                }
+            }
+            if let Some(tags) = args.get("tags") {
+                let tags = tags
+                    .as_array()
+                    .ok_or_else(|| "`tags` must be an array of strings".to_owned())?;
+                for tag in tags {
+                    let tag = tag
+                        .as_str()
+                        .ok_or_else(|| "`tags` must be an array of strings".to_owned())?;
+                    argv.push("--tag".into());
+                    argv.push(tag.to_owned());
+                }
+            }
+        }
+        "texture_check" => {
+            argv.push("texture".into());
+            argv.push("check".into());
+            argv.push(required_str(args, "profile")?);
         }
         other => return Err(format!("unknown tool `{other}`")),
     }
