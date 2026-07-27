@@ -17,6 +17,7 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 - **Seamless loops** — sample-exact length, no click at the loopback point.
 - **Stems** — one file per track (strings, piano, bass, drums…), all equal length and sample-aligned, so the engine can layer them dynamically (calm exploration → add drums when combat starts).
 - **Scene suites** — intro / explore / combat / victory sections that share the same musical motifs, compiled from a single file.
+- **Exact event clips** — stable-ID pitched/percussion events, section variants, and step automation for arrangements that need authored syncopation, fills, or talking-bass motion.
 - **Sound textures** — layer field recordings, ambience, and SFX (water, birds, engines…) as deterministic loops or beat-scheduled one-shots without baking local paths into the scene.
 - **`meta.json`** — exact loop points and sample counts, ready for your engine to consume.
 
@@ -220,6 +221,31 @@ tempo_max @ scene: measured 92, want <= 60
 ```
 
 Violations report measured values, so an Agent can fix the scene directly. Great as a CI gate for your soundtrack.
+
+For a 140 BPM heavy-Dubstep reference that is reusable, semantic-diffable, and
+linted for drum density/backbeats/talking-bass automation, see the
+[`heavy_dubstep` scene](examples/scenes/heavy_dubstep.yaml) with its
+[`heavy_dubstep` grammar](examples/grammars/heavy_dubstep.yaml). Exact event and
+automation IDs keep edits reviewable through `scorekit diff`. Release-quality
+growl/FM/talking timbre requires a real certified SFZ mapping that declares its
+supported controls. The companion ScoreData corpus provides a first-party CC0
+growl plus separate growl/sub/metal/drums palettes and four honest industrial
+texture bindings; `scoredata-forge` produced the frozen WAV/SFZ asset offline
+and is never a scorekit runtime dependency.
+`scorekit profile check` actively verifies that each declared CC1/CC11/CC74 or
+pitch-bend target produces deterministic, non-silent, measurably different PCM;
+a declaration that the patch ignores is a hard failure.
+
+```bash
+SCOREDATA_ROOT=/path/to/ScoreData
+scorekit orchestration check "$SCOREDATA_ROOT/profiles/orchestrations/heavy-dubstep.yaml"
+scorekit texture check "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml"
+scorekit build examples/scenes/heavy_dubstep.yaml --renderer sfizz \
+  --fallback-mode strict \
+  --orchestration "$SCOREDATA_ROOT/profiles/orchestrations/heavy-dubstep.yaml" \
+  --texture-profile "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml" \
+  --tail 0 --stems -o heavy-dubstep.wav
+```
 
 ## Real instruments (SFZ sample libraries)
 

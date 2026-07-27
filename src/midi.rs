@@ -9,22 +9,22 @@ use midly::{
 /// Absolute-time event before delta encoding.
 struct AbsEvent {
     tick: u32,
-    /// Sort rank at equal tick: note-offs (0) before pitch bends (1) before
-    /// note-ons (2), so retriggers are avoided and a glide's bend reset takes
-    /// effect before the next note sounds.
+    /// Sort rank at equal tick: note-offs (0), controls (1), pitch bends (2),
+    /// then note-ons (3).
     rank: u8,
-    /// Note key, or the bend's 7-bit MSB for rank-1 events.
+    /// Note key, controller number, or the bend's 7-bit MSB.
     key: u8,
-    /// Note velocity, or the bend's 7-bit LSB for rank-1 events.
+    /// Note velocity, controller value, or the bend's 7-bit LSB.
     vel: u8,
 }
 
 fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
-    let mut abs: Vec<AbsEvent> = Vec::with_capacity(track.notes.len() * 2 + track.bends.len());
+    let mut abs: Vec<AbsEvent> =
+        Vec::with_capacity(track.notes.len() * 2 + track.controls.len() + track.bends.len());
     for n in &track.notes {
         abs.push(AbsEvent {
             tick: n.tick,
-            rank: 2,
+            rank: 3,
             key: n.key,
             vel: n.vel,
         });
@@ -35,10 +35,18 @@ fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
             vel: 0,
         });
     }
+    for control in &track.controls {
+        abs.push(AbsEvent {
+            tick: control.tick,
+            rank: 1,
+            key: control.controller,
+            vel: control.value,
+        });
+    }
     for b in &track.bends {
         abs.push(AbsEvent {
             tick: b.tick,
-            rank: 1,
+            rank: 2,
             key: (b.value >> 7) as u8,
             vel: (b.value & 0x7F) as u8,
         });
@@ -77,12 +85,16 @@ fn track_events(track: &TrackIr, total_ticks: u32) -> Vec<TrackEvent<'static>> {
         let delta = e.tick - cursor;
         cursor = e.tick;
         let message = match e.rank {
-            2 => MidiMessage::NoteOn {
+            3 => MidiMessage::NoteOn {
                 key: u7::new(e.key),
                 vel: u7::new(e.vel),
             },
-            1 => MidiMessage::PitchBend {
+            2 => MidiMessage::PitchBend {
                 bend: PitchBend(u14::new((u16::from(e.key) << 7) | u16::from(e.vel))),
+            },
+            1 => MidiMessage::Controller {
+                controller: u7::new(e.key),
+                value: u7::new(e.vel),
             },
             _ => MidiMessage::NoteOff {
                 key: u7::new(e.key),

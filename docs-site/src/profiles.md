@@ -2,10 +2,12 @@
 
 `--renderer sfizz` builds are routed by an **orchestration profile** — the
 only sfizz build/inspect input — which maps each scene track's logical
-`palette` to an independently certified **leaf renderer profile**. The leaf
-profile is unchanged from earlier releases: it maps scorekit instruments and
-articulations to local SFZ patches, keeping machine-specific sample paths out
-of portable scene files. For where the patches themselves come from — public
+`palette` to an independently certified **leaf renderer profile**. A leaf
+profile maps scorekit instruments and articulations to local SFZ patches,
+keeping machine-specific sample paths out of portable scene files. Legacy
+path-only mappings remain valid; an automation-aware mapping additionally
+declares which portable MIDI controls the patch implements. For where the
+patches themselves come from — public
 acquisition channels, the directory/manifest contract, and the certification
 workflow — see [Building a Sound Library](sound-library.md).
 
@@ -68,11 +70,28 @@ instruments:
   violin:
     sustain: VSCO/Strings/Violin-Sustain.sfz
     pizzicato: VSCO/Strings/Violin-Pizzicato.sfz
+  synth_bass:
+    sustain:
+      path: Dubstep/Talking-Bass.sfz
+      controls: [cc1, cc74, pitch_bend]
   drums:
     sustain: Virtuosity/Programs/01-basic-kit.sfz
 ```
 
 Every instrument requires a `sustain` mapping, which is also the fallback when a dedicated articulation is absent. A leaf profile's own path in `palettes.<name>.profile` resolves relative to the orchestration file that references it; its `.sfz` paths then resolve relative to its own `root` (or its own file's directory), exactly as before — orchestration only routes a palette name to one of these files, it never rewrites sample paths.
+
+The string form is equivalent to `{path: ..., controls: []}`. The structured
+form's `controls` set may contain `cc1`, `cc11`, `cc74`, and `pitch_bend`.
+When a scene routes clip automation through sfizz, the effective mapping
+(including an articulation's `sustain` fallback) must declare every target the
+rendered arrangement uses. A standalone scene selects the track's base clip; a
+suite checks each unmuted section's override, or its base-clip fallback. A base
+clip replaced or muted in every section creates no renderer requirement.
+`build` and `inspect-instruments` reject a missing declaration with the exact
+`clips.<clip>.automation.<lane>.target` field before output staging. The
+declaration is a capability contract, not synthesis: the SFZ must map those
+standard MIDI controls meaningfully, and the source still enters the library
+through the normal manifest/checksum plus `profile check` certification path.
 
 Certify a leaf profile before wiring it into any orchestration:
 
@@ -81,7 +100,39 @@ scorekit profile check profile.yaml
 scorekit --json profile check profile.yaml > profile-report.json
 ```
 
-The check deduplicates shared patch paths, renders melodic or drum probes twice, rejects missing and silent patches, captures sfizz warnings, and checks repeatability. If one physical patch backs both melodic and percussion mappings, it remains one patch report but must pass both probes; the report's `probes` field records that evidence. Each passing patch reports a `render_sha256` golden hash, so a saved report acts as a baseline: re-running the check after a tool or library change and diffing the hashes reveals exactly which patches drifted. If a comparison fails on the first attempt, the check records diagnostics (load average, tool identity, both render hashes, timings) and re-runs that patch once in isolation — a pass is reported as `ok` with a `load_sensitive_flake` warning and the evidence kept under `flake_diagnostics`; a repeat failure is final. Temporary probe files are removed on success and failure; set `SCOREKIT_TMPDIR` to place them on another disk (created if absent, otherwise the system temp dir is used).
+The check deduplicates shared patch paths, renders melodic or drum probes twice,
+rejects missing and silent patches, captures sfizz warnings, and checks
+repeatability. If one physical patch backs both melodic and percussion
+mappings, it remains one patch report but must pass both probes; the report's
+`probes` field records that evidence.
+
+Every declared control is also actively certified. `profile check` unions the
+targets declared by mappings sharing one physical patch, retains the declaring
+mapping names as evidence, and renders two inverse step-gesture MIDIs per
+target. Both variants must be non-silent and deterministic, and their decoded
+PCM must differ by an RMS ratio greater than `1e-6`; comparing WAV file bytes is
+not sufficient. An ignored target fails with `control_unresponsive`, while
+silent, nondeterministic, or failed control renders remain hard failures.
+`--json` exposes each result under `control_probes` with its target, mappings,
+status, PCM difference ratio, determinism, and variant hashes. A legacy string
+mapping declares no controls, so it performs no extra probes and retains the
+original report shape. This proves that a patch responds, not that its response
+is musically useful; growl articulation and talking clarity still require a
+listening review.
+
+Each passing patch reports a `render_sha256` golden certification hash, so a
+saved report acts as a baseline: re-running the check after a tool or library
+change and diffing the hashes reveals exactly which patches drifted. For a
+control-aware patch the hash folds in the base render and both variants of
+every declared target. If a comparison fails on the first attempt, the check
+records diagnostics (load average, tool identity, both render hashes, timings)
+and re-runs that MIDI once in isolation — a pass is reported as `ok` with a
+`load_sensitive_flake` warning and the evidence kept under
+`flake_diagnostics`; a repeat failure is final. Each completed WAV pair is
+removed as soon as its PCM, hashes, and diagnostics are captured, before the
+next probe starts; the containing scratch directory is also removed on success
+and failure. Set `SCOREKIT_TMPDIR` to place it on another disk (created if
+absent, otherwise the system temp dir is used).
 
 Probe renders are bounded: `sfizz_render` runs with `--use-eot` (stop at the MIDI end instead of waiting for output silence, which a looping sustain patch never reaches), and a watchdog kills any tool that exceeds its wall-clock timeout or output-size cap, reporting the patch as `render_failed`. `SCOREKIT_TOOL_TIMEOUT_SECS` and `SCOREKIT_TOOL_MAX_OUTPUT_MB` override the limits.
 
@@ -98,6 +149,9 @@ instead of failing outright — scoped to that one palette only:
   and timbre; the best candidate above the minimum score (default 0.70) is
   used, and the build prints a `WARN instrument fallback:` line naming the
   substitute, its score, and its reasons.
+- A generic exact-event `clip` does not imply a melody role and receives no
+  role-compatibility bonus. Only percussion and bass clips carry an unambiguous
+  rhythm/bass role into fallback scoring.
 - Strings are never a default absorber: no missing brass, woodwind, or
   plucked instrument falls back to a string patch unless the resolver config
   explicitly lists `strings` in `allowed_families`.

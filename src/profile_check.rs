@@ -1,6 +1,7 @@
 //! Active renderer-profile verification. Schema validation proves the YAML is
 //! shaped correctly; this module proves each referenced SFZ actually renders,
-//! produces audible PCM, and repeats deterministically with the pinned tool.
+//! produces audible PCM, repeats deterministically with the pinned tool, and
+//! measurably responds to every automation target it declares.
 //!
 //! Failure handling is a recorded, isolated recheck — not blind retry: a
 //! failed comparison (silent or nondeterministic) captures environment
@@ -9,10 +10,10 @@
 //! to a `load_sensitive_flake` warning with the evidence attached, an
 //! isolated failure stays a hard failure carrying both attempts' diagnostics.
 
-use crate::composer::{NoteEvent, ScoreIr, TrackIr};
+use crate::composer::{BendEvent, ControlEvent, NoteEvent, ScoreIr, TrackIr};
 use crate::error::{Error, Result};
 use crate::profile;
-use crate::schema::TimeSig;
+use crate::schema::{AutomationTarget, TimeSig};
 use crate::{midi, tools};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 const SILENCE_PEAK: u32 = 1;
 const DETERMINISM_TOLERANCE: f64 = 1.0e-6;
+const CONTROL_RESPONSE_TOLERANCE: f64 = 1.0e-6;
 const PROBE_TEMPO: u16 = 240;
 /// 16 probe notes × 240 ticks each + 960 ticks of release-tail pad past the
 /// last note-off; the EndOfTrack lands here and `--use-eot` renders exactly
@@ -55,14 +57,29 @@ pub struct PatchReport {
     pub rms: f64,
     pub deterministic: bool,
     pub difference_rms_ratio: f64,
-    /// SHA-256 of the first render's WAV bytes. Stable across runs with the
-    /// same tool version, so a stored certified report doubles as a
-    /// golden-render baseline: corpus or tool drift shows up as a hash diff.
+    /// Golden certification hash. A single ordinary probe uses its first WAV
+    /// hash directly; multi-probe and control-aware patches fold every passing
+    /// probe hash into one deterministic digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_sha256: Option<String>,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub flake_diagnostics: Vec<FlakeDiagnostics>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub control_probes: Vec<ControlProbeReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControlProbeReport {
+    pub target: String,
+    pub mappings: Vec<String>,
+    pub status: String,
+    pub difference_rms_ratio: f64,
+    pub deterministic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_sha256: Option<[String; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -152,6 +169,47 @@ impl Drop for Scratch {
     }
 }
 
+struct RenderPairFiles {
+    paths: [PathBuf; 2],
+    cleanup_required: bool,
+}
+
+impl RenderPairFiles {
+    fn new(a: PathBuf, b: PathBuf) -> Self {
+        Self {
+            paths: [a, b],
+            cleanup_required: true,
+        }
+    }
+
+    fn remove(mut self) -> Result<()> {
+        for path in &self.paths {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(Error::Io {
+                        path: path.display().to_string(),
+                        source,
+                    });
+                }
+            }
+        }
+        self.cleanup_required = false;
+        Ok(())
+    }
+}
+
+impl Drop for RenderPairFiles {
+    fn drop(&mut self) {
+        if self.cleanup_required {
+            for path in &self.paths {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Pcm {
     channels: u16,
@@ -233,7 +291,7 @@ fn warnings(diagnostics: &[tools::ToolDiagnostics]) -> Vec<String> {
     out
 }
 
-fn probe_midi(drum_channel: bool) -> Vec<u8> {
+fn probe_midi(drum_channel: bool, control: Option<(AutomationTarget, ControlVariant)>) -> Vec<u8> {
     let keys = [
         24u8, 36, 38, 42, 48, 55, 60, 67, 72, 84, 96, 108, 60, 60, 60, 60,
     ];
@@ -251,6 +309,28 @@ fn probe_midi(drum_channel: bool) -> Vec<u8> {
         .collect();
     let total_ticks = keys.len() as u32 * step + 960;
     debug_assert_eq!(total_ticks, PROBE_TOTAL_TICKS);
+    let mut controls = Vec::new();
+    let mut bends = Vec::new();
+    if let Some((target, variant)) = control {
+        for index in 0..keys.len() {
+            let tick = index as u32 * step;
+            let high_first = (index % 2 == 0) ^ matches!(variant, ControlVariant::B);
+            for (offset, high) in [(0, high_first), (step / 2, !high_first)] {
+                if let Some(controller) = target.controller() {
+                    controls.push(ControlEvent {
+                        tick: tick + offset,
+                        controller,
+                        value: if high { 96 } else { 32 },
+                    });
+                } else {
+                    bends.push(BendEvent {
+                        tick: tick + offset,
+                        value: if high { 12_288 } else { 4_096 },
+                    });
+                }
+            }
+        }
+    }
     midi::to_smf_bytes(&ScoreIr {
         tempo: PROBE_TEMPO,
         ts: TimeSig { num: 4, den: 4 },
@@ -261,9 +341,16 @@ fn probe_midi(drum_channel: bool) -> Vec<u8> {
             pan: None,
             reverb: None,
             notes,
-            bends: Vec::new(),
+            controls,
+            bends,
         }],
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ControlVariant {
+    A,
+    B,
 }
 
 fn render_failure(
@@ -285,6 +372,7 @@ fn render_failure(
         render_sha256: None,
         warnings: Vec::new(),
         flake_diagnostics: Vec::new(),
+        control_probes: Vec::new(),
         error: Some(error.into()),
     }
 }
@@ -315,6 +403,7 @@ struct PairOutcome {
     hashes: [String; 2],
     times_ms: [u64; 2],
     diagnostics: Vec<tools::ToolDiagnostics>,
+    pcm: Pcm,
 }
 
 enum PairResult {
@@ -362,6 +451,7 @@ fn render_pair(
 ) -> Result<PairResult> {
     let a_path = scratch.join(format!("{index:04}-{tag}-a.wav"));
     let b_path = scratch.join(format!("{index:04}-{tag}-b.wav"));
+    let outputs = RenderPairFiles::new(a_path.clone(), b_path.clone());
     let probe_secs = midi::exact_samples(PROBE_TOTAL_TICKS, PROBE_TEMPO, sample_rate) as f64
         / f64::from(sample_rate);
     let limits = tools::ToolLimits::for_expected_audio(probe_secs, sample_rate);
@@ -388,7 +478,7 @@ fn render_pair(
         Verdict::Pass
     };
     let hashes = [sha256_file(&a_path)?, sha256_file(&b_path)?];
-    Ok(PairResult::Rendered(Box::new(PairOutcome {
+    let outcome = PairResult::Rendered(Box::new(PairOutcome {
         verdict,
         peak_abs,
         rms,
@@ -396,7 +486,23 @@ fn render_pair(
         hashes,
         times_ms,
         diagnostics,
-    })))
+        pcm: a,
+    }));
+    outputs.remove()?;
+    Ok(outcome)
+}
+
+struct RenderCertification {
+    status: String,
+    peak_abs: u32,
+    rms: f64,
+    deterministic: bool,
+    difference_rms_ratio: f64,
+    render_sha256: Option<String>,
+    warnings: Vec<String>,
+    flake_diagnostics: Vec<FlakeDiagnostics>,
+    error: Option<String>,
+    pcm: Option<Pcm>,
 }
 
 fn flake_snapshot(attempt: &str, outcome: &PairOutcome) -> FlakeDiagnostics {
@@ -412,6 +518,111 @@ fn flake_snapshot(attempt: &str, outcome: &PairOutcome) -> FlakeDiagnostics {
     }
 }
 
+fn certify_midi(
+    midi: &Path,
+    path: &Path,
+    scratch: &Path,
+    index: usize,
+    label: &str,
+    sample_rate: u32,
+) -> Result<RenderCertification> {
+    let first_tag = format!("{label}-first");
+    let first = match render_pair(midi, path, scratch, index, &first_tag, sample_rate)? {
+        PairResult::Failed(error) => {
+            return Ok(RenderCertification {
+                status: "render_failed".to_owned(),
+                peak_abs: 0,
+                rms: 0.0,
+                deterministic: false,
+                difference_rms_ratio: f64::INFINITY,
+                render_sha256: None,
+                warnings: Vec::new(),
+                flake_diagnostics: Vec::new(),
+                error: Some(format!("{label} probe: {error}")),
+                pcm: None,
+            });
+        }
+        PairResult::Rendered(outcome) => outcome,
+    };
+
+    if first.verdict == Verdict::Pass {
+        return Ok(RenderCertification {
+            status: "ok".to_owned(),
+            peak_abs: first.peak_abs,
+            rms: first.rms,
+            deterministic: true,
+            difference_rms_ratio: first.difference_rms_ratio,
+            render_sha256: Some(first.hashes[0].clone()),
+            warnings: warnings(&first.diagnostics),
+            flake_diagnostics: Vec::new(),
+            error: None,
+            pcm: Some(first.pcm),
+        });
+    }
+
+    let first_snapshot = flake_snapshot("first", &first);
+    let recheck_tag = format!("{label}-recheck");
+    let recheck = match render_pair(midi, path, scratch, index, &recheck_tag, sample_rate)? {
+        PairResult::Failed(error) => {
+            return Ok(RenderCertification {
+                status: "render_failed".to_owned(),
+                peak_abs: 0,
+                rms: 0.0,
+                deterministic: false,
+                difference_rms_ratio: f64::INFINITY,
+                render_sha256: None,
+                warnings: Vec::new(),
+                flake_diagnostics: vec![first_snapshot],
+                error: Some(format!("{label} probe: {error}")),
+                pcm: None,
+            });
+        }
+        PairResult::Rendered(outcome) => outcome,
+    };
+
+    if recheck.verdict == Verdict::Pass {
+        let mut patch_warnings = warnings(&recheck.diagnostics);
+        patch_warnings.push(format!(
+            "load_sensitive_flake: {label} probe first attempt was {} (RMS ratio {:.8}); \
+             isolated recheck passed — see flake_diagnostics",
+            first_snapshot.observed_status, first_snapshot.difference_rms_ratio,
+        ));
+        return Ok(RenderCertification {
+            status: "ok".to_owned(),
+            peak_abs: recheck.peak_abs,
+            rms: recheck.rms,
+            deterministic: true,
+            difference_rms_ratio: recheck.difference_rms_ratio,
+            render_sha256: Some(recheck.hashes[0].clone()),
+            warnings: patch_warnings,
+            flake_diagnostics: vec![first_snapshot],
+            error: None,
+            pcm: Some(recheck.pcm),
+        });
+    }
+
+    let recheck_snapshot = flake_snapshot("recheck", &recheck);
+    let error = match recheck.verdict {
+        Verdict::Silent => format!("{label} probe produced no audible PCM"),
+        _ => format!(
+            "{label} probe renders differ (RMS ratio {:.8}); isolated recheck failed too",
+            recheck.difference_rms_ratio
+        ),
+    };
+    Ok(RenderCertification {
+        status: recheck.verdict.status().to_owned(),
+        peak_abs: recheck.peak_abs,
+        rms: recheck.rms,
+        deterministic: false,
+        difference_rms_ratio: recheck.difference_rms_ratio,
+        render_sha256: None,
+        warnings: warnings(&recheck.diagnostics),
+        flake_diagnostics: vec![first_snapshot, recheck_snapshot],
+        error: Some(error),
+        pcm: None,
+    })
+}
+
 fn certify_probe(
     midi: &Path,
     path: &Path,
@@ -422,98 +633,21 @@ fn certify_probe(
     sample_rate: u32,
 ) -> Result<PatchReport> {
     let probe_name = probe.key();
-    let first_tag = format!("{probe_name}-first");
-    let first = match render_pair(midi, path, scratch, index, &first_tag, sample_rate)? {
-        PairResult::Failed(error) => {
-            return Ok(render_failure(
-                path,
-                mappings,
-                vec![probe_name.to_owned()],
-                "render_failed",
-                format!("{probe_name} probe: {error}"),
-            ));
-        }
-        PairResult::Rendered(outcome) => outcome,
-    };
-
-    if first.verdict == Verdict::Pass {
-        return Ok(PatchReport {
-            path: path.display().to_string(),
-            mappings,
-            probes: vec![probe_name.to_owned()],
-            status: "ok".to_owned(),
-            peak_abs: first.peak_abs,
-            rms: first.rms,
-            deterministic: true,
-            difference_rms_ratio: first.difference_rms_ratio,
-            render_sha256: Some(first.hashes[0].clone()),
-            warnings: warnings(&first.diagnostics),
-            flake_diagnostics: Vec::new(),
-            error: None,
-        });
-    }
-
-    let first_snapshot = flake_snapshot("first", &first);
-    let recheck_tag = format!("{probe_name}-recheck");
-    let recheck = match render_pair(midi, path, scratch, index, &recheck_tag, sample_rate)? {
-        PairResult::Failed(error) => {
-            let mut report = render_failure(
-                path,
-                mappings,
-                vec![probe_name.to_owned()],
-                "render_failed",
-                format!("{probe_name} probe: {error}"),
-            );
-            report.flake_diagnostics = vec![first_snapshot];
-            return Ok(report);
-        }
-        PairResult::Rendered(outcome) => outcome,
-    };
-
-    if recheck.verdict == Verdict::Pass {
-        let mut patch_warnings = warnings(&recheck.diagnostics);
-        patch_warnings.push(format!(
-            "load_sensitive_flake: {probe_name} probe first attempt was {} (RMS ratio {:.8}); \
-             isolated recheck passed — see flake_diagnostics",
-            first_snapshot.observed_status, first_snapshot.difference_rms_ratio,
-        ));
-        return Ok(PatchReport {
-            path: path.display().to_string(),
-            mappings,
-            probes: vec![probe_name.to_owned()],
-            status: "ok".to_owned(),
-            peak_abs: recheck.peak_abs,
-            rms: recheck.rms,
-            deterministic: true,
-            difference_rms_ratio: recheck.difference_rms_ratio,
-            render_sha256: Some(recheck.hashes[0].clone()),
-            warnings: patch_warnings,
-            flake_diagnostics: vec![first_snapshot],
-            error: None,
-        });
-    }
-
-    let recheck_snapshot = flake_snapshot("recheck", &recheck);
-    let error = match recheck.verdict {
-        Verdict::Silent => format!("{probe_name} probe produced no audible PCM"),
-        _ => format!(
-            "{probe_name} probe renders differ (RMS ratio {:.8}); isolated recheck failed too",
-            recheck.difference_rms_ratio
-        ),
-    };
+    let certification = certify_midi(midi, path, scratch, index, probe_name, sample_rate)?;
     Ok(PatchReport {
         path: path.display().to_string(),
         mappings,
         probes: vec![probe_name.to_owned()],
-        status: recheck.verdict.status().to_owned(),
-        peak_abs: recheck.peak_abs,
-        rms: recheck.rms,
-        deterministic: false,
-        difference_rms_ratio: recheck.difference_rms_ratio,
-        render_sha256: None,
-        warnings: warnings(&recheck.diagnostics),
-        flake_diagnostics: vec![first_snapshot, recheck_snapshot],
-        error: Some(error),
+        status: certification.status,
+        peak_abs: certification.peak_abs,
+        rms: certification.rms,
+        deterministic: certification.deterministic,
+        difference_rms_ratio: certification.difference_rms_ratio,
+        render_sha256: certification.render_sha256,
+        warnings: certification.warnings,
+        flake_diagnostics: certification.flake_diagnostics,
+        control_probes: Vec::new(),
+        error: certification.error,
     })
 }
 
@@ -612,8 +746,136 @@ fn merge_probe_reports(
         render_sha256,
         warnings,
         flake_diagnostics,
+        control_probes: Vec::new(),
         error: (!errors.is_empty()).then(|| errors.join("; ")),
     }
+}
+
+struct ControlCertification {
+    report: ControlProbeReport,
+    warnings: Vec<String>,
+    flake_diagnostics: Vec<FlakeDiagnostics>,
+}
+
+fn certify_control(
+    midis: &(PathBuf, PathBuf),
+    path: &Path,
+    scratch: &Path,
+    index: usize,
+    target: AutomationTarget,
+    mappings: Vec<String>,
+    sample_rate: u32,
+) -> Result<ControlCertification> {
+    let mut variants = Vec::with_capacity(2);
+    for (name, midi) in [("a", &midis.0), ("b", &midis.1)] {
+        let label = format!("control-{}-{name}", target.key());
+        let mut certification = certify_midi(midi, path, scratch, index, &label, sample_rate)?;
+        for warning in &mut certification.warnings {
+            *warning = format!("control {} variant {name}: {warning}", target.key());
+        }
+        for diagnostic in &mut certification.flake_diagnostics {
+            diagnostic.attempt = format!("control:{}:{name}:{}", target.key(), diagnostic.attempt);
+        }
+        if certification.status != "ok" {
+            let status = certification.status.clone();
+            let detail = certification
+                .error
+                .unwrap_or_else(|| "render probe failed without detail".to_owned());
+            let error = format!(
+                "declared control `{}` variant {name} failed certification: {detail}",
+                target.key()
+            );
+            return Ok(ControlCertification {
+                report: ControlProbeReport {
+                    target: target.key().to_owned(),
+                    mappings,
+                    status,
+                    difference_rms_ratio: f64::INFINITY,
+                    deterministic: certification.deterministic,
+                    render_sha256: None,
+                    error: Some(error),
+                },
+                warnings: certification.warnings,
+                flake_diagnostics: certification.flake_diagnostics,
+            });
+        }
+        variants.push(certification);
+    }
+
+    let left = variants.remove(0);
+    let right = variants.remove(0);
+    let ratio = difference_ratio(
+        left.pcm.as_ref().expect("passing certification has PCM"),
+        right.pcm.as_ref().expect("passing certification has PCM"),
+    );
+    let responsive = ratio.is_finite() && ratio > CONTROL_RESPONSE_TOLERANCE;
+    let mut control_warnings = left.warnings;
+    control_warnings.extend(right.warnings);
+    let mut flake_diagnostics = left.flake_diagnostics;
+    flake_diagnostics.extend(right.flake_diagnostics);
+    Ok(ControlCertification {
+        report: ControlProbeReport {
+            target: target.key().to_owned(),
+            mappings,
+            status: if responsive { "ok" } else { "unresponsive" }.to_owned(),
+            difference_rms_ratio: ratio,
+            deterministic: true,
+            render_sha256: Some([
+                left.render_sha256
+                    .expect("passing certification has a render hash"),
+                right
+                    .render_sha256
+                    .expect("passing certification has a render hash"),
+            ]),
+            error: (!responsive).then(|| {
+                if ratio.is_finite() {
+                    format!(
+                        "declared control `{}` produced no measurable PCM change",
+                        target.key()
+                    )
+                } else {
+                    format!(
+                        "declared control `{}` produced incomparable PCM formats",
+                        target.key()
+                    )
+                }
+            }),
+        },
+        warnings: control_warnings,
+        flake_diagnostics,
+    })
+}
+
+fn extend_certification_hash(base: &str, control: &ControlProbeReport) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"scorekit-profile-certification-v1\0");
+    hasher.update(base.as_bytes());
+    hasher.update([0]);
+    hasher.update(control.target.as_bytes());
+    hasher.update([0]);
+    for mapping in &control.mappings {
+        hasher.update(mapping.as_bytes());
+        hasher.update([0]);
+    }
+    for hash in control
+        .render_sha256
+        .as_ref()
+        .expect("passing control probe has render hashes")
+    {
+        hasher.update(hash.as_bytes());
+        hasher.update([0]);
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[derive(Default)]
+struct PatchRequirements {
+    probes: BTreeMap<Probe, Vec<String>>,
+    controls: BTreeMap<AutomationTarget, Vec<String>>,
 }
 
 pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
@@ -622,7 +884,7 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
     let mappings = loaded.resolved_mappings(profile_dir);
     let mapping_count = mappings.len();
 
-    let mut patches: BTreeMap<PathBuf, BTreeMap<Probe, Vec<String>>> = BTreeMap::new();
+    let mut patches: BTreeMap<PathBuf, PatchRequirements> = BTreeMap::new();
     for mapping in mappings {
         let path = std::fs::canonicalize(&mapping.path).unwrap_or(mapping.path);
         let probe = if mapping.instrument.is_percussion() {
@@ -630,35 +892,60 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
         } else {
             Probe::Melodic
         };
-        patches
-            .entry(path)
-            .or_default()
+        let name = format!("{}.{}", mapping.instrument_key, mapping.articulation_key);
+        let requirements = patches.entry(path).or_default();
+        requirements
+            .probes
             .entry(probe)
             .or_default()
-            .push(format!(
-                "{}.{}",
-                mapping.instrument_key, mapping.articulation_key
-            ));
+            .push(name.clone());
+        for target in mapping.controls {
+            requirements
+                .controls
+                .entry(target)
+                .or_default()
+                .push(name.clone());
+        }
     }
 
     let unique_patches = patches.len();
     let scratch = Scratch::create()?;
     let melodic_midi = scratch.path.join("probe-melodic.mid");
     let drum_midi = scratch.path.join("probe-drums.mid");
-    tools::write_atomic(&melodic_midi, &probe_midi(false))?;
-    tools::write_atomic(&drum_midi, &probe_midi(true))?;
+    tools::write_atomic(&melodic_midi, &probe_midi(false, None))?;
+    tools::write_atomic(&drum_midi, &probe_midi(true, None))?;
+    let mut control_midis = BTreeMap::new();
+    for target in patches
+        .values()
+        .flat_map(|requirements| requirements.controls.keys())
+    {
+        if control_midis.contains_key(target) {
+            continue;
+        }
+        let a = scratch.path.join(format!("control-{}-a.mid", target.key()));
+        let b = scratch.path.join(format!("control-{}-b.mid", target.key()));
+        tools::write_atomic(&a, &probe_midi(false, Some((*target, ControlVariant::A))))?;
+        tools::write_atomic(&b, &probe_midi(false, Some((*target, ControlVariant::B))))?;
+        control_midis.insert(*target, (a, b));
+    }
 
     let mut reports = Vec::with_capacity(unique_patches);
-    for (index, (path, mut mapping_groups)) in patches.into_iter().enumerate() {
-        for names in mapping_groups.values_mut() {
+    for (index, (path, mut requirements)) in patches.into_iter().enumerate() {
+        for names in requirements.probes.values_mut() {
             names.sort();
         }
-        let mapping_names = mapping_groups
+        for names in requirements.controls.values_mut() {
+            names.sort();
+            names.dedup();
+        }
+        let mapping_names = requirements
+            .probes
             .values()
             .flatten()
             .cloned()
             .collect::<Vec<_>>();
-        let probes = mapping_groups
+        let probes = requirements
+            .probes
             .keys()
             .map(|probe| probe.key().to_owned())
             .collect::<Vec<_>>();
@@ -672,8 +959,8 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
             ));
             continue;
         }
-        let mut probe_reports = Vec::with_capacity(mapping_groups.len());
-        for (probe, names) in mapping_groups {
+        let mut probe_reports = Vec::with_capacity(requirements.probes.len());
+        for (probe, names) in requirements.probes {
             let midi = match probe {
                 Probe::Melodic => &melodic_midi,
                 Probe::Percussion => &drum_midi,
@@ -688,7 +975,52 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
                 sample_rate,
             )?);
         }
-        reports.push(merge_probe_reports(&path, mapping_names, probe_reports));
+        let mut report = merge_probe_reports(&path, mapping_names, probe_reports);
+        if report.status == "ok" {
+            let mut certification_hash = report.render_sha256.take();
+            let mut control_status = None;
+            let mut control_errors = Vec::new();
+            for (target, names) in requirements.controls {
+                let certification = certify_control(
+                    control_midis
+                        .get(&target)
+                        .expect("required control MIDI was written"),
+                    &path,
+                    &scratch.path,
+                    index,
+                    target,
+                    names,
+                    sample_rate,
+                )?;
+                report.warnings.extend(certification.warnings);
+                report
+                    .flake_diagnostics
+                    .extend(certification.flake_diagnostics);
+                if certification.report.status != "ok" {
+                    let status = if certification.report.status == "render_failed" {
+                        "render_failed".to_owned()
+                    } else {
+                        format!("control_{}", certification.report.status)
+                    };
+                    if control_status.is_none() || status == "render_failed" {
+                        control_status = Some(status);
+                    }
+                    report.deterministic &= certification.report.deterministic;
+                    certification_hash = None;
+                    control_errors.extend(certification.report.error.iter().cloned());
+                } else if let Some(base) = certification_hash.as_deref() {
+                    certification_hash =
+                        Some(extend_certification_hash(base, &certification.report));
+                }
+                report.control_probes.push(certification.report);
+            }
+            if let Some(status) = control_status {
+                report.status = status;
+            }
+            report.render_sha256 = certification_hash;
+            report.error = (!control_errors.is_empty()).then(|| control_errors.join("; "));
+        }
+        reports.push(report);
     }
 
     let passed = reports.iter().filter(|patch| patch.status == "ok").count();

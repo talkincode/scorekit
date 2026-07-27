@@ -52,7 +52,7 @@ grammar overrides them — note the override in the report.
 | B · voice discipline | peak simultaneous non-rest melody voices (overlap the melody tracks' beat grids) | ≤2 |
 | C · breathing | per melody track: rest beats ÷ total beats | ≥0.3 |
 | D · emotional curve | intensity × register × active-voice count over the timeline, as rough percentages | has corners (rise, peak, cut or contrast, return) — not a plateau |
-| E · role coverage | tracks per role: foundation (`bass`), harmony (`sustain`/`arpeggio`), lead (`melody`), pulse (`drums`/`tabla`) | no unintended gap; no two tracks duplicating a role without registral or rhythmic contrast |
+| E · role coverage | tracks per role: foundation (`bass` or low pitched clip), harmony (`sustain`/`arpeggio`), lead (`melody` or foreground pitched clip), pulse (`drums`/`tabla` or percussion clip) | no unintended gap; no two tracks duplicating a role without registral or rhythmic contrast |
 | F · register spacing | octave bands occupied by concurrent tracks | bass alone at the bottom; ≤2 voices per band; melody clear of the pad's center |
 | G · loop/ending seal | loop: `dynamics` start == end and last chord pulls to the first; one-shot: final cadence matches the brief (`resolution` complete/incomplete) | matches the declared `loop` and the stated intent |
 | H · determinism hygiene | `performance.humanize` present ⇒ `seed` set | seeded |
@@ -69,7 +69,9 @@ user supplies several scenes at once, measure K pairwise across them.
 
 Dimension shortcuts by pattern: `sustain`/`arpeggio`/`bass`/`drums` fill
 the whole scene, so B–D are shaped *only* by melody tracks' rests and by
-`sections[].mute` — check those first when the curve reads flat.
+`sections[].mute` — check those first when the curve reads flat. `clip` is not
+a shortcut: inspect its exact event spans, automation, and section clip
+overrides because it may be sparse or role-switching within every bar.
 
 ## Report format
 
@@ -103,7 +105,9 @@ When the same craft finding recurs across a project's scenes, freeze it as
 a measurable rule in a grammar profile — `tempo_min`/`tempo_max`,
 `pads_max`, `melodic_voices_max`, `melody_rest_ratio_min`,
 `phrase_min_beats`, `resolution`, `harmony_allowed`,
-`require_performance` — and lint every new scene. The dimension then
+`require_performance`, `percussion_events_per_bar_min`,
+`percussion_onsets`, `automation_activity`, and named `section_rules` — and
+lint every new scene. The dimension then
 becomes a G2 gate that survives model changes. Dimensions grammar cannot
 yet measure (curve shape, register spacing, story alignment) stay in the
 rubric; report them with measured values so a future rule has evidence.

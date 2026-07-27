@@ -179,16 +179,18 @@ unmapped and fail visibly.
 
 | Library | Version | License | Rebuild source |
 |---|---|---|---|
+| ScoreData Dubstep Growl | 1.0.0 | CC0-1.0 | `scoredata-forge/recipes/dubstep-growl.toml` |
 | ScoreData Music Box | 1.0.0 | CC0-1.0 | `scoredata-forge/recipes/music-box.toml` |
 | ScoreData Whistle | 1.0.0 | CC0-1.0 | `scoredata-forge/recipes/whistle.toml` |
 
-These two ordinary WAV+SFZ libraries close gaps for structurally simple
-timbres without putting synthesis inside scorekit. Build and verify them in
-the separate `scoredata-forge` repository; install the full versioned output
-directory so `recipe.toml`, `generator.json`, `SHA256SUMS`, and the CC0
-dedication remain with the samples. The producing platform proves a
-byte-identical rebuild with `forge verify`; the installed consumer boundary
-is independently gated by `scorekit profile check`.
+These three ordinary WAV+SFZ libraries close structurally simple timbre gaps
+and the control-responsive growl gap without putting synthesis inside
+scorekit. Build and verify them in the separate `scoredata-forge` repository;
+install the full versioned output directory so `recipe.toml`,
+`generator.json`, `SHA256SUMS`, and the CC0 dedication remain with the
+samples. The producing platform proves a byte-identical rebuild with
+`forge verify`; the installed consumer boundary is independently gated by
+`scorekit profile check`.
 
 ### Textures
 
@@ -311,8 +313,8 @@ failing comparison is retried once in isolation with diagnostics recorded
 (`load_sensitive_flake`) so a loaded machine does not produce false
 nondeterminism verdicts — see [Orchestration and Renderer Profiles](profiles.md).
 
-The corpus currently certifies **four renderer profiles — 242 mappings
-over 180 unique patches, 0 failures**:
+The corpus currently certifies **four general-purpose renderer profiles — 242
+mappings over 180 unique patches, 0 failures**:
 
 - `scoredata-open` — broad reference: 108 mappings / 92 patches, covering
   all 60 core DSL instruments plus exact Erhu (sustain/staccato) and Tabla.
@@ -331,6 +333,17 @@ over 180 unique patches, 0 failures**:
 - `scoredata-synth` — FreePats synth basses/leads/pads/strings, Karoryfer
   electric guitar and bass, Wurlitzer EP200, MuldjordKit drums (21 / 15).
   The acoustic orchestra is intentionally absent.
+
+The separately certified Heavy Dubstep production identity adds four
+single-mapping leaf profiles — `scoredata-dubstep-growl`,
+`scoredata-dubstep-sub`, `scoredata-dubstep-metal`, and
+`scoredata-dubstep-drums` — with 4/4 physical patches passing. Only the growl
+patch is new; the other three deliberately reuse independent certified
+sources rather than collapsing the roles onto one synth. Its active
+certification proves that CC1, CC74, and pitch bend all produce deterministic,
+non-silent PCM changes. The paired texture profile certifies 4/4 bindings:
+chain-grind bed, hybrid impact, electric zap, and a mechanical siren visibly
+used as `mechanical_riser` rather than mislabeled as reverse-processed audio.
 
 The chamber/symphonic pair doubles as the documented solo-vs-section
 variant pair: same score, audibly different orchestration identity. Binding

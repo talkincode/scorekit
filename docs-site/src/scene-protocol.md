@@ -57,6 +57,7 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `loop` | bool | `false` | `true` = seamless-loop asset (sample-exact length, sealed seam); `false` = one-shot with `--tail` decay |
 | `harmony` | `[numeral, …]`, diatonic `i`..`vii` (case per quality) | major `I-V-vi-IV`, minor `i-VI-III-VII` | one triad per bar, cycled to fill; sustain/arpeggio/bass derive from it |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies referenced by `pattern: melody` tracks; map is order-insensitive (sorted for determinism) |
+| `clips` | `{stable_id: clip, …}`, ≤128 | `{}` | exact pitched/percussion event sequences and step automation referenced by `pattern: clip`; every nested map key is stable identity, so declaration reordering changes neither MIDI nor semantic diff |
 | `performance` | object | absent | deterministic humanization (below); absent = exact mechanical rendering |
 | `textures` | `[texture, …]`, ≤16 | `[]` | deterministic ambience/SFX layers; source names bind through `--texture-profile` at build time and never affect MIDI |
 | `tracks` | `[track, …]`, 1..=16 | required | ≤15 melodic + ≤1 percussion (`drums` or `tabla`) |
@@ -69,13 +70,68 @@ A proposed field must clear all of these gates (this is the governance encoded i
 | `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity referenced by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and every `meta.json`/`inspect-instruments` report; itself never affects compiled MIDI |
 | `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration-palette selector (`--orchestration`, `--renderer sfizz` only); pure routing metadata — **never changes compiled MIDI** and has no effect on SF2/TiMidity backends |
 | `instrument` | portable name from `scorekit schema` | required | exact GM program when one exists; standalone `midi` rejects profile-only melodic identities, while sfizz's internal MIDI emits no false program; `drums`/`tabla` use channel 10 |
-| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` | required | note-generation algorithm (below); `drums` and `tabla` pair only with their namesake instruments |
+| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` `clip` | required | note-generation algorithm (below), or exact authored events for `clip`; `drums` and `tabla` pair only with their namesake instruments |
 | `motif` | motif name | — | required iff `pattern: melody`; must exist in `motifs` |
+| `clip` | clip name | — | required iff `pattern: clip`; must exist in `clips` and match the track's pitched/percussion kind |
 | `intensity` | 0.0..=1.0 | 0.6 | scales note velocities |
 | `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time SFZ sample selector only; **never changes the compiled MIDI** |
 | `pan` | 0.0..=1.0 | absent | CC10 = `round(v·127)` once at tick 0; absent = no CC10 emitted |
 | `reverb` | 0.0..=1.0 | absent | CC91 = `round(v·127)` once at tick 0; absent = no CC91 emitted |
 | `glide` | 0.0..=1.0, melody-only | absent | tail portamento via pitch bend, clamped ±2 semitones (GM default bend range); loops glide last note → first note, seam-continuous |
+
+## Event clip
+
+Clips are the exact-event escape hatch for arrangements whose identity lives in
+syncopation, fills, bass switches, or controller gestures rather than a
+generative pattern. They remain source-neutral MIDI structure: a clip never
+names a synth, plugin parameter, sample, or local path.
+
+| Field | Type / range | Semantic |
+| --- | --- | --- |
+| map key | `[a-z][a-z0-9_-]{0,63}` | stable clip identity used by tracks, section overrides, and semantic diff |
+| `kind` | `pitched` \| `percussion` | selects the legal event shape |
+| `length_beats` | quarter-note beats, 1 PPQ-480 tick..=1024 | quantized with `round(beats × 480)` |
+| `mode` | `once` \| `loop` | emit once from track start, or repeat exactly to fill the scene/section |
+| `events` | `{stable_id: event, …}`, 1..=2048 | order-insensitive authored events |
+| `automation` | `{stable_id: lane, …}`, ≤4 | pitched clips only; at most one lane per target |
+
+A looping clip's quantized length must divide every scene/section timeline in
+which it is active. Events cannot cross the clip boundary. Pitched events with
+the same MIDI key cannot overlap; percussion events cannot repeat the same
+voice at the same quantized tick. After loop expansion, each active track may
+produce at most 65,536 authored note/control events per scene or section;
+validation rejects larger expansions before composition allocates them.
+
+### Clip event
+
+| Field | Pitched clip | Percussion clip |
+| --- | --- | --- |
+| map key | stable event identity | stable event identity |
+| `at` | required quarter-note beat ≥0 | required quarter-note beat ≥0 |
+| `duration` | required; ≥1 quantized tick | optional; defaults to 0.125 beat |
+| `pitch` | required scientific pitch (`C-1`=0, `C4`=60, `A4`=69) | forbidden |
+| `voice` | forbidden | required: `kick`, `snare`, `clap`, `closed_hat`, `pedal_hat`, `open_hat`, `low_tom`, `mid_tom`, `high_tom`, `crash`, or `ride` |
+| `velocity` | required 1..=127 | required 1..=127 |
+
+Clip velocity is still scaled by track/section `intensity` and
+`performance.dynamics`. Authored onset, duration, and velocity relationships
+are otherwise exact: `swing`, `legato`, and `humanize` do not rewrite clip
+events.
+
+### Step automation
+
+Each lane chooses one portable MIDI target: `cc1`, `cc11`, `cc74`, or
+`pitch_bend`. Its `points` map uses stable IDs and exact `{at, value}` entries.
+CC values are 0..=127; pitch bend is -8192..=8191 around center 0. Every lane
+starts at beat 0. A loop lane's final authored value must equal its initial
+value, making the repeated controller state explicit and seam-safe. Points are
+steps; linear interpolation is not part of this protocol version.
+
+SF2/TiMidity receive these standard MIDI events directly. For sfizz, the
+effective leaf renderer-profile mapping must explicitly declare every target
+under `controls`; otherwise orchestration resolution fails before build
+staging. This prevents a talking-bass scene from silently rendering through a
+patch that ignores its authored motion.
 
 ## Texture track
 
@@ -117,6 +173,7 @@ needed at the loop boundary.
 | `tempo` | 20..=300 | scene tempo | per-section override |
 | `loop` | bool | `false` | per-section loop treatment |
 | `mute` | `[track id, …]` | `[]` | stable track `id`s silenced this section; muting every track is rejected |
+| `clips` | `{track_id: clip_id, …}` | `{}` | replace a `pattern: clip` track's clip for this section; replacement kind must match the track |
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on each track's intensity |
 
 Sections inherit the scene's key, tracks (including spatial fields), textures, motifs, harmony, and performance.
@@ -139,7 +196,7 @@ All optional, all deterministic:
 
 These are observable guarantees an integration may rely on; changing any of them is a breaking protocol change.
 
-**Time and encoding.** Output is SMF format 1, PPQ 480. A bar is `N × (480·4/D)` ticks. Events are encoded in the canonical order `(tick, kind rank: note-off < pitch-bend < note-on, key)` — this ordering *is* the byte-determinism guarantee.
+**Time and encoding.** Output is SMF format 1, PPQ 480. A bar is `N × (480·4/D)` ticks. Clip positions always use quarter-note beats regardless of the time-signature denominator and quantize with `round(beats × 480)`. Events are encoded in the canonical order `(tick, kind rank: note-off < automation CC < pitch-bend < note-on, key/value)` — this ordering *is* the byte-determinism guarantee.
 
 **Channels and programs.** Melodic tracks take channels in declaration order
 (0, 1, 2, …), skipping channel 10 (index 9), which is reserved for the single
@@ -148,8 +205,9 @@ program change. Internal MIDI rendered against an exact sfizz patch leaves a
 profile-only melodic channel programless; standalone `scorekit midi` rejects
 that case before writing a file rather than publish MIDI that generic players
 interpret as program 0 (piano). Tabla remains programless on channel 10.
-`pan`/`reverb` CCs follow immediately at tick 0. Channel state persists across
-loop passes, so CCs are emitted once.
+`pan`/`reverb` CCs follow immediately at tick 0 and precede clip automation at
+that tick. Channel state persists across loop passes, so static CCs are emitted
+once while authored clip automation repeats with its clip.
 
 **Patterns.**
 
@@ -159,8 +217,9 @@ loop passes, so CCs are emitted once.
 - `drums` — kick on beat 1 (plus the midpoint beat when N ≥ 4), snare on off-beats, closed hi-hat on every beat and half-beat.
 - `tabla` — one channel-10 stroke per notated beat, cycling the fixed 16-beat sequence `dha dhin dhin dha | dha dhin dhin dha | dha tin tin ta | ta dhin dhin dha` across bar boundaries.
 - `melody` — the named motif, looped or truncated to exactly fill the length; degrees resolve in the scene key.
+- `clip` — the named exact event sequence, emitted once or repeated without generative timing transforms; pitched clips pair with melodic instruments and percussion clips with the single percussion track.
 
-**Transform order.** `swing → dynamics → legato → humanize`, then `glide` bend computation (it must observe final onsets), then loop-pass duplication. Loop math is applied last so looped scenes stay sample-exact under every transform.
+**Transform order.** Generated patterns use `swing → dynamics → legato → humanize`, then `glide` bend computation (it must observe final onsets), then loop-pass duplication. Clips apply only intensity/dynamics velocity scaling before exact repetition; their authored timing is never humanized, swung, or made legato. Loop math is applied last so looped scenes stay sample-exact under every transform.
 
 **Harmony.** One numeral per bar, cycled. Numerals resolve to diatonic triads of the scene key; sustain/arpeggio/bass all read the same per-bar chord, which is what keeps multi-track scenes harmonically coherent by construction.
 

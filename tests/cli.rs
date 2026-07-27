@@ -286,6 +286,387 @@ fn validate_happy_path() {
 }
 
 #[test]
+fn clip_scene_validates_and_schema_exposes_stable_clip_maps() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("clip.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\nkey: F_minor\nbars: 2\nclips:\n  bass_drop:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit_a: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }\n      hit_b: { at: 1.5, duration: 0.25, pitch: C2, velocity: 118 }\n  drop_drums:\n    kind: percussion\n    length_beats: 4\n    mode: loop\n    events:\n      kick_1: { at: 0, voice: kick, velocity: 127 }\n      snare_1: { at: 2, voice: snare, velocity: 127 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: bass_drop, intensity: 1 }\n  - { id: drums, instrument: drums, pattern: clip, clip: drop_drums, intensity: 1 }\n",
+    )
+    .unwrap();
+
+    bin().arg("validate").arg(&scene).assert().success();
+
+    let out = bin().arg("schema").assert().success();
+    let schema: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("scene schema is JSON");
+    assert!(schema["properties"]["clips"].is_object());
+    assert!(schema["$defs"]["Clip"]["properties"]["events"].is_object());
+    assert!(
+        schema["$defs"]["Track"]["properties"]["clip"].is_object(),
+        "track schema exposes clip references: {schema}"
+    );
+}
+
+#[test]
+fn clip_events_compile_to_exact_deterministic_midi_independent_of_map_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.yaml");
+    let b = dir.path().join("b.yaml");
+    let prefix = "tempo: 140\nkey: F_minor\nbars: 2\n";
+    let tracks = "tracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: bass_drop, intensity: 1 }\n  - { id: drums, instrument: drums, pattern: clip, clip: drop_drums, intensity: 1 }\n";
+    fs::write(
+        &a,
+        format!(
+            "{prefix}clips:\n  bass_drop:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit_a: {{ at: 0, duration: 0.5, pitch: F1, velocity: 127 }}\n      hit_b: {{ at: 1.5, duration: 0.25, pitch: C2, velocity: 118 }}\n  drop_drums:\n    kind: percussion\n    length_beats: 4\n    mode: loop\n    events:\n      kick_1: {{ at: 0, voice: kick, velocity: 127 }}\n      snare_1: {{ at: 2, voice: snare, velocity: 127 }}\n{tracks}"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &b,
+        format!(
+            "{prefix}clips:\n  drop_drums:\n    kind: percussion\n    length_beats: 4\n    mode: loop\n    events:\n      snare_1: {{ at: 2, voice: snare, velocity: 127 }}\n      kick_1: {{ at: 0, voice: kick, velocity: 127 }}\n  bass_drop:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit_b: {{ at: 1.5, duration: 0.25, pitch: C2, velocity: 118 }}\n      hit_a: {{ at: 0, duration: 0.5, pitch: F1, velocity: 127 }}\n{tracks}"
+        ),
+    )
+    .unwrap();
+    let midi_a = dir.path().join("a.mid");
+    let midi_b = dir.path().join("b.mid");
+    for (scene, output) in [(&a, &midi_a), (&b, &midi_b)] {
+        bin()
+            .arg("midi")
+            .arg(scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&midi_a).unwrap();
+    assert_eq!(bytes, fs::read(&midi_b).unwrap());
+
+    let smf = midly::Smf::parse(&bytes).expect("clip MIDI parses");
+    let mut note_ons = Vec::new();
+    for track in &smf.tracks {
+        let mut tick = 0u32;
+        for event in track {
+            tick += event.delta.as_int();
+            if let midly::TrackEventKind::Midi {
+                channel,
+                message: midly::MidiMessage::NoteOn { key, vel },
+            } = event.kind
+                && vel.as_int() > 0
+            {
+                note_ons.push((tick, channel.as_int(), key.as_int(), vel.as_int()));
+            }
+        }
+    }
+    assert_eq!(
+        note_ons,
+        vec![
+            (0, 0, 29, 127),
+            (720, 0, 36, 118),
+            (1920, 0, 29, 127),
+            (2640, 0, 36, 118),
+            (0, 9, 36, 127),
+            (960, 9, 38, 127),
+            (1920, 9, 36, 127),
+            (2880, 9, 38, 127),
+        ]
+    );
+}
+
+#[test]
+fn explicit_clip_timing_and_velocity_ignore_generative_performance_transforms() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.yaml");
+    let performed = dir.path().join("performed.yaml");
+    let body = "tempo: 140\nkey: F_minor\nbars: 1\nclips:\n  exact:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      offbeat: { at: 0.5, duration: 0.25, pitch: F1, velocity: 101 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: exact, intensity: 1 }\n";
+    fs::write(&plain, body).unwrap();
+    fs::write(
+        &performed,
+        format!(
+            "performance:\n  swing: 0.5\n  legato: true\n  humanize: {{ timing_ms: 50, velocity: 30, seed: 77 }}\n{body}"
+        ),
+    )
+    .unwrap();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    for (scene, output) in [(&plain, &a), (&performed, &b)] {
+        bin()
+            .arg("midi")
+            .arg(scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        fs::read(a).unwrap(),
+        fs::read(b).unwrap(),
+        "authored clip events must not be shifted, stretched, or randomized"
+    );
+}
+
+#[test]
+fn section_clip_override_compiles_as_the_equivalent_standalone_scene() {
+    let dir = tempfile::tempdir().unwrap();
+    let clips = "clips:\n  build_bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: F1, velocity: 100 }\n  drop_bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0.75, duration: 0.5, pitch: C2, velocity: 127 }\n";
+    let suite = dir.path().join("suite.yaml");
+    fs::write(
+        &suite,
+        format!(
+            "tempo: 140\nkey: F_minor\nbars: 1\n{clips}tracks:\n  - {{ id: bass, instrument: synth_bass, pattern: clip, clip: build_bass, intensity: 1 }}\nsections:\n  - {{ name: build, bars: 1 }}\n  - name: drop\n    bars: 1\n    clips: {{ bass: drop_bass }}\n"
+        ),
+    )
+    .unwrap();
+    let standalone = dir.path().join("standalone.yaml");
+    fs::write(
+        &standalone,
+        format!(
+            "tempo: 140\nkey: F_minor\nbars: 1\n{clips}tracks:\n  - {{ id: bass, instrument: synth_bass, pattern: clip, clip: drop_bass, intensity: 1 }}\n"
+        ),
+    )
+    .unwrap();
+    let selected = dir.path().join("selected.mid");
+    let expected = dir.path().join("expected.mid");
+    bin()
+        .arg("midi")
+        .arg(&suite)
+        .arg("-o")
+        .arg(&selected)
+        .args(["--section", "drop"])
+        .assert()
+        .success();
+    bin()
+        .arg("midi")
+        .arg(&standalone)
+        .arg("-o")
+        .arg(&expected)
+        .assert()
+        .success();
+    assert_eq!(fs::read(selected).unwrap(), fs::read(expected).unwrap());
+}
+
+#[test]
+fn invalid_clip_semantics_fail_with_precise_paths_and_no_midi_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "overlap",
+            "clips.bass.events.second.at",
+            "clips:\n  bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      first: { at: 0, duration: 1, pitch: F1, velocity: 100 }\n      second: { at: 0.5, duration: 1, pitch: F1, velocity: 100 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: bass }\n",
+        ),
+        (
+            "kind",
+            "tracks[0].clip",
+            "clips:\n  bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      first: { at: 0, duration: 1, pitch: F1, velocity: 100 }\ntracks:\n  - { id: drums, instrument: drums, pattern: clip, clip: bass }\n",
+        ),
+        (
+            "division",
+            "tracks[0].clip",
+            "clips:\n  bass:\n    kind: pitched\n    length_beats: 3\n    mode: loop\n    events:\n      first: { at: 0, duration: 1, pitch: F1, velocity: 100 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: bass }\n",
+        ),
+        (
+            "extreme-pitch",
+            "clips.bass.events.first.pitch",
+            "clips:\n  bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      first: { at: 0, duration: 1, pitch: C32767, velocity: 100 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: bass }\n",
+        ),
+    ];
+    for (name, field, body) in cases {
+        let scene = dir.path().join(format!("{name}.yaml"));
+        let output = dir.path().join(format!("{name}.mid"));
+        fs::write(&scene, format!("tempo: 140\nbars: 1\n{body}")).unwrap();
+        let out = bin()
+            .args(["--json", "midi"])
+            .arg(&scene)
+            .arg("-o")
+            .arg(&output)
+            .assert()
+            .code(2);
+        let error: serde_json::Value =
+            serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+        assert_eq!(error["field"], field, "error: {error}");
+        assert!(!output.exists(), "{output:?} must not be published");
+    }
+}
+
+#[test]
+fn validate_rejects_clip_expansion_beyond_the_per_track_event_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("explosive.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\ntime_signature: 12/2\nbars: 256\nclips:\n  explosive:\n    kind: pitched\n    length_beats: 0.0020833333333333333\n    mode: loop\n    events:\n      low: { at: 0, duration: 0.0020833333333333333, pitch: C-1, velocity: 100 }\n      high: { at: 0, duration: 0.0020833333333333333, pitch: C#-1, velocity: 100 }\ntracks:\n  - { id: lead, instrument: square_lead, pattern: clip, clip: explosive }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "tracks[0].clip");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("expanded event limit of 65536"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn validate_applies_clip_expansion_budget_to_suite_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("suite-explosive.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\ntime_signature: 12/2\nbars: 1\nclips:\n  explosive:\n    kind: pitched\n    length_beats: 0.0020833333333333333\n    mode: loop\n    events:\n      low: { at: 0, duration: 0.0020833333333333333, pitch: C-1, velocity: 100 }\n      high: { at: 0, duration: 0.0020833333333333333, pitch: C#-1, velocity: 100 }\ntracks:\n  - { id: lead, instrument: square_lead, pattern: clip, clip: explosive }\nsections:\n  - { name: long, bars: 256 }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "sections[0].clips.lead");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("expanded event limit of 65536"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn clip_step_automation_emits_canonical_deterministic_midi_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("automated.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\nkey: F_minor\nbars: 1\nclips:\n  talking:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: F1, velocity: 127 }\n    automation:\n      expression:\n        target: cc11\n        points:\n          start: { at: 0, value: 64 }\n          peak: { at: 1, value: 127 }\n          seal: { at: 3.5, value: 64 }\n      mouth:\n        target: cc1\n        points:\n          start: { at: 0, value: 8 }\n          open: { at: 0.5, value: 100 }\n          seal: { at: 3.5, value: 8 }\n      brightness:\n        target: cc74\n        points:\n          start: { at: 0, value: 24 }\n          bright: { at: 0.5, value: 118 }\n          seal: { at: 3.5, value: 24 }\n      bend:\n        target: pitch_bend\n        points:\n          start: { at: 0, value: 0 }\n          up: { at: 0.5, value: 4096 }\n          seal: { at: 3.5, value: 0 }\ntracks:\n  - id: bass\n    instrument: synth_bass\n    pattern: clip\n    clip: talking\n    intensity: 1\n    pan: 0.5\n    reverb: 0.25\n",
+    )
+    .unwrap();
+    let first = dir.path().join("first.mid");
+    let second = dir.path().join("second.mid");
+    for output in [&first, &second] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&first).unwrap();
+    assert_eq!(bytes, fs::read(second).unwrap());
+
+    let smf = midly::Smf::parse(&bytes).expect("automation MIDI parses");
+    let track = &smf.tracks[1];
+    let mut tick = 0u32;
+    let mut observed = Vec::new();
+    for event in track {
+        tick += event.delta.as_int();
+        let label = match event.kind {
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::ProgramChange { .. },
+                ..
+            } => "program".to_owned(),
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::Controller { controller, value },
+                ..
+            } => format!("cc{}={}", controller.as_int(), value.as_int()),
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::PitchBend { bend },
+                ..
+            } => format!("bend={}", bend.0.as_int()),
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::NoteOn { key, vel },
+                ..
+            } if vel.as_int() > 0 => format!("on{}={}", key.as_int(), vel.as_int()),
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::NoteOff { key, .. },
+                ..
+            } => format!("off{}", key.as_int()),
+            _ => continue,
+        };
+        observed.push((tick, label));
+    }
+    assert_eq!(
+        &observed[..8],
+        &[
+            (0, "program".to_owned()),
+            (0, "cc10=64".to_owned()),
+            (0, "cc91=32".to_owned()),
+            (0, "cc1=8".to_owned()),
+            (0, "cc11=64".to_owned()),
+            (0, "cc74=24".to_owned()),
+            (0, "bend=8192".to_owned()),
+            (0, "on29=127".to_owned()),
+        ]
+    );
+    assert!(observed.contains(&(240, "cc1=100".to_owned())));
+    assert!(observed.contains(&(240, "cc74=118".to_owned())));
+    assert!(observed.contains(&(240, "bend=12288".to_owned())));
+    assert!(observed.contains(&(480, "off29".to_owned())));
+    assert!(observed.contains(&(480, "cc11=127".to_owned())));
+}
+
+#[test]
+fn invalid_clip_automation_fails_before_writing_midi() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "duplicate-target",
+            "clips.bass.automation.second.target",
+            "      first:\n        target: cc1\n        points:\n          start: { at: 0, value: 0 }\n      second:\n        target: cc1\n        points:\n          start: { at: 0, value: 0 }\n",
+        ),
+        (
+            "missing-start",
+            "clips.bass.automation.mouth.points.late.at",
+            "      mouth:\n        target: cc1\n        points:\n          late: { at: 0.5, value: 10 }\n",
+        ),
+        (
+            "bad-value",
+            "clips.bass.automation.mouth.points.start.value",
+            "      mouth:\n        target: cc1\n        points:\n          start: { at: 0, value: 128 }\n",
+        ),
+        (
+            "unsealed-loop",
+            "clips.bass.automation.mouth.points.end.value",
+            "      mouth:\n        target: cc1\n        points:\n          start: { at: 0, value: 0 }\n          end: { at: 3.5, value: 127 }\n",
+        ),
+    ];
+    for (name, field, automation) in cases {
+        let scene = dir.path().join(format!("{name}.yaml"));
+        let output = dir.path().join(format!("{name}.mid"));
+        fs::write(
+            &scene,
+            format!(
+                "tempo: 140\nbars: 1\nclips:\n  bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: {{ at: 0, duration: 1, pitch: F1, velocity: 100 }}\n    automation:\n{automation}tracks:\n  - {{ id: bass, instrument: synth_bass, pattern: clip, clip: bass }}\n"
+            ),
+        )
+        .unwrap();
+        let out = bin()
+            .args(["--json", "midi"])
+            .arg(&scene)
+            .arg("-o")
+            .arg(&output)
+            .assert()
+            .code(2);
+        let error: serde_json::Value =
+            serde_json::from_slice(&out.get_output().stderr).expect("automation error is JSON");
+        assert_eq!(error["field"], field, "error: {error}");
+        assert!(!output.exists());
+    }
+}
+
+#[test]
 fn all_shipped_examples_validate() {
     // Guards examples/scenes/ against schema drift: every scene we ship
     // must always pass `validate`.
@@ -534,6 +915,97 @@ fn orchestration_check_contextualizes_missing_leaf_profile() {
     assert_eq!(error["field"], "palettes.default.profile");
     assert!(error["message"].as_str().unwrap().contains("missing.yaml"));
     assert_dir_contains_exactly(dir.path(), &["orchestration.yaml"]);
+}
+
+#[test]
+fn sfizz_orchestration_requires_declared_clip_automation_controls() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("bass.sfz"), "<region> sample=bass.wav\n").unwrap();
+    let scene = dir.path().join("automated.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\nbars: 1\nclips:\n  talking:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: F1, velocity: 127 }\n    automation:\n      mouth:\n        target: cc1\n        points:\n          start: { at: 0, value: 0 }\n          open: { at: 0.5, value: 127 }\n          seal: { at: 3.5, value: 0 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: talking }\n",
+    )
+    .unwrap();
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: no-controls\ninstruments:\n  synth_bass:\n    sustain: bass.sfz\n",
+    )
+    .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+
+    let out = bin()
+        .args(["--json", "inspect-instruments"])
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "clips.talking.automation.mouth.target");
+    assert!(error["message"].as_str().unwrap().contains("cc1"));
+
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(dir.path().join("out.wav"))
+        .assert()
+        .code(2);
+    assert_dir_contains_exactly(
+        dir.path(),
+        &[
+            "automated.yaml",
+            "bass.sfz",
+            "orchestration.yaml",
+            "profile.yaml",
+        ],
+    );
+
+    fs::write(
+        &profile,
+        "name: controls\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1]\n",
+    )
+    .unwrap();
+    bin()
+        .arg("inspect-instruments")
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .success();
+}
+
+#[test]
+fn sfizz_suite_ignores_controls_from_an_inactive_base_clip() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("bass.sfz"), "<region> sample=bass.wav\n").unwrap();
+    let scene = dir.path().join("suite.yaml");
+    fs::write(
+        &scene,
+        "tempo: 140\nbars: 1\nclips:\n  talking:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: F1, velocity: 127 }\n    automation:\n      mouth:\n        target: cc1\n        points:\n          start: { at: 0, value: 0 }\n          open: { at: 0.5, value: 127 }\n          seal: { at: 3.5, value: 0 }\n  clean:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: F1, velocity: 127 }\ntracks:\n  - { id: bass, instrument: synth_bass, pattern: clip, clip: talking }\nsections:\n  - name: replaced\n    bars: 1\n    clips: { bass: clean }\n",
+    )
+    .unwrap();
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: no-controls\ninstruments:\n  synth_bass:\n    sustain: bass.sfz\n",
+    )
+    .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+
+    bin()
+        .arg("inspect-instruments")
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .success();
 }
 
 #[test]
@@ -2764,6 +3236,49 @@ fn inspect_instruments_never_falls_back_across_palettes() {
     assert!(track["resolved"].is_null());
 }
 
+#[test]
+fn generic_clip_does_not_gain_a_melody_role_fallback_bonus() {
+    let dir = tempfile::tempdir().unwrap();
+    write_sine_sfz(dir.path());
+    let profile = dir.path().join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: lead-only\ninstruments:\n  square_lead:\n    sustain: mini.sfz\n",
+    )
+    .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+    let scene = dir.path().join("pad-clip.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\nclips:\n  exact:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      held: { at: 0, duration: 4, pitch: C4, velocity: 100 }\ntracks:\n  - { id: pad, instrument: pad, pattern: clip, clip: exact }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "inspect-instruments"])
+        .arg(&scene)
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("resolution error is JSON");
+    let report = &error["report"];
+    assert_eq!(report["summary"]["fallback"], 0);
+    assert_eq!(report["summary"]["missing"], 1);
+    assert_eq!(
+        report["tracks"][0]["best_candidate"]["instrument"],
+        "square_lead"
+    );
+    assert!(
+        report["tracks"][0]["best_candidate"]["score"]
+            .as_f64()
+            .unwrap()
+            < 0.70,
+        "report: {report}"
+    );
+}
+
 /// Alias spellings are pure surface syntax: `french_horn` and `horn` scenes
 /// compile to byte-identical MIDI (determinism guarantee).
 #[test]
@@ -3184,6 +3699,91 @@ fn install_counted_sfizz(fake_bin: &Path, outputs: &[i16]) {
 }
 
 #[cfg(unix)]
+fn install_cc_responsive_sfizz(fake_bin: &Path, controller_hex: &str) {
+    fs::create_dir_all(fake_bin).unwrap();
+    write_const_wav(&fake_bin.join("low.wav"), 1000, 4410);
+    write_const_wav(&fake_bin.join("high.wav"), 2000, 4410);
+    let script = format!(
+        r#"#!/bin/sh
+dir="$(cd "$(dirname "$0")" && pwd)"
+midi=""; out=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "--midi" ] && midi="$a"
+  [ "$prev" = "--wav" ] && out="$a"
+  prev="$a"
+done
+hex="$(od -An -v -t x1 "$midi" | tr -d ' \n')"
+last="$(printf '%s\n' "$hex" | sed -E 's/.*b0{controller_hex}([0-9a-f][0-9a-f]).*/\1/')"
+if [ "$last" = "60" ]; then
+  cp "$dir/high.wav" "$out"
+else
+  cp "$dir/low.wav" "$out"
+fi
+"#
+    );
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn install_scratch_bounded_sfizz(fake_bin: &Path) {
+    fs::create_dir_all(fake_bin).unwrap();
+    write_const_wav(&fake_bin.join("low.wav"), 1000, 4410);
+    write_const_wav(&fake_bin.join("high.wav"), 2000, 4410);
+    let script = r#"#!/bin/sh
+dir="$(cd "$(dirname "$0")" && pwd)"
+midi=""; out=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "--midi" ] && midi="$a"
+  [ "$prev" = "--wav" ] && out="$a"
+  prev="$a"
+done
+retained="$(find "$(dirname "$out")" -maxdepth 1 -type f -name '*.wav' | wc -l | tr -d ' ')"
+if [ "$retained" -ge 2 ]; then
+  printf 'retained %s completed probe WAVs\n' "$retained" >&2
+  exit 42
+fi
+hex="$(od -An -v -t x1 "$midi" | tr -d ' \n')"
+last="$(printf '%s\n' "$hex" | sed -E 's/.*b001([0-9a-f][0-9a-f]).*/\1/')"
+if [ "$last" = "60" ]; then
+  cp "$dir/high.wav" "$out"
+else
+  cp "$dir/low.wav" "$out"
+fi
+"#;
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn install_any_control_responsive_sfizz(fake_bin: &Path) {
+    fs::create_dir_all(fake_bin).unwrap();
+    write_const_wav(&fake_bin.join("low.wav"), 1000, 4410);
+    write_const_wav(&fake_bin.join("high.wav"), 2000, 4410);
+    let script = r#"#!/bin/sh
+dir="$(cd "$(dirname "$0")" && pwd)"
+midi=""; out=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "--midi" ] && midi="$a"
+  [ "$prev" = "--wav" ] && out="$a"
+  prev="$a"
+done
+hex="$(od -An -v -t x1 "$midi" | tr -d ' \n')"
+last="$(printf '%s\n' "$hex" | sed -E 's/.*(b001|b00b|b04a|e000)([0-9a-f][0-9a-f]).*/\2/')"
+if [ "$last" = "60" ]; then
+  cp "$dir/high.wav" "$out"
+else
+  cp "$dir/low.wav" "$out"
+fi
+"#;
+    let tool = fake_bin.join("sfizz_render");
+    fs::write(&tool, script).unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
 #[test]
 fn profile_check_probes_shared_melodic_and_percussion_patch_separately() {
     let dir = tempfile::tempdir().unwrap();
@@ -3243,6 +3843,298 @@ fn profile_check_reports_render_sha256_golden_hash() {
     assert_eq!(hash.len(), 64, "render_sha256 must be hex SHA-256");
     assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     assert!(v["patches"][0].get("flake_diagnostics").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_legacy_mapping_keeps_the_original_probe_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_counted_sfizz(&fake_bin, &[1000]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: legacy\ninstruments:\n  synth_bass:\n    sustain: bass.sfz\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["patches"][0]["status"], "ok");
+    assert!(report["patches"][0].get("control_probes").is_none());
+    assert_eq!(fs::read_to_string(fake_bin.join("count")).unwrap(), "2");
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_rejects_declared_control_that_patch_ignores_without_residue() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_counted_sfizz(&fake_bin, &[1000]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: ignores-controls\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let patch = &error["report"]["patches"][0];
+    assert_eq!(patch["status"], "control_unresponsive");
+    let control = &patch["control_probes"][0];
+    assert_eq!(control["target"], "cc1");
+    assert_eq!(
+        control["mappings"],
+        serde_json::json!(["synth_bass.sustain"])
+    );
+    assert_eq!(control["status"], "unresponsive");
+    assert_eq!(control["difference_rms_ratio"], 0.0);
+    assert_eq!(control["deterministic"], true);
+    assert_eq!(control["render_sha256"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        control["error"],
+        "declared control `cc1` produced no measurable PCM change"
+    );
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_certifies_deterministic_control_response() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_cc_responsive_sfizz(&fake_bin, "01");
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: responsive-controls\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let patch = &report["patches"][0];
+    let control = &patch["control_probes"][0];
+    assert_eq!(patch["status"], "ok");
+    assert_eq!(control["target"], "cc1");
+    assert_eq!(control["status"], "ok");
+    assert!(control["difference_rms_ratio"].as_f64().unwrap() > 0.1);
+    assert_eq!(control["deterministic"], true);
+    assert_ne!(patch["render_sha256"], control["render_sha256"][0]);
+    assert_ne!(patch["render_sha256"], control["render_sha256"][1]);
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_removes_each_render_pair_before_the_next_probe() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_scratch_bounded_sfizz(&fake_bin);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: bounded-scratch\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    bin()
+        .args(["profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .success();
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_probes_every_portable_automation_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_any_control_responsive_sfizz(&fake_bin);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: all-controls\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1, cc11, cc74, pitch_bend]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let controls = report["patches"][0]["control_probes"].as_array().unwrap();
+    assert_eq!(
+        controls
+            .iter()
+            .map(|control| control["target"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["cc1", "cc11", "cc74", "pitch_bend"]
+    );
+    assert!(controls.iter().all(|control| control["status"] == "ok"));
+    assert!(controls.iter().all(|control| {
+        control["difference_rms_ratio"]
+            .as_f64()
+            .is_some_and(|ratio| ratio > 0.1)
+    }));
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_unions_control_requirements_for_a_shared_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    install_cc_responsive_sfizz(&fake_bin, "4a");
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("shared.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: shared-controls\ninstruments:\n  synth_bass:\n    sustain:\n      path: shared.sfz\n      controls: [cc1]\n    staccato:\n      path: shared.sfz\n      controls: [cc74]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let patch = &error["report"]["patches"][0];
+    assert_eq!(patch["status"], "control_unresponsive");
+    let controls = patch["control_probes"].as_array().unwrap();
+    assert_eq!(controls.len(), 2);
+    assert_eq!(controls[0]["target"], "cc1");
+    assert_eq!(
+        controls[0]["mappings"],
+        serde_json::json!(["synth_bass.sustain"])
+    );
+    assert_eq!(controls[0]["status"], "unresponsive");
+    assert_eq!(controls[0]["difference_rms_ratio"], 0.0);
+    assert_eq!(controls[0]["deterministic"], true);
+    assert_eq!(controls[0]["render_sha256"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        controls[0]["error"],
+        "declared control `cc1` produced no measurable PCM change"
+    );
+    assert_eq!(controls[1]["target"], "cc74");
+    assert_eq!(
+        controls[1]["mappings"],
+        serde_json::json!(["synth_bass.staccato"])
+    );
+    assert_eq!(controls[1]["status"], "ok");
+    assert_eq!(controls[1]["difference_rms_ratio"], 0.5);
+    assert_eq!(controls[1]["deterministic"], true);
+    assert_eq!(controls[1]["render_sha256"].as_array().unwrap().len(), 2);
+    assert!(controls[1].get("error").is_none());
+    assert_dir_contains_exactly(&scratch, &[]);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_check_rejects_nondeterministic_control_probe_with_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_bin = dir.path().join("fakebin");
+    // Base probe passes. Control variant A differs on both its first attempt
+    // and isolated recheck, so variant B is never needed.
+    install_counted_sfizz(&fake_bin, &[1000, 1000, 1000, 2000, 1000, 2000]);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("bass.sfz"), "<region> sample=unused.wav\n").unwrap();
+    let profile = work.join("profile.yaml");
+    fs::write(
+        &profile,
+        "name: unstable-control\ninstruments:\n  synth_bass:\n    sustain:\n      path: bass.sfz\n      controls: [cc1]\n",
+    )
+    .unwrap();
+    let scratch = dir.path().join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let out = bin()
+        .args(["--json", "profile", "check"])
+        .arg(&profile)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("SCOREKIT_TMPDIR", &scratch)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let patch = &error["report"]["patches"][0];
+    let control = &patch["control_probes"][0];
+    assert_eq!(patch["status"], "control_nondeterministic");
+    assert_eq!(patch["deterministic"], false);
+    assert_eq!(control["status"], "nondeterministic");
+    assert_eq!(control["deterministic"], false);
+    assert_eq!(
+        control["error"],
+        "declared control `cc1` variant a failed certification: control-cc1-a probe renders differ (RMS ratio 1.00000000); isolated recheck failed too"
+    );
+    assert_eq!(
+        patch["flake_diagnostics"][0]["attempt"],
+        "control:cc1:a:first"
+    );
+    assert_eq!(
+        patch["flake_diagnostics"][1]["attempt"],
+        "control:cc1:a:recheck"
+    );
+    assert_eq!(fs::read_to_string(fake_bin.join("count")).unwrap(), "6");
+    assert_dir_contains_exactly(&scratch, &[]);
 }
 
 #[cfg(unix)]
@@ -3528,6 +4420,66 @@ fn diff_reports_semantic_changes_and_ignores_formatting() {
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
     assert!(arr.iter().any(|c| c["path"] == "tempo" && c["op"] == "~"));
+}
+
+#[test]
+fn diff_matches_clip_events_by_stable_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old.yaml");
+    let reordered = dir.path().join("reordered.yaml");
+    let changed = dir.path().join("changed.yaml");
+    let scene = |events: &str| {
+        format!(
+            "tempo: 140\nbars: 1\nclips:\n  bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n{events}tracks:\n  - {{ id: bass, instrument: synth_bass, pattern: clip, clip: bass, intensity: 1 }}\n"
+        )
+    };
+    fs::write(
+        &old,
+        scene(
+            "      hit_a: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }\n      hit_b: { at: 1, duration: 0.5, pitch: C2, velocity: 110 }\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &reordered,
+        scene(
+            "      hit_b: { at: 1, duration: 0.5, pitch: C2, velocity: 110 }\n      hit_a: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &changed,
+        scene(
+            "      hit_b: { at: 1, duration: 0.5, pitch: C2, velocity: 118 }\n      hit_a: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }\n",
+        ),
+    )
+    .unwrap();
+
+    let out = bin()
+        .arg("diff")
+        .arg(&old)
+        .arg(&reordered)
+        .assert()
+        .success();
+    assert_eq!(String::from_utf8_lossy(&out.get_output().stdout).trim(), "");
+
+    let out = bin()
+        .args(["--json", "diff"])
+        .arg(&old)
+        .arg(&changed)
+        .assert()
+        .success();
+    let changes: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("diff is JSON");
+    assert_eq!(
+        changes,
+        serde_json::json!([{
+            "op": "~",
+            "path": "clips.bass.events.hit_b.velocity",
+            "old": "110",
+            "new": "118"
+        }])
+    );
 }
 
 #[test]
@@ -3988,6 +4940,39 @@ fn lint_shipped_scene_conforms_to_shipped_grammar() {
         .stdout(predicates::str::contains("ok: conforms to `grief`"));
 }
 
+#[test]
+fn heavy_dubstep_reference_scene_is_valid_linted_and_deterministic() {
+    let scene = repo("examples/scenes/heavy_dubstep.yaml");
+    let grammar = repo("examples/grammars/heavy_dubstep.yaml");
+    bin().arg("validate").arg(&scene).assert().success();
+    bin()
+        .arg("lint")
+        .arg(&scene)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("ok: conforms to `heavy_dubstep`"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.mid");
+    let b = dir.path().join("b.mid");
+    for output in [&a, &b] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        fs::read(a).unwrap(),
+        fs::read(b).unwrap(),
+        "the shipped heavy-Dubstep protocol example must remain byte-deterministic"
+    );
+}
+
 /// Violations carry the measured value so the agent can fix the scene:
 /// rule name, subject, actual vs wanted — in text and in `--json`.
 #[test]
@@ -4060,6 +5045,93 @@ fn lint_measures_rest_ratio_from_compiled_ir() {
     );
 }
 
+#[test]
+fn lint_measures_section_clip_percussion_and_automation_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene_yaml = |drum_events: &str, open_value: i16| {
+        format!(
+            "tempo: 140\nkey: F_minor\nbars: 1\nclips:\n  build_bass:\n    kind: pitched\n    length_beats: 4\n    mode: once\n    events:\n      hit: {{ at: 0, duration: 1, pitch: F1, velocity: 90 }}\n  drop_bass:\n    kind: pitched\n    length_beats: 4\n    mode: loop\n    events:\n      hit: {{ at: 0, duration: 0.5, pitch: F1, velocity: 127 }}\n    automation:\n      mouth:\n        target: cc1\n        points:\n          start: {{ at: 0, value: 8 }}\n          open: {{ at: 0.5, value: {open_value} }}\n          seal: {{ at: 3.5, value: 8 }}\n  drop_drums:\n    kind: percussion\n    length_beats: 4\n    mode: loop\n    events:\n{drum_events}tracks:\n  - {{ id: bass, instrument: synth_bass, pattern: clip, clip: build_bass, intensity: 1 }}\n  - {{ id: drums, instrument: drums, pattern: clip, clip: drop_drums, intensity: 1 }}\nsections:\n  - {{ name: build, bars: 1, mute: [drums] }}\n  - name: drop\n    bars: 2\n    clips: {{ bass: drop_bass }}\n"
+        )
+    };
+    let valid_drums = "      kick_1: { at: 0, voice: kick, velocity: 127 }\n      kick_2: { at: 1.5, voice: kick, velocity: 115 }\n      snare: { at: 2, voice: snare, velocity: 127 }\n      hat_1: { at: 0, voice: closed_hat, velocity: 90 }\n      hat_2: { at: 0.5, voice: closed_hat, velocity: 82 }\n      hat_3: { at: 1, voice: closed_hat, velocity: 88 }\n      hat_4: { at: 1.5, voice: closed_hat, velocity: 80 }\n      hat_5: { at: 2, voice: closed_hat, velocity: 94 }\n      hat_6: { at: 2.5, voice: closed_hat, velocity: 84 }\n      hat_7: { at: 3, voice: closed_hat, velocity: 90 }\n";
+    let valid = dir.path().join("valid.yaml");
+    fs::write(&valid, scene_yaml(valid_drums, 100)).unwrap();
+    let grammar = dir.path().join("heavy.yaml");
+    fs::write(
+        &grammar,
+        "name: heavy\nrules:\n  tempo_min: 140\n  tempo_max: 140\nsection_rules:\n  drop:\n    percussion_events_per_bar_min: 10\n    percussion_onsets:\n      - { voice: snare, positions: [2], coverage_min: 1 }\n    automation_activity:\n      - { track: bass, target: cc1, points_per_bar_min: 3, value_span_min: 64 }\n",
+    )
+    .unwrap();
+    bin()
+        .arg("lint")
+        .arg(&valid)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("ok: conforms to `heavy`"));
+
+    let invalid = dir.path().join("invalid.yaml");
+    let sparse_drums = "      kick: { at: 0, voice: kick, velocity: 127 }\n      snare: { at: 1.5, voice: snare, velocity: 127 }\n";
+    let invalid_yaml =
+        scene_yaml(sparse_drums, 30).replace("          open: { at: 0.5, value: 30 }\n", "");
+    fs::write(&invalid, invalid_yaml).unwrap();
+    let out = bin()
+        .args(["--json", "lint"])
+        .arg(&invalid)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("lint error is JSON");
+    let rules: Vec<&str> = error["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|violation| violation["rule"].as_str())
+        .collect();
+    assert!(rules.contains(&"percussion_events_per_bar_min"));
+    assert!(rules.contains(&"percussion_onsets"));
+    assert!(rules.contains(&"automation_points_per_bar_min"));
+    assert!(rules.contains(&"automation_value_span_min"));
+}
+
+#[test]
+fn lint_gm_drum_onsets_do_not_match_overlapping_tabla_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("tabla.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 3\ntracks:\n  - { id: tabla, instrument: tabla, pattern: tabla }\n",
+    )
+    .unwrap();
+    let grammar = dir.path().join("gm-drums.yaml");
+    fs::write(
+        &grammar,
+        "name: gm-drums\nrules:\n  percussion_onsets:\n    - { voice: kick, positions: [0], coverage_min: 1 }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "lint"])
+        .arg(&scene)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("lint error is JSON");
+    assert!(
+        error["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| violation["rule"] == "percussion_onsets"),
+        "error: {error}"
+    );
+}
+
 /// A grammar that asserts nothing is a config bug, not a lint pass.
 #[test]
 fn lint_rejects_grammar_without_rules() {
@@ -4077,6 +5149,36 @@ fn lint_rejects_grammar_without_rules() {
     assert!(stderr.contains("at least one rule"), "stderr: {stderr}");
 }
 
+#[test]
+fn lint_rejects_more_than_32_required_percussion_onsets() {
+    let dir = tempfile::tempdir().unwrap();
+    let grammar = dir.path().join("too-many-onsets.yaml");
+    let positions = (0..33)
+        .map(|index| format!("{}", f64::from(index) / 8.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(
+        &grammar,
+        format!(
+            "name: too-many-onsets\nrules:\n  percussion_onsets:\n    - {{ voice: kick, positions: [{positions}], coverage_min: 0 }}\n"
+        ),
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "lint"])
+        .arg(forest())
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "rules.percussion_onsets[0].positions");
+    assert!(error["message"].as_str().unwrap().contains("limit 32"));
+}
+
 /// `schema --grammar` documents the constitution format for agents.
 #[test]
 fn schema_grammar_flag_emits_grammar_schema() {
@@ -4092,6 +5194,13 @@ fn schema_profile_flag_emits_renderer_profile_schema() {
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
     assert_eq!(v["title"], "Profile");
     assert!(v["properties"]["instruments"].is_object());
+    let schema = serde_json::to_string(&v).unwrap();
+    assert!(
+        schema.contains("\"controls\"")
+            && schema.contains("\"cc1\"")
+            && schema.contains("\"pitch_bend\""),
+        "renderer-profile schema must publish automation capability mappings"
+    );
 }
 
 // ---- export: sample-exact window ----

@@ -111,6 +111,12 @@ tune with `--fallback-mode strict|conservative|flexible` or
 `--resolver <config>`. Substitutions print `WARN instrument fallback:` lines
 and land in `meta.json` as `instrument_resolution`, alongside each track's
 `id`, declared/effective palette, and resolved renderer profile/SFZ path.
+An SFZ patch used by clip automation must use the structured leaf mapping
+`{path: ..., controls: [cc1, cc11, cc74, pitch_bend]}` and declare every target
+the active clips use; missing capability fails before build staging. Run
+`scorekit profile check` before wiring the leaf profile: every declaration must
+produce two non-silent, deterministic control-probe renders with measurably
+different decoded PCM, or certification fails.
 
 Exit codes: `0` ok · `1` io · `2` invalid input / lint violations ·
 `3` missing dependency · `4` external tool failed. Global `--json` flag
@@ -145,12 +151,28 @@ motifs:                        # named melodies, referenced by melody tracks
     - { degree: 8, beats: 1 }  #   8 = tonic one octave up, negatives go down
     - { degree: 1, beats: 3 }  # beats: 0.125..=16 (split longer rests!)
 
+clips:                         # exact, stable-ID events for authored rhythm
+  talking_bass:
+    kind: pitched              # pitched | percussion
+    length_beats: 4
+    mode: loop                 # once | loop
+    events:
+      bark_01: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }
+    automation:                # step lanes: cc1 | cc11 | cc74 | pitch_bend
+      mouth:
+        target: cc1
+        points:
+          shut: { at: 0, value: 0 }
+          open: { at: 0.25, value: 127 }
+          seal: { at: 3.75, value: 0 }
+
 tracks:
   - { id: lead, instrument: violin, pattern: melody, motif: lament, intensity: 0.65 }
   - { id: motion, instrument: harp,   pattern: arpeggio, intensity: 0.3 }
   - { id: harmony, instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
   - { id: foundation, instrument: cello,  pattern: bass, intensity: 0.35 }
   - { id: pulse, instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
+  # - { id: talker, instrument: synth_bass, pattern: clip, clip: talking_bass }
   # ^ example wiring only — do NOT default to this string-quartet palette.
   #   Pick a palette deliberately from palettes.md (chiptune, jazz-noir,
   #   music-box, synth-ambient, east-asian, …) before writing tracks.
@@ -169,7 +191,12 @@ Every track needs a stable, unique `id` (`[a-z][a-z0-9_-]{0,63}`) — used by
 
 Patterns: `melody` (plays its `motif`) · `sustain` (whole-bar chords) ·
 `arpeggio` (broken chords) · `bass` (roots) · `drums` (groove, `drums`
-instrument only) · `tabla` (fixed 16-beat theka, `tabla` instrument only).
+instrument only) · `tabla` (fixed 16-beat theka, `tabla` instrument only) ·
+`clip` (exact pitched/percussion events and optional step automation).
+Clip/event/lane/point maps use stable IDs, so key reordering is MIDI- and
+diff-inert. Beat positions quantize to PPQ 480; loop clips must divide every
+active scene/section and automation must return to its initial value. Clip
+timing ignores swing/legato/humanize; intensity/dynamics still scale velocity.
 The vocabulary contains the 60-instrument core plus 11 exact-source world
 identities (`erhu`, `pipa`, `guzheng`, `dizi`, `shakuhachi`, `shamisen`,
 `sitar`, `tabla`, `oud`, `ney`, `duduk`). Only shakuhachi, sitar, and shamisen
@@ -272,6 +299,29 @@ Shipped reference pair: `examples/grammars/grief.yaml` +
 `examples/scenes/dunes.yaml`. When a user articulates a style ("in this
 project, sadness sounds like…"), capture it as a grammar file and lint every
 new scene against it — the aesthetic then survives model changes.
+
+For rhythm-first styles, grammar rules can also measure
+`percussion_events_per_bar_min`, exact `percussion_onsets`, and
+`automation_activity` (point density/value span, optionally by track), with
+additional `section_rules` keyed by suite section. Shipped heavy-Dubstep pair:
+`examples/scenes/heavy_dubstep.yaml` +
+`examples/grammars/heavy_dubstep.yaml`.
+
+When the companion ScoreData corpus is available, use its production identity
+instead of a generic synth profile. It routes growl, sub, metal, and drums
+through separate leaf profiles and binds the scene's honest industrial texture
+roles, including the visibly re-orchestrated `mechanical_riser`:
+
+```bash
+SCOREDATA_ROOT=/path/to/ScoreData
+scorekit orchestration check "$SCOREDATA_ROOT/profiles/orchestrations/heavy-dubstep.yaml"
+scorekit texture check "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml"
+scorekit build examples/scenes/heavy_dubstep.yaml --renderer sfizz \
+  --fallback-mode strict \
+  --orchestration "$SCOREDATA_ROOT/profiles/orchestrations/heavy-dubstep.yaml" \
+  --texture-profile "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml" \
+  --tail 0 --stems -o heavy-dubstep.wav
+```
 
 ## Arrangement audit (self-check + standalone)
 

@@ -3,7 +3,8 @@
 //! no hash maps, no randomness, no time or environment reads.
 
 use crate::schema::{
-    Key, Pattern, Performance, Scene, TimeSig, parse_key, parse_numeral, parse_time_signature,
+    AutomationTarget, Clip, ClipKind, ClipMode, Key, Pattern, Performance, Scene, TimeSig,
+    parse_absolute_pitch, parse_key, parse_numeral, parse_time_signature, quarter_beats_to_ticks,
 };
 
 pub const PPQ: u32 = 480;
@@ -35,6 +36,13 @@ pub struct BendEvent {
     pub value: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ControlEvent {
+    pub tick: u32,
+    pub controller: u8,
+    pub value: u8,
+}
+
 #[derive(Debug)]
 pub struct TrackIr {
     pub channel: u8,
@@ -45,6 +53,8 @@ pub struct TrackIr {
     /// CC91 value at track start; `None` emits no controller.
     pub reverb: Option<u8>,
     pub notes: Vec<NoteEvent>,
+    /// Authored step automation for MIDI CC1/CC11/CC74.
+    pub controls: Vec<ControlEvent>,
     /// Tail-portamento pitch bends (`glide`), tick-sorted by construction.
     pub bends: Vec<BendEvent>,
 }
@@ -155,6 +165,99 @@ fn melody_notes(
     notes
 }
 
+fn clip_notes(clip: &Clip, total_ticks: u32, intensity: f32) -> Vec<NoteEvent> {
+    let mut notes = Vec::new();
+    let clip_ticks = quarter_beats_to_ticks(clip.length_beats).expect("clip is validated");
+    let velocity_factor = f32::from(base_velocity(intensity)) / 100.0;
+    let mut offset = 0u32;
+    loop {
+        for event in clip.events.values() {
+            let at = quarter_beats_to_ticks(event.at).expect("clip event is validated");
+            let tick = offset.saturating_add(at);
+            if tick >= total_ticks {
+                continue;
+            }
+            let duration = event.duration.unwrap_or(0.125);
+            let dur = quarter_beats_to_ticks(duration).expect("clip event is validated");
+            let end = tick.saturating_add(dur).min(total_ticks);
+            if end <= tick {
+                continue;
+            }
+            let key = match clip.kind {
+                ClipKind::Pitched => parse_absolute_pitch(
+                    event
+                        .pitch
+                        .as_deref()
+                        .expect("pitched clip event is validated"),
+                )
+                .expect("pitched clip event is validated"),
+                ClipKind::Percussion => event
+                    .voice
+                    .expect("percussion clip event is validated")
+                    .midi_key(),
+            };
+            notes.push(NoteEvent {
+                tick,
+                dur: end - tick,
+                key,
+                vel: (f32::from(event.velocity) * velocity_factor)
+                    .round()
+                    .clamp(1.0, 127.0) as u8,
+            });
+        }
+        if clip.mode == ClipMode::Once {
+            break;
+        }
+        offset = offset.saturating_add(clip_ticks);
+        if offset >= total_ticks {
+            break;
+        }
+    }
+    notes.sort_unstable_by_key(|note| (note.tick, note.key, note.dur, note.vel));
+    notes
+}
+
+fn clip_automation(clip: &Clip, total_ticks: u32) -> (Vec<ControlEvent>, Vec<BendEvent>) {
+    let mut controls = Vec::new();
+    let mut bends = Vec::new();
+    let clip_ticks = quarter_beats_to_ticks(clip.length_beats).expect("clip is validated");
+    let mut offset = 0u32;
+    loop {
+        for lane in clip.automation.values() {
+            for point in lane.points.values() {
+                let at = quarter_beats_to_ticks(point.at).expect("automation point is validated");
+                let tick = offset.saturating_add(at);
+                if tick >= total_ticks {
+                    continue;
+                }
+                match lane.target {
+                    AutomationTarget::PitchBend => bends.push(BendEvent {
+                        tick,
+                        value: (8192 + i32::from(point.value)) as u16,
+                    }),
+                    target => controls.push(ControlEvent {
+                        tick,
+                        controller: target
+                            .controller()
+                            .expect("non-bend automation has a controller"),
+                        value: point.value as u8,
+                    }),
+                }
+            }
+        }
+        if clip.mode == ClipMode::Once {
+            break;
+        }
+        offset = offset.saturating_add(clip_ticks);
+        if offset >= total_ticks {
+            break;
+        }
+    }
+    controls.sort_unstable_by_key(|event| (event.tick, event.controller, event.value));
+    bends.sort_unstable_by_key(|event| (event.tick, event.value));
+    (controls, bends)
+}
+
 pub fn compose(scene: &Scene) -> ScoreIr {
     let key = parse_key(&scene.key).expect("scene is validated");
     let ts = parse_time_signature(&scene.time_signature).expect("scene is validated");
@@ -177,14 +280,25 @@ pub fn compose(scene: &Scene) -> ScoreIr {
     let mut next_channel: u8 = 0;
     for track in &scene.tracks {
         let vel = base_velocity(track.intensity);
-        let mut notes = if track.pattern == Pattern::Melody {
-            // Melody flows across barlines; the per-bar loop below is skipped.
-            let name = track.motif.as_deref().expect("scene is validated");
-            melody_notes(&scene.motifs[name], key, beat_ticks, total_ticks, vel)
+        let (controls, bends) = if track.pattern == Pattern::Clip {
+            let name = track.clip.as_deref().expect("scene is validated");
+            clip_automation(&scene.clips[name], total_ticks)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
-        let harmony_bars = if track.pattern == Pattern::Melody {
+        let mut notes = match track.pattern {
+            Pattern::Melody => {
+                // Melody flows across barlines; the per-bar loop below is skipped.
+                let name = track.motif.as_deref().expect("scene is validated");
+                melody_notes(&scene.motifs[name], key, beat_ticks, total_ticks, vel)
+            }
+            Pattern::Clip => {
+                let name = track.clip.as_deref().expect("scene is validated");
+                clip_notes(&scene.clips[name], total_ticks, track.intensity)
+            }
+            _ => Vec::new(),
+        };
+        let harmony_bars = if matches!(track.pattern, Pattern::Melody | Pattern::Clip) {
             0
         } else {
             bars
@@ -277,6 +391,7 @@ pub fn compose(scene: &Scene) -> ScoreIr {
                         });
                     }
                 }
+                Pattern::Clip => unreachable!("handled above"),
                 Pattern::Tabla => {
                     for beat in 0..u32::from(ts.num) {
                         let absolute_beat = bar * u32::from(ts.num) + beat;
@@ -307,12 +422,20 @@ pub fn compose(scene: &Scene) -> ScoreIr {
             pan: track.pan.map(|p| (p * 127.0).round() as u8),
             reverb: track.reverb.map(|r| (r * 127.0).round() as u8),
             notes,
-            bends: Vec::new(),
+            controls,
+            bends,
         });
     }
 
     if let Some(p) = &scene.performance {
-        apply_performance(&mut tracks, p, scene.tempo, beat_ticks, total_ticks);
+        apply_performance(
+            &mut tracks,
+            &scene.tracks,
+            p,
+            scene.tempo,
+            beat_ticks,
+            total_ticks,
+        );
     }
 
     // Glide reads final note positions, so it runs after every performance
@@ -358,6 +481,7 @@ impl Lcg {
 /// humanize (noise on top).
 fn apply_performance(
     tracks: &mut [TrackIr],
+    specs: &[crate::schema::Track],
     p: &Performance,
     tempo: u16,
     beat_ticks: u32,
@@ -366,7 +490,10 @@ fn apply_performance(
     if p.swing > 0.0 {
         let offbeat = beat_ticks / 2;
         let shift = (p.swing * offbeat as f32).round() as u32;
-        for track in tracks.iter_mut() {
+        for (track, spec) in tracks.iter_mut().zip(specs) {
+            if spec.pattern == Pattern::Clip {
+                continue;
+            }
             for n in &mut track.notes {
                 if n.tick % beat_ticks == offbeat {
                     n.tick += shift;
@@ -388,7 +515,10 @@ fn apply_performance(
         }
     }
     if p.legato {
-        for track in tracks.iter_mut().filter(|t| t.channel != DRUM_CHANNEL) {
+        for (track, spec) in tracks.iter_mut().zip(specs) {
+            if track.channel == DRUM_CHANNEL || spec.pattern == Pattern::Clip {
+                continue;
+            }
             for n in &mut track.notes {
                 n.dur += n.dur / 8;
             }
@@ -397,7 +527,10 @@ fn apply_performance(
     if let Some(h) = &p.humanize {
         let mut rng = Lcg(h.seed.wrapping_mul(2862933555777941757).wrapping_add(1));
         let max_ticks = u32::from(h.timing_ms) * u32::from(tempo) * PPQ / 60_000;
-        for track in tracks.iter_mut() {
+        for (track, spec) in tracks.iter_mut().zip(specs) {
+            if spec.pattern == Pattern::Clip {
+                continue;
+            }
             for n in &mut track.notes {
                 let dt = rng.jitter(max_ticks);
                 n.tick = (i64::from(n.tick) + dt).max(0) as u32;
@@ -481,6 +614,7 @@ pub fn repeat(ir: &mut ScoreIr, times: u8) {
     let base = ir.total_ticks;
     for track in &mut ir.tracks {
         let one = track.notes.clone();
+        let one_controls = track.controls.clone();
         let one_bends = track.bends.clone();
         for pass in 1..u32::from(times) {
             let offset = base * pass;
@@ -488,6 +622,12 @@ pub fn repeat(ir: &mut ScoreIr, times: u8) {
                 tick: n.tick + offset,
                 ..*n
             }));
+            track
+                .controls
+                .extend(one_controls.iter().map(|event| ControlEvent {
+                    tick: event.tick + offset,
+                    ..*event
+                }));
             track.bends.extend(one_bends.iter().map(|b| BendEvent {
                 tick: b.tick + offset,
                 ..*b

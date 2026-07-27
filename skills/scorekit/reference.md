@@ -19,7 +19,7 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | `doctor` | check OS/architecture, FFmpeg, and all render backends | global `--json` emits the full environment report; exit 3 if FFmpeg or every renderer is unavailable |
 | `validate <scene>` | check DSL, print summary | — |
 | `schema` | JSON Schema of scene DSL | `--grammar` → grammar profile; `--profile` → leaf renderer profile; `--orchestration` → orchestration profile; `--texture-profile` → texture-source profile; `--resolver` → instrument-resolver config |
-| `profile check <profile>` | certify all explicit SFZ mappings with real probe renders | `--sample-rate` 8000..=384000 (44100); a shared melodic/percussion patch must pass both probes; global `--json` emits the full report |
+| `profile check <profile>` | certify all explicit SFZ mappings and declared automation responses with real probe renders | `--sample-rate` 8000..=384000 (44100); a shared melodic/percussion patch must pass both probes; each declared CC1/CC11/CC74/pitch-bend target must produce deterministic, non-silent, measurably different PCM; global `--json` emits the full report |
 | `orchestration check <file>` | validate palette bindings and every referenced leaf renderer profile + SFZ file | global `--json` emits `{name, default_palette, palettes: [{name, profile, profile_path, mappings, patches}]}` |
 | `texture inspect <profile>` | enumerate/filter texture sources before writing `textures[].source` | `--category`, `--tag` (repeatable, AND), `--mode loop\|one_shot`, `--use-case`, `--source`; exact conjunctive matching only, never similarity ranking; exits 0 with `"status": "no_match"` when nothing satisfies the query, exit 2 on an unknown category; global `--json` emits the full report |
 | `texture check <profile>` | certify every declared source exists, decodes, and is audible | `--sample-rate` (44100); reports `sha256`/`duration_seconds`/`frames`/`peak_abs`/`rms` per source; exit 4 if undecodable, 2 for `missing`/`silent`; global `--json` emits the full report |
@@ -53,6 +53,7 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `harmony` | `[numeral, …]` | minor `i-VI-III-VII`, major `I-V-vi-IV` | one chord per bar, cycles; diatonic `i..vii` (case-insensitive, triads from scale) |
 | `performance` | object | absent | see below; absent = raw compile (bit-stable) |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies for `pattern: melody` tracks |
+| `clips` | `{stable_id: clip, …}` | `{}` | exact pitched/percussion events plus step automation; map order is semantically inert |
 | `textures` | `[texture, …]` | `[]` | field recordings/ambience/SFX; portable source names bind through `--texture-profile` |
 | `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic + ≤1 percussion: `drums` or `tabla`) |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite |
@@ -64,8 +65,9 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `id` | `[a-z][a-z0-9_-]{0,63}`, unique per scene | required | stable scene-local identity; used by `sections[].mute`, `midi --solo`, stem file names (`NN-<id>.ext`), and `meta.json`/`inspect-instruments` reports |
 | `palette` | `[a-z][a-z0-9_-]{0,63}` | orchestration's `default_palette` | logical orchestration palette (`--orchestration`, `--renderer sfizz` only); routing metadata only — never changes MIDI or affects SF2/TiMidity backends |
 | `instrument` | enum (below) | required | `drums` and `tabla` each pair exclusively with their namesake pattern |
-| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` | required | melody plays the named motif; tabla cycles its deterministic 16-beat theka |
+| `pattern` | `sustain` `arpeggio` `bass` `drums` `melody` `tabla` `clip` | required | melody plays a motif; clip plays exact authored events; tabla cycles its deterministic 16-beat theka |
 | `motif` | motif name | — | required iff `pattern: melody` |
+| `clip` | clip name | — | required iff `pattern: clip`; kind must match the track |
 | `intensity` | 0.0..=1.0 | 0.6 | velocity scale |
 | `articulation` | `sustain` `staccato` `spiccato` `pizzicato` `tremolo` `mute` | `sustain` | render-time only, no MIDI change; ignored by fluidsynth/timidity; under `--renderer sfizz --orchestration ...` selects the `.sfz` file the track's effective palette's leaf profile resolves to (falls back to the instrument's `sustain` mapping if unmapped) |
 | `pan` | 0.0..=1.0 | — | stereo position → CC10 (`0` left, `0.5` center, `1` right); omitted = renderer default |
@@ -75,6 +77,53 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 `pan`/`reverb`/`glide` compile to deterministic MIDI (CC10/CC91/pitch-bend).
 fluidsynth/timidity honor all three; sfizz honors pitch bend, but CC10/91
 only take effect if the `.sfz` maps those CCs.
+
+### Event clip
+
+Clip IDs, event IDs, lane IDs, and point IDs all match
+`[a-z][a-z0-9_-]{0,63}`. They are semantic identity, not list position:
+reordering map entries leaves MIDI and `scorekit diff` unchanged.
+
+```yaml
+clips:
+  talking_bass:
+    kind: pitched                 # pitched | percussion
+    length_beats: 4               # quarter-note beats, PPQ-480 quantization
+    mode: loop                    # once | loop
+    events:
+      bark_01: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }
+      bark_02: { at: 0.75, duration: 0.25, pitch: C2, velocity: 120 }
+    automation:                   # pitched clips only; at most 4 lanes
+      mouth:
+        target: cc1               # cc1 | cc11 | cc74 | pitch_bend
+        points:
+          shut: { at: 0, value: 0 }
+          open: { at: 0.25, value: 127 }
+          seal: { at: 3.75, value: 0 }
+tracks:
+  - { id: bass, instrument: synth_bass, pattern: clip, clip: talking_bass }
+```
+
+All positions use quarter-note beats regardless of meter and quantize with
+`round(beats * 480)`. Pitched events require scientific `pitch`
+(`C-1=0`, `C4=60`, `A4=69`) and `duration`; percussion events require a frozen
+GM `voice` (`kick`, `snare`, `clap`, closed/pedal/open hats, low/mid/high tom,
+`crash`, `ride`) and default to 0.125 beat. Velocity is 1..=127.
+
+A loop clip must divide every active scene/section timeline. Events cannot
+cross the boundary; equal-pitch pitched events cannot overlap; duplicate
+voice/tick percussion onsets are rejected. Automation values are 0..=127 for
+CCs and -8192..=8191 for bend, start at beat 0, and return to the initial value
+at the end of a loop lane. Steps emit exactly; there is no linear mode.
+Same-tick order is note-off -> automation CC -> pitch bend -> note-on.
+Expanded authored notes plus automation points are capped at 65,536 per active
+track for every scene/section timeline; `validate` rejects larger loop
+expansions before composition.
+
+Clip timing is exact and ignores swing/legato/humanize; intensity and dynamics
+still scale velocities. For sfizz, every automated target must be declared by
+the effective leaf profile mapping's `controls` set or orchestration resolution
+fails before staging.
 
 ### Texture track
 
@@ -144,9 +193,11 @@ texture tracks.
 | `bars` | 1..=256 | required | |
 | `tempo` | 20..=300 | scene tempo | per-section override |
 | `mute` | `[track id, …]` | `[]` | stable track `id`s silenced this section; muting all tracks is rejected |
+| `clips` | `{track_id: clip_id, …}` | `{}` | section-local replacement for a `pattern: clip` track |
 | `intensity` | 0.0..=2.0 | 1.0 | multiplier on every track's intensity |
 
-Sections share the scene's key, tracks, motifs, harmony and performance.
+Sections share the scene's key, tracks, clips, motifs, harmony, performance,
+and texture schedule.
 `midi --section <name>` compiles one; `build` emits one asset per section
 plus a manifest. A shared texture trigger must fit the shortest section
 timeline, so it cannot wrap silently in a shorter cue.
@@ -176,7 +227,7 @@ duplication — loop math stays sample-exact.
 - **Synth:** `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
 - **World, exact GM:** `shakuhachi` (77), `sitar` (104), `shamisen` (106)
 - **World, renderer-profile source required:** `erhu`, `pipa`, `guzheng`, `dizi`, `oud`, `ney`, `duduk`
-- **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` only; `tabla` — exact profile source on channel 10, `pattern: tabla` only
+- **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` or a percussion `clip`; `tabla` — exact profile source on channel 10, `pattern: tabla` only
 
 The 11 world identities are exact-source-only. Missing mappings never fall
 back to another world instrument or into/out of the world family; use a real
@@ -245,6 +296,10 @@ instruments:
     sustain: SViolinVib.sfz      # required — fallback for any unmapped articulation
     pizzicato: SViolinPizz.sfz
     tremolo: SViolinTrem.sfz
+  synth_bass:
+    sustain:
+      path: Dubstep/Talking-Bass.sfz
+      controls: [cc1, cc74, pitch_bend]
   drums:
     sustain: GM-StylePerc.sfz
 ```
@@ -252,7 +307,11 @@ instruments:
 Leaf profile paths in `palettes.<name>.profile` resolve relative to the
 orchestration file; each leaf profile's own `.sfz` paths then resolve
 relative to `root` (or that profile file's own directory) exactly as
-before — never relative to the scene or the orchestration file.
+before — never relative to the scene or the orchestration file. A legacy
+string mapping declares no automation controls. The structured `{path,
+controls}` form can declare `cc1`, `cc11`, `cc74`, and `pitch_bend`; an active
+clip using an undeclared target fails at
+`clips.<clip>.automation.<lane>.target` before build staging.
 
 Every `Instrument` used by a scene should have an entry with at least a
 `sustain` mapping; profile mappings are ground truth and always resolve
@@ -290,8 +349,15 @@ orchestration — this is unchanged. The check deduplicates shared patch
 paths, renders broad melodic or GM-drum probes at varied velocities twice,
 and requires both when one physical patch backs melodic and percussion
 mappings. It rejects missing and silent patches, captures sfizz warnings, and
-verifies repeatability. It writes no persistent audio; command-scoped probe
-files are removed on success and failure. Use
+verifies repeatability. Structured mappings also trigger two inverse gesture
+probes for every declared CC1/CC11/CC74/pitch-bend target; each gesture is
+double-rendered, and decoded PCM must differ by more than the determinism
+tolerance. Shared physical patches union their declared targets while the JSON
+`control_probes` evidence retains each declaring mapping. A path-only mapping
+adds no control probes. This response check does not replace a musical
+listening review. It writes no persistent audio: each completed WAV pair is
+removed before the next probe, and the command-scoped scratch directory is
+removed on success and failure. Use
 `scorekit --json profile check <profile.yaml>` to retain a machine-readable
 certification report.
 
@@ -300,7 +366,8 @@ certification report.
 External YAML, unknown fields rejected; `name` plus **at least one rule**
 required. Surface rules read the scene; deep rules measure the **compiled
 score** (after pattern expansion and performance transforms). Suites are
-checked per section.
+checked per section. `section_rules: {section_name: {…}}` adds assertions only
+for named sections and also requires those sections to exist.
 
 | Rule | Type | Measures |
 | --- | --- | --- |
@@ -312,11 +379,15 @@ checked per section.
 | `resolution` | `complete` \| `incomplete` | whether the last melody note's pitch class lands on the tonic |
 | `harmony_allowed` | `[numeral, …]` | whitelist; scenes without `harmony` are checked against the built-in default progression |
 | `require_performance` | bool | scene must have a `performance` block |
+| `percussion_events_per_bar_min` | count/bar | compiled percussion note-on density |
+| `percussion_onsets` | voice + 1..=32 positions + coverage | fraction of bars whose `drums` track contains the GM voice at each exact within-bar quarter-beat; Tabla key numbers never satisfy a GM drum rule |
+| `automation_activity` | track? + target + minima | compiled point density per bar and/or value span for CC1/CC11/CC74/pitch bend |
 
 Violation format: `{rule} @ {subject}: measured {value}, want {constraint}`
 (subject is `scene` or ``section `name` ``); exit 2; `--json` → `violations`
-array. Shipped example: `examples/grammars/grief.yaml` (satisfied by
-`examples/scenes/dunes.yaml`).
+array. Shipped pairs: `examples/grammars/grief.yaml` with
+`examples/scenes/dunes.yaml`, and `examples/grammars/heavy_dubstep.yaml` with
+`examples/scenes/heavy_dubstep.yaml`.
 
 ## meta.json
 

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+const MAX_EXPANDED_CLIP_EVENTS_PER_TRACK: u64 = 65_536;
+
 /// A scene is the unit of compilation: one loopable piece of game music, or —
 /// when `sections` is present — a suite of related cues sharing tracks,
 /// motifs, key and tempo.
@@ -39,6 +41,11 @@ pub struct Scene {
     /// Sorted map keeps compilation deterministic.
     #[serde(default)]
     pub motifs: BTreeMap<String, Vec<MotifNote>>,
+    /// Named exact event sequences referenced by tracks with pattern `clip`.
+    /// Sorted maps make clip and event declaration order semantically inert.
+    #[serde(default)]
+    #[schemars(length(max = 128))]
+    pub clips: BTreeMap<String, Clip>,
     /// Harmonic progression as diatonic roman numerals (`i`..`vii`, case
     /// conventional), one chord per bar, cycled. All harmony-following
     /// patterns (sustain/arpeggio/bass) derive from it. Default when absent:
@@ -101,6 +108,224 @@ fn default_texture_gain() -> f32 {
     1.0
 }
 
+/// An exact authored event sequence. Beat positions are quarter-note beats,
+/// independently of the scene's time-signature denominator.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Clip {
+    /// Pitched notes or General MIDI percussion voices.
+    pub kind: ClipKind,
+    /// Clip duration in quarter-note beats.
+    #[schemars(range(min = 0.0020833333333333333, max = 1024.0))]
+    pub length_beats: f64,
+    /// Play once from the track start or repeat to fill the compiled timeline.
+    pub mode: ClipMode,
+    /// Stable event identity to exact note/percussion data.
+    #[schemars(length(min = 1, max = 2048))]
+    pub events: BTreeMap<String, ClipEvent>,
+    /// Deterministic step automation keyed by stable lane identity.
+    #[serde(default)]
+    #[schemars(length(max = 4))]
+    pub automation: BTreeMap<String, AutomationLane>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipKind {
+    Pitched,
+    Percussion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipMode {
+    Once,
+    Loop,
+}
+
+/// One exact clip event. `pitch`/`duration` are required for pitched clips;
+/// `voice` is required for percussion clips and duration defaults to 1/8 beat.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClipEvent {
+    /// Onset in quarter-note beats from the clip start.
+    #[schemars(range(min = 0.0))]
+    pub at: f64,
+    /// Duration in quarter-note beats.
+    #[serde(default)]
+    #[schemars(range(min = 0.0020833333333333333, max = 1024.0))]
+    pub duration: Option<f64>,
+    /// Absolute scientific pitch (`C-1` = MIDI 0, `C4` = MIDI 60).
+    #[serde(default)]
+    pub pitch: Option<String>,
+    /// Frozen General MIDI percussion identity.
+    #[serde(default)]
+    pub voice: Option<PercussionVoice>,
+    /// Authored MIDI velocity.
+    #[schemars(range(min = 1, max = 127))]
+    pub velocity: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationLane {
+    /// Portable MIDI controller or pitch-bend target.
+    pub target: AutomationTarget,
+    /// Stable point identity to exact step value.
+    #[schemars(length(min = 1, max = 512))]
+    pub points: BTreeMap<String, AutomationPoint>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationTarget {
+    Cc1,
+    Cc11,
+    Cc74,
+    PitchBend,
+}
+
+impl AutomationTarget {
+    pub fn key(self) -> &'static str {
+        match self {
+            AutomationTarget::Cc1 => "cc1",
+            AutomationTarget::Cc11 => "cc11",
+            AutomationTarget::Cc74 => "cc74",
+            AutomationTarget::PitchBend => "pitch_bend",
+        }
+    }
+
+    pub fn controller(self) -> Option<u8> {
+        match self {
+            AutomationTarget::Cc1 => Some(1),
+            AutomationTarget::Cc11 => Some(11),
+            AutomationTarget::Cc74 => Some(74),
+            AutomationTarget::PitchBend => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationPoint {
+    /// Position in quarter-note beats from the clip start.
+    #[schemars(range(min = 0.0))]
+    pub at: f64,
+    /// CC targets use 0..=127; pitch bend uses -8192..=8191 around center 0.
+    #[schemars(range(min = -8192, max = 8191))]
+    pub value: i16,
+}
+
+/// Portable percussion names with permanently fixed General MIDI note keys.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PercussionVoice {
+    Kick,
+    Snare,
+    Clap,
+    ClosedHat,
+    PedalHat,
+    OpenHat,
+    LowTom,
+    MidTom,
+    HighTom,
+    Crash,
+    Ride,
+}
+
+impl PercussionVoice {
+    pub fn midi_key(self) -> u8 {
+        match self {
+            PercussionVoice::Kick => 36,
+            PercussionVoice::Snare => 38,
+            PercussionVoice::Clap => 39,
+            PercussionVoice::ClosedHat => 42,
+            PercussionVoice::PedalHat => 44,
+            PercussionVoice::LowTom => 45,
+            PercussionVoice::OpenHat => 46,
+            PercussionVoice::MidTom => 47,
+            PercussionVoice::HighTom => 50,
+            PercussionVoice::Crash => 49,
+            PercussionVoice::Ride => 51,
+        }
+    }
+}
+
+fn default_percussion_duration() -> f64 {
+    0.125
+}
+
+/// Quantize quarter-note beats to the protocol's fixed PPQ-480 grid.
+pub fn quarter_beats_to_ticks(beats: f64) -> Option<u32> {
+    if !beats.is_finite() || beats < 0.0 {
+        return None;
+    }
+    let ticks = (beats * 480.0).round();
+    if ticks > f64::from(u32::MAX) {
+        None
+    } else {
+        Some(ticks as u32)
+    }
+}
+
+fn expanded_clip_event_count(clip: &Clip, timeline_ticks: u32) -> u64 {
+    let authored = clip.events.len() as u64
+        + clip
+            .automation
+            .values()
+            .map(|lane| lane.points.len() as u64)
+            .sum::<u64>();
+    let passes = match clip.mode {
+        ClipMode::Once => 1,
+        ClipMode::Loop => {
+            let clip_ticks =
+                quarter_beats_to_ticks(clip.length_beats).expect("clip length is validated");
+            u64::from(timeline_ticks / clip_ticks)
+        }
+    };
+    authored.saturating_mul(passes)
+}
+
+/// Parse scientific pitch notation with `C-1 = 0`, `C4 = 60`, `A4 = 69`.
+pub fn parse_absolute_pitch(raw: &str) -> std::result::Result<u8, String> {
+    let mut chars = raw.chars();
+    let letter = chars
+        .next()
+        .ok_or_else(|| "expected pitch like `F1` or `C#2`".to_owned())?
+        .to_ascii_uppercase();
+    let natural = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return Err(format!("unknown pitch letter `{letter}`")),
+    };
+    let rest: String = chars.collect();
+    let (accidental, octave_text) = match rest.as_bytes().first() {
+        Some(b'#') => (1, &rest[1..]),
+        Some(b'b') => (-1, &rest[1..]),
+        _ => (0, rest.as_str()),
+    };
+    if octave_text.is_empty() {
+        return Err(format!("pitch `{raw}` is missing an octave"));
+    }
+    let octave: i32 = octave_text
+        .parse()
+        .map_err(|_| format!("pitch `{raw}` has an invalid octave"))?;
+    let midi = (i64::from(octave) + 1) * 12 + i64::from(natural + accidental);
+    if !(0..=127).contains(&midi) {
+        return Err(format!("pitch `{raw}` resolves outside MIDI 0..=127"));
+    }
+    Ok(midi as u8)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
@@ -121,6 +346,9 @@ pub struct Track {
     /// Motif name to play; required with (and only with) pattern `melody`.
     #[serde(default)]
     pub motif: Option<String>,
+    /// Named exact event sequence; required with (and only with) pattern `clip`.
+    #[serde(default)]
+    pub clip: Option<String>,
     /// Dynamic level 0.0..=1.0, scales note velocities. Default: 0.6.
     #[serde(default = "default_intensity")]
     #[schemars(range(min = 0.0, max = 1.0))]
@@ -210,6 +438,9 @@ pub struct Section {
     /// Stable IDs of tracks silenced in this section.
     #[serde(default)]
     pub mute: Vec<String>,
+    /// Section-local clip replacements keyed by stable track ID.
+    #[serde(default)]
+    pub clips: BTreeMap<String, String>,
     /// Multiplier applied to every track's intensity. Range: 0.0..=2.0. Default: 1.
     #[serde(default = "default_section_intensity")]
     #[schemars(range(min = 0.0, max = 2.0))]
@@ -339,6 +570,8 @@ pub enum Pattern {
     /// Plays the motif named by the track's `motif` field, looped/truncated
     /// to fill the section.
     Melody,
+    /// Plays the exact event sequence named by the track's `clip` field.
+    Clip,
     /// Deterministic 16-beat tabla theka, cycled across the scene.
     Tabla,
 }
@@ -756,6 +989,276 @@ impl Scene {
                 }
             }
         }
+        if self.clips.len() > 128 {
+            return fail(
+                "clips",
+                format!("{} clips exceed the limit of 128", self.clips.len()),
+            );
+        }
+        for (name, clip) in &self.clips {
+            if !crate::texture::valid_logical_name(name) {
+                return fail(
+                    &format!("clips.{name}"),
+                    format!("`{name}` must match [a-z][a-z0-9_-]{{0,63}} (stable clip identity)"),
+                );
+            }
+            let Some(length_ticks) = quarter_beats_to_ticks(clip.length_beats) else {
+                return fail(
+                    &format!("clips.{name}.length_beats"),
+                    format!("{} must be finite and non-negative", clip.length_beats),
+                );
+            };
+            if length_ticks == 0 || clip.length_beats > 1024.0 {
+                return fail(
+                    &format!("clips.{name}.length_beats"),
+                    format!(
+                        "{} must quantize to at least 1 tick and be <= 1024 beats",
+                        clip.length_beats
+                    ),
+                );
+            }
+            if clip.events.is_empty() {
+                return fail(
+                    &format!("clips.{name}.events"),
+                    "clip must contain at least one event".to_owned(),
+                );
+            }
+            if clip.events.len() > 2048 {
+                return fail(
+                    &format!("clips.{name}.events"),
+                    format!("{} events exceed the limit of 2048", clip.events.len()),
+                );
+            }
+            let mut pitched_spans: Vec<(u8, u32, u32, &str)> = Vec::new();
+            let mut percussion_onsets = std::collections::BTreeSet::new();
+            for (event_id, event) in &clip.events {
+                let event_path = format!("clips.{name}.events.{event_id}");
+                if !crate::texture::valid_logical_name(event_id) {
+                    return fail(
+                        &event_path,
+                        format!(
+                            "`{event_id}` must match [a-z][a-z0-9_-]{{0,63}} \
+                             (stable event identity)"
+                        ),
+                    );
+                }
+                let Some(at_ticks) = quarter_beats_to_ticks(event.at) else {
+                    return fail(
+                        &format!("{event_path}.at"),
+                        format!("{} must be finite and non-negative", event.at),
+                    );
+                };
+                if at_ticks >= length_ticks {
+                    return fail(
+                        &format!("{event_path}.at"),
+                        format!(
+                            "{} quantizes outside clip length {}",
+                            event.at, clip.length_beats
+                        ),
+                    );
+                }
+                if !(1..=127).contains(&event.velocity) {
+                    return fail(
+                        &format!("{event_path}.velocity"),
+                        format!("{} out of range 1..=127", event.velocity),
+                    );
+                }
+                let duration = match (clip.kind, event.duration) {
+                    (ClipKind::Pitched, None) => {
+                        return fail(
+                            &format!("{event_path}.duration"),
+                            "pitched events require `duration`".to_owned(),
+                        );
+                    }
+                    (ClipKind::Percussion, None) => default_percussion_duration(),
+                    (_, Some(duration)) => duration,
+                };
+                let Some(duration_ticks) = quarter_beats_to_ticks(duration) else {
+                    return fail(
+                        &format!("{event_path}.duration"),
+                        format!("{duration} must be finite and non-negative"),
+                    );
+                };
+                if duration_ticks == 0 {
+                    return fail(
+                        &format!("{event_path}.duration"),
+                        format!("{duration} must quantize to at least 1 tick"),
+                    );
+                }
+                if at_ticks.saturating_add(duration_ticks) > length_ticks {
+                    return fail(
+                        &format!("{event_path}.duration"),
+                        "event crosses the clip boundary".to_owned(),
+                    );
+                }
+                match clip.kind {
+                    ClipKind::Pitched => {
+                        if event.voice.is_some() {
+                            return fail(
+                                &format!("{event_path}.voice"),
+                                "`voice` is only valid in percussion clips".to_owned(),
+                            );
+                        }
+                        let pitch = event.pitch.as_deref().ok_or_else(|| Error::Validation {
+                            path: format!("{event_path}.pitch"),
+                            message: "pitched events require `pitch`".to_owned(),
+                        })?;
+                        let key =
+                            parse_absolute_pitch(pitch).map_err(|message| Error::Validation {
+                                path: format!("{event_path}.pitch"),
+                                message,
+                            })?;
+                        pitched_spans.push((key, at_ticks, at_ticks + duration_ticks, event_id));
+                    }
+                    ClipKind::Percussion => {
+                        if event.pitch.is_some() {
+                            return fail(
+                                &format!("{event_path}.pitch"),
+                                "`pitch` is only valid in pitched clips".to_owned(),
+                            );
+                        }
+                        let voice = event.voice.ok_or_else(|| Error::Validation {
+                            path: format!("{event_path}.voice"),
+                            message: "percussion events require `voice`".to_owned(),
+                        })?;
+                        if !percussion_onsets.insert((voice, at_ticks)) {
+                            return fail(
+                                &format!("{event_path}.at"),
+                                format!("duplicate `{voice:?}` onset at quantized tick {at_ticks}"),
+                            );
+                        }
+                    }
+                }
+            }
+            pitched_spans.sort_unstable_by_key(|(key, start, end, _)| (*key, *start, *end));
+            for pair in pitched_spans.windows(2) {
+                let (left_key, _, left_end, _) = pair[0];
+                let (right_key, right_start, _, right_id) = pair[1];
+                if left_key == right_key && right_start < left_end {
+                    return fail(
+                        &format!("clips.{name}.events.{right_id}.at"),
+                        format!("pitch {right_key} overlaps its preceding event"),
+                    );
+                }
+            }
+            if clip.automation.len() > 4 {
+                return fail(
+                    &format!("clips.{name}.automation"),
+                    format!(
+                        "{} automation lanes exceed the limit of 4",
+                        clip.automation.len()
+                    ),
+                );
+            }
+            if clip.kind == ClipKind::Percussion && !clip.automation.is_empty() {
+                return fail(
+                    &format!("clips.{name}.automation"),
+                    "automation is only valid in pitched clips".to_owned(),
+                );
+            }
+            let mut targets = std::collections::BTreeSet::new();
+            for (lane_id, lane) in &clip.automation {
+                let lane_path = format!("clips.{name}.automation.{lane_id}");
+                if !crate::texture::valid_logical_name(lane_id) {
+                    return fail(
+                        &lane_path,
+                        format!(
+                            "`{lane_id}` must match [a-z][a-z0-9_-]{{0,63}} \
+                             (stable automation-lane identity)"
+                        ),
+                    );
+                }
+                if !targets.insert(lane.target) {
+                    return fail(
+                        &format!("{lane_path}.target"),
+                        format!("duplicate automation target `{:?}`", lane.target),
+                    );
+                }
+                if lane.points.is_empty() {
+                    return fail(
+                        &format!("{lane_path}.points"),
+                        "automation lane must contain at least one point".to_owned(),
+                    );
+                }
+                if lane.points.len() > 512 {
+                    return fail(
+                        &format!("{lane_path}.points"),
+                        format!("{} points exceed the limit of 512", lane.points.len()),
+                    );
+                }
+                let mut points = Vec::with_capacity(lane.points.len());
+                let mut point_ticks = std::collections::BTreeSet::new();
+                for (point_id, point) in &lane.points {
+                    let point_path = format!("{lane_path}.points.{point_id}");
+                    if !crate::texture::valid_logical_name(point_id) {
+                        return fail(
+                            &point_path,
+                            format!(
+                                "`{point_id}` must match [a-z][a-z0-9_-]{{0,63}} \
+                                 (stable automation-point identity)"
+                            ),
+                        );
+                    }
+                    let Some(tick) = quarter_beats_to_ticks(point.at) else {
+                        return fail(
+                            &format!("{point_path}.at"),
+                            format!("{} must be finite and non-negative", point.at),
+                        );
+                    };
+                    if tick >= length_ticks {
+                        return fail(
+                            &format!("{point_path}.at"),
+                            format!(
+                                "{} quantizes outside clip length {}",
+                                point.at, clip.length_beats
+                            ),
+                        );
+                    }
+                    if !point_ticks.insert(tick) {
+                        return fail(
+                            &format!("{point_path}.at"),
+                            format!("another point quantizes to tick {tick}"),
+                        );
+                    }
+                    let valid_value = match lane.target {
+                        AutomationTarget::Cc1 | AutomationTarget::Cc11 | AutomationTarget::Cc74 => {
+                            (0..=127).contains(&point.value)
+                        }
+                        AutomationTarget::PitchBend => (-8192..=8191).contains(&point.value),
+                    };
+                    if !valid_value {
+                        let range = if lane.target == AutomationTarget::PitchBend {
+                            "-8192..=8191"
+                        } else {
+                            "0..=127"
+                        };
+                        return fail(
+                            &format!("{point_path}.value"),
+                            format!("{} out of range {range}", point.value),
+                        );
+                    }
+                    points.push((tick, point.value, point_id));
+                }
+                points.sort_unstable_by_key(|(tick, _, _)| *tick);
+                if points[0].0 != 0 {
+                    return fail(
+                        &format!("{lane_path}.points.{}.at", points[0].2),
+                        "automation lanes require an initial point at beat 0".to_owned(),
+                    );
+                }
+                if clip.mode == ClipMode::Loop
+                    && points.last().expect("points is non-empty").1 != points[0].1
+                {
+                    return fail(
+                        &format!(
+                            "{lane_path}.points.{}.value",
+                            points.last().expect("points is non-empty").2
+                        ),
+                        "loop automation must end at its initial value".to_owned(),
+                    );
+                }
+            }
+        }
         if self.tracks.is_empty() {
             return fail("tracks", "at least one track is required".to_owned());
         }
@@ -778,6 +1281,8 @@ impl Scene {
             );
         }
         let mut track_ids = std::collections::BTreeSet::new();
+        let scene_ticks =
+            u32::from(self.bars) * u32::from(time_sig.num) * 480 * 4 / u32::from(time_sig.den);
         for (i, t) in self.tracks.iter().enumerate() {
             if !crate::texture::valid_logical_name(&t.id) {
                 return fail(
@@ -841,10 +1346,10 @@ impl Scene {
                 }
             }
             match t.instrument {
-                Instrument::Drums if t.pattern != Pattern::Drums => {
+                Instrument::Drums if !matches!(t.pattern, Pattern::Drums | Pattern::Clip) => {
                     return fail(
                         &format!("tracks[{i}].pattern"),
-                        "instrument `drums` requires pattern `drums`".to_owned(),
+                        "instrument `drums` requires pattern `drums` or `clip`".to_owned(),
                     );
                 }
                 Instrument::Tabla if t.pattern != Pattern::Tabla => {
@@ -887,6 +1392,69 @@ impl Scene {
                     return fail(
                         &format!("tracks[{i}].motif"),
                         "`motif` is only valid with pattern `melody`".to_owned(),
+                    );
+                }
+                _ => {}
+            }
+            match (t.pattern == Pattern::Clip, &t.clip) {
+                (true, None) => {
+                    return fail(
+                        &format!("tracks[{i}].clip"),
+                        "pattern `clip` requires a `clip` name".to_owned(),
+                    );
+                }
+                (true, Some(name)) => {
+                    let clip = self.clips.get(name).ok_or_else(|| Error::Validation {
+                        path: format!("tracks[{i}].clip"),
+                        message: format!(
+                            "unknown clip `{name}` (defined: {:?})",
+                            self.clips.keys().collect::<Vec<_>>()
+                        ),
+                    })?;
+                    let expected = if t.instrument == Instrument::Drums {
+                        ClipKind::Percussion
+                    } else {
+                        ClipKind::Pitched
+                    };
+                    if clip.kind != expected {
+                        return fail(
+                            &format!("tracks[{i}].clip"),
+                            format!(
+                                "instrument `{}` requires a {expected:?} clip, but `{name}` is {:?}",
+                                instrument_key(t.instrument),
+                                clip.kind
+                            ),
+                        );
+                    }
+                    if clip.mode == ClipMode::Loop {
+                        let clip_ticks =
+                            quarter_beats_to_ticks(clip.length_beats).expect("clip is validated");
+                        if scene_ticks % clip_ticks != 0 {
+                            return fail(
+                                &format!("tracks[{i}].clip"),
+                                format!(
+                                    "loop clip `{name}` ({clip_ticks} ticks) does not divide \
+                                     scene length ({scene_ticks} ticks)"
+                                ),
+                            );
+                        }
+                    }
+                    let expanded = expanded_clip_event_count(clip, scene_ticks);
+                    if expanded > MAX_EXPANDED_CLIP_EVENTS_PER_TRACK {
+                        return fail(
+                            &format!("tracks[{i}].clip"),
+                            format!(
+                                "clip `{name}` expands to {expanded} note/control events, \
+                                 exceeding the per-track expanded event limit of \
+                                 {MAX_EXPANDED_CLIP_EVENTS_PER_TRACK}"
+                            ),
+                        );
+                    }
+                }
+                (false, Some(_)) => {
+                    return fail(
+                        &format!("tracks[{i}].clip"),
+                        "`clip` is only valid with pattern `clip`".to_owned(),
                     );
                 }
                 _ => {}
@@ -1005,6 +1573,71 @@ impl Scene {
                     "section mutes every track".to_owned(),
                 );
             }
+            for (track_id, clip_id) in &s.clips {
+                let Some(track) = self.tracks.iter().find(|track| track.id == *track_id) else {
+                    return fail(
+                        &format!("sections[{i}].clips.{track_id}"),
+                        format!("unknown track id `{track_id}`"),
+                    );
+                };
+                if track.pattern != Pattern::Clip {
+                    return fail(
+                        &format!("sections[{i}].clips.{track_id}"),
+                        "section clip overrides require a track with pattern `clip`".to_owned(),
+                    );
+                }
+                let clip = self.clips.get(clip_id).ok_or_else(|| Error::Validation {
+                    path: format!("sections[{i}].clips.{track_id}"),
+                    message: format!("unknown clip `{clip_id}`"),
+                })?;
+                let expected = if track.instrument == Instrument::Drums {
+                    ClipKind::Percussion
+                } else {
+                    ClipKind::Pitched
+                };
+                if clip.kind != expected {
+                    return fail(
+                        &format!("sections[{i}].clips.{track_id}"),
+                        format!("track `{track_id}` requires a {expected:?} clip"),
+                    );
+                }
+            }
+            let section_ticks =
+                u32::from(s.bars) * u32::from(time_sig.num) * 480 * 4 / u32::from(time_sig.den);
+            for track in self.tracks.iter().filter(|track| {
+                track.pattern == Pattern::Clip && !muted.contains(track.id.as_str())
+            }) {
+                let clip_id = s
+                    .clips
+                    .get(&track.id)
+                    .or(track.clip.as_ref())
+                    .expect("clip tracks are validated");
+                let clip = &self.clips[clip_id];
+                if clip.mode == ClipMode::Loop {
+                    let clip_ticks =
+                        quarter_beats_to_ticks(clip.length_beats).expect("clip is validated");
+                    if section_ticks % clip_ticks != 0 {
+                        return fail(
+                            &format!("sections[{i}].clips.{}", track.id),
+                            format!(
+                                "loop clip `{clip_id}` ({clip_ticks} ticks) does not divide \
+                                 section length ({section_ticks} ticks)"
+                            ),
+                        );
+                    }
+                }
+                let expanded = expanded_clip_event_count(clip, section_ticks);
+                if expanded > MAX_EXPANDED_CLIP_EVENTS_PER_TRACK {
+                    return fail(
+                        &format!("sections[{i}].clips.{}", track.id),
+                        format!(
+                            "clip `{clip_id}` expands to {expanded} note/control events, \
+                             exceeding the per-track expanded event limit of \
+                             {MAX_EXPANDED_CLIP_EVENTS_PER_TRACK}"
+                        ),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1027,6 +1660,9 @@ impl Scene {
             .filter(|t| !section.mute.contains(&t.id))
             .map(|t| {
                 let mut t = t.clone();
+                if let Some(clip) = section.clips.get(&t.id) {
+                    t.clip = Some(clip.clone());
+                }
                 t.intensity = (t.intensity * section.intensity).clamp(0.0, 1.0);
                 t
             })

@@ -337,12 +337,15 @@ impl Resolution {
 }
 
 /// Role a track's pattern implies, for candidate scoring.
-fn role_of(track: &Track) -> Role {
+fn role_of(track: &Track) -> Option<Role> {
     match track.pattern {
-        Pattern::Melody => Role::Melody,
-        Pattern::Bass => Role::Bass,
-        Pattern::Drums | Pattern::Tabla => Role::Rhythm,
-        Pattern::Sustain | Pattern::Arpeggio => Role::HarmonicSupport,
+        Pattern::Melody => Some(Role::Melody),
+        Pattern::Bass => Some(Role::Bass),
+        Pattern::Drums | Pattern::Tabla => Some(Role::Rhythm),
+        Pattern::Sustain | Pattern::Arpeggio => Some(Role::HarmonicSupport),
+        Pattern::Clip if track.instrument.is_percussion() => Some(Role::Rhythm),
+        Pattern::Clip if spec(track.instrument).family == Family::Bass => Some(Role::Bass),
+        Pattern::Clip => None,
     }
 }
 
@@ -354,7 +357,7 @@ fn round3(x: f32) -> f32 {
 fn score_candidate(
     requested: Instrument,
     articulation: Articulation,
-    role: Role,
+    role: Option<Role>,
     candidate: Instrument,
     candidate_arts: &BTreeSet<Articulation>,
     policy: &FallbackPolicy,
@@ -468,12 +471,19 @@ fn score_candidate(
         .to_owned(),
     );
 
-    let role_score = if cand.roles.contains(&role) {
-        reasons.push("role_compatible".to_owned());
-        1.0
-    } else {
-        reasons.push("role_mismatch".to_owned());
-        0.0
+    let role_score = match role {
+        Some(role) if cand.roles.contains(&role) => {
+            reasons.push("role_compatible".to_owned());
+            1.0
+        }
+        Some(_) => {
+            reasons.push("role_mismatch".to_owned());
+            0.0
+        }
+        None => {
+            reasons.push("role_unspecified".to_owned());
+            0.0
+        }
     };
 
     let timbre = 1.0

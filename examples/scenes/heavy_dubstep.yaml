@@ -1,0 +1,269 @@
+# A protocol-level heavy-Dubstep reference: authored event clips keep every
+# bass switch, drum subdivision, and automation gesture reusable and diffable.
+# The named texture sources are portable bindings, not bundled recordings.
+title: Heavy Dubstep Protocol Reference
+story: >-
+  Industrial 140 BPM build and two hostile drops. Alternating growl and sub
+  phrases, stepped talking-bass motion, metal stabs, dense hats, fills,
+  impacts, mechanical risers, and electric glitch-like bursts; no soft EDM
+  melody.
+tempo: 140
+key: F_minor
+time_signature: 4/4
+bars: 8
+loop: true
+
+clips:
+  growl_build:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      pulse_01: { at: 0, duration: 0.5, pitch: F1, velocity: 104 }
+      pulse_02: { at: 1, duration: 0.5, pitch: F1, velocity: 110 }
+      pulse_03: { at: 2, duration: 0.5, pitch: F#1, velocity: 116 }
+      pulse_04: { at: 3, duration: 0.75, pitch: C2, velocity: 124 }
+    automation:
+      mouth:
+        target: cc1
+        points:
+          start: { at: 0, value: 0 }
+          tense_1: { at: 1, value: 48 }
+          tense_2: { at: 2, value: 80 }
+          tense_3: { at: 3, value: 110 }
+          seal: { at: 3.75, value: 0 }
+      edge:
+        target: cc74
+        points:
+          start: { at: 0, value: 12 }
+          rise: { at: 2, value: 112 }
+          seal: { at: 3.75, value: 12 }
+      bend:
+        target: pitch_bend
+        points:
+          start: { at: 0, value: 0 }
+          pull: { at: 2.75, value: -2400 }
+          snap: { at: 3, value: 3200 }
+          seal: { at: 3.75, value: 0 }
+
+  talking_drop_a:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      bark_01: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }
+      bark_02: { at: 0.75, duration: 0.25, pitch: C2, velocity: 122 }
+      bark_03: { at: 1, duration: 0.5, pitch: F#1, velocity: 127 }
+      bark_04: { at: 1.75, duration: 0.25, pitch: C#2, velocity: 120 }
+      bark_05: { at: 2, duration: 0.75, pitch: E1, velocity: 127 }
+      bark_06: { at: 3, duration: 0.25, pitch: G1, velocity: 124 }
+      bark_07: { at: 3.5, duration: 0.25, pitch: C2, velocity: 127 }
+    automation:
+      mouth:
+        target: cc1
+        points:
+          shut_1: { at: 0, value: 0 }
+          open_1: { at: 0.25, value: 127 }
+          bite_1: { at: 0.5, value: 32 }
+          talk_1: { at: 0.75, value: 96 }
+          shut_2: { at: 1, value: 0 }
+          open_2: { at: 1.5, value: 120 }
+          bite_2: { at: 2, value: 12 }
+          open_3: { at: 2.75, value: 110 }
+          seal: { at: 3.75, value: 0 }
+      edge:
+        target: cc74
+        points:
+          dark_1: { at: 0, value: 8 }
+          metal_1: { at: 0.5, value: 127 }
+          dark_2: { at: 1, value: 20 }
+          metal_2: { at: 1.75, value: 118 }
+          dark_3: { at: 2, value: 4 }
+          metal_3: { at: 3, value: 124 }
+          seal: { at: 3.75, value: 8 }
+      bend:
+        target: pitch_bend
+        points:
+          center_1: { at: 0, value: 0 }
+          down: { at: 0.5, value: -4096 }
+          center_2: { at: 1, value: 0 }
+          up: { at: 1.5, value: 4096 }
+          center_3: { at: 2, value: 0 }
+          tear: { at: 3.25, value: -3072 }
+          seal: { at: 3.75, value: 0 }
+
+  talking_drop_b:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      answer_01: { at: 0, duration: 0.25, pitch: C2, velocity: 127 }
+      answer_02: { at: 0.5, duration: 0.5, pitch: E1, velocity: 126 }
+      answer_03: { at: 1.25, duration: 0.25, pitch: G1, velocity: 120 }
+      answer_04: { at: 1.5, duration: 0.5, pitch: F#1, velocity: 127 }
+      answer_05: { at: 2.25, duration: 0.5, pitch: F1, velocity: 127 }
+      answer_06: { at: 3, duration: 0.25, pitch: C#2, velocity: 124 }
+      answer_07: { at: 3.5, duration: 0.25, pitch: E1, velocity: 127 }
+    automation:
+      mouth:
+        target: cc1
+        points:
+          shut_1: { at: 0, value: 0 }
+          open_1: { at: 0.25, value: 118 }
+          choke_1: { at: 0.75, value: 16 }
+          open_2: { at: 1.25, value: 127 }
+          shut_2: { at: 1.75, value: 0 }
+          open_3: { at: 2.25, value: 104 }
+          choke_2: { at: 2.75, value: 24 }
+          open_4: { at: 3.25, value: 122 }
+          seal: { at: 3.75, value: 0 }
+      edge:
+        target: cc74
+        points:
+          dark_1: { at: 0, value: 10 }
+          metal_1: { at: 0.25, value: 122 }
+          dark_2: { at: 1, value: 2 }
+          metal_2: { at: 1.5, value: 127 }
+          dark_3: { at: 2, value: 18 }
+          metal_3: { at: 3.25, value: 120 }
+          seal: { at: 3.75, value: 10 }
+      bend:
+        target: pitch_bend
+        points:
+          center_1: { at: 0, value: 0 }
+          rip_up: { at: 0.75, value: 5120 }
+          center_2: { at: 1, value: 0 }
+          rip_down: { at: 2, value: -5120 }
+          center_3: { at: 2.5, value: 0 }
+          snap: { at: 3.25, value: 3584 }
+          seal: { at: 3.75, value: 0 }
+
+  sub_drop:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      sub_01: { at: 0.5, duration: 0.25, pitch: F1, velocity: 126 }
+      sub_02: { at: 1.5, duration: 0.25, pitch: F1, velocity: 127 }
+      sub_03: { at: 2.75, duration: 0.25, pitch: E1, velocity: 126 }
+      sub_04: { at: 3.25, duration: 0.25, pitch: F1, velocity: 127 }
+
+  metal_stabs:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      stab_01: { at: 0, duration: 0.125, pitch: F4, velocity: 120 }
+      stab_02: { at: 1.5, duration: 0.125, pitch: C5, velocity: 112 }
+      stab_03: { at: 2.5, duration: 0.125, pitch: F#4, velocity: 118 }
+      stab_04: { at: 3.25, duration: 0.125, pitch: E4, velocity: 127 }
+
+  build_stabs:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      tick_01: { at: 0, duration: 0.125, pitch: F4, velocity: 76 }
+      tick_02: { at: 2, duration: 0.125, pitch: F4, velocity: 92 }
+      tick_03: { at: 3, duration: 0.125, pitch: C5, velocity: 108 }
+      tick_04: { at: 3.5, duration: 0.125, pitch: F#4, velocity: 122 }
+
+  drums_build:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_01: { at: 0, voice: kick, velocity: 118 }
+      snare_01: { at: 1, voice: snare, velocity: 110 }
+      snare_02: { at: 3, voice: snare, velocity: 122 }
+      hat_01: { at: 0, voice: closed_hat, velocity: 72 }
+      hat_02: { at: 0.5, voice: closed_hat, velocity: 78 }
+      hat_03: { at: 1, voice: closed_hat, velocity: 82 }
+      hat_04: { at: 1.5, voice: closed_hat, velocity: 88 }
+      hat_05: { at: 2, voice: closed_hat, velocity: 94 }
+      hat_06: { at: 2.5, voice: closed_hat, velocity: 100 }
+      hat_07: { at: 3, voice: closed_hat, velocity: 108 }
+      hat_08: { at: 3.5, voice: closed_hat, velocity: 120 }
+
+  drums_drop:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_01: { at: 0, voice: kick, velocity: 127 }
+      kick_02: { at: 0.75, voice: kick, velocity: 118 }
+      kick_03: { at: 2.5, voice: kick, velocity: 124 }
+      snare_01: { at: 1, voice: snare, velocity: 127 }
+      snare_02: { at: 3, voice: snare, velocity: 127 }
+      clap_01: { at: 3, voice: clap, velocity: 110 }
+      crash_01: { at: 0, voice: crash, velocity: 122 }
+      open_01: { at: 1.75, voice: open_hat, velocity: 116 }
+      hat_01: { at: 0, voice: closed_hat, velocity: 104 }
+      hat_02: { at: 0.25, voice: closed_hat, velocity: 76 }
+      hat_03: { at: 0.5, voice: closed_hat, velocity: 92 }
+      hat_04: { at: 0.75, voice: closed_hat, velocity: 82 }
+      hat_05: { at: 1, voice: closed_hat, velocity: 108 }
+      hat_06: { at: 1.25, voice: closed_hat, velocity: 78 }
+      hat_07: { at: 1.5, voice: closed_hat, velocity: 96 }
+      hat_08: { at: 1.75, voice: closed_hat, velocity: 84 }
+      hat_09: { at: 2, voice: closed_hat, velocity: 110 }
+      hat_10: { at: 2.25, voice: closed_hat, velocity: 80 }
+      hat_11: { at: 2.5, voice: closed_hat, velocity: 98 }
+      hat_12: { at: 2.75, voice: closed_hat, velocity: 86 }
+      hat_13: { at: 3, voice: closed_hat, velocity: 112 }
+      hat_14: { at: 3.25, voice: closed_hat, velocity: 88 }
+      hat_15: { at: 3.5, voice: closed_hat, velocity: 104 }
+      hat_16: { at: 3.75, voice: closed_hat, velocity: 96 }
+      fill_low: { at: 3.25, voice: low_tom, velocity: 116 }
+      fill_mid: { at: 3.5, voice: mid_tom, velocity: 120 }
+      fill_high: { at: 3.75, voice: high_tom, velocity: 127 }
+
+tracks:
+  - id: talker
+    palette: growl
+    instrument: synth_bass
+    pattern: clip
+    clip: talking_drop_a
+    intensity: 1
+  - id: sub
+    palette: sub
+    instrument: synth_bass
+    pattern: clip
+    clip: sub_drop
+    intensity: 1
+  - id: metal
+    palette: metal
+    instrument: square_lead
+    pattern: clip
+    clip: metal_stabs
+    intensity: 0.9
+  - id: percussion
+    palette: drums
+    instrument: drums
+    pattern: clip
+    clip: drums_drop
+    intensity: 1
+
+textures:
+  - { source: industrial_bed, mode: loop, gain: 0.18 }
+  - { source: drop_impact, mode: one_shot, at: [0], gain: 0.8 }
+  - { source: glitch_burst, mode: one_shot, at: [3.5, 7.5, 11.5, 15.5], gain: 0.55 }
+  - { source: mechanical_riser, mode: one_shot, at: [3.5], gain: 0.65 }
+
+sections:
+  - name: build
+    bars: 4
+    mute: [sub]
+    clips:
+      talker: growl_build
+      metal: build_stabs
+      percussion: drums_build
+    intensity: 0.9
+  - name: drop_a
+    bars: 8
+    loop: true
+  - name: drop_b
+    bars: 8
+    loop: true
+    clips:
+      talker: talking_drop_b

@@ -1,0 +1,31 @@
+# Structural guarantees for the shipped heavy-Dubstep reference. These rules
+# measure authored drum density/onsets and talking-bass controller activity;
+# timbre quality still belongs to certified sound sources and listening review.
+name: heavy_dubstep
+description: >-
+  Exactly 140 BPM, no sustain pads or melody-pattern lead, a backbeat with
+  subdivision density, and continuously changing talking-bass controls.
+rules:
+  tempo_min: 140
+  tempo_max: 140
+  pads_max: 0
+  melodic_voices_max: 0
+  percussion_events_per_bar_min: 11
+  percussion_onsets:
+    - { voice: snare, positions: [1, 3], coverage_min: 1 }
+  automation_activity:
+    - { track: talker, target: cc1, points_per_bar_min: 5, value_span_min: 100 }
+    - { track: talker, target: cc74, points_per_bar_min: 3, value_span_min: 100 }
+    - { track: talker, target: pitch_bend, points_per_bar_min: 3, value_span_min: 4000 }
+section_rules:
+  build:
+    automation_activity:
+      - { track: talker, target: cc1, points_per_bar_min: 5, value_span_min: 100 }
+  drop_a:
+    percussion_events_per_bar_min: 24
+    automation_activity:
+      - { track: talker, target: cc1, points_per_bar_min: 9, value_span_min: 120 }
+  drop_b:
+    percussion_events_per_bar_min: 24
+    automation_activity:
+      - { track: talker, target: cc1, points_per_bar_min: 9, value_span_min: 120 }

@@ -103,6 +103,51 @@ sections:
 - **Transitions are just short non-loop sections.** A 2-bar sting with a couple of tracks muted is a victory fanfare; no separate scene file needed.
 - **One file per location keeps review honest.** A `scorekit diff` on the suite shows exactly which dramatic state changed.
 
+## Recipe: exact heavy-Dubstep drops
+
+When the groove depends on authored syncopation rather than a generative
+pattern, use stable-ID clips (see
+`examples/scenes/heavy_dubstep.yaml`):
+
+```yaml
+clips:
+  talking_a:
+    kind: pitched
+    length_beats: 4
+    mode: loop
+    events:
+      bark_01: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }
+      bark_02: { at: 0.75, duration: 0.25, pitch: C2, velocity: 120 }
+    automation:
+      mouth:
+        target: cc1
+        points:
+          shut: { at: 0, value: 0 }
+          open: { at: 0.25, value: 127 }
+          seal: { at: 3.75, value: 0 }
+tracks:
+  - { id: talker, instrument: synth_bass, pattern: clip, clip: talking_a }
+sections:
+  - { name: build, bars: 4, clips: { talker: growl_build } }
+  - { name: drop, bars: 8, loop: true }
+```
+
+- **Identity lives in map keys.** Name clips/events/lanes/points by role; map
+  reordering is MIDI-inert and `scorekit diff` reports the stable identity
+  instead of a drifting list index.
+- **Seal repeated state.** A loop clip must divide the scene/section length,
+  and every automation lane must finish at its initial value.
+- **Keep source and score separate.** CC1/CC11/CC74/pitch bend are portable
+  MIDI intent. An sfizz leaf mapping must declare the controls its patch
+  implements; the scene never embeds a synth parameter or sample path.
+- **Lint structure, audition timbre.** Grammar can prove drum density,
+  backbeat positions, and automation activity. It cannot prove "metallic" or
+  "aggressive"; that needs a certified source and listening review.
+- **Forge is an asset-foundry option, not runtime.** If no licensed
+  growl/FM/reverse/glitch source exists, `scoredata-forge` may produce frozen
+  manifested WAV/SFZ assets offline. scorekit consumes them like any other
+  checksummed, `profile check`-certified source.
+
 ## Recipe: film-style expressive cue
 
 For narrative scoring, the `performance` block turns a mechanical render into a played one (see `examples/scenes/elegy.yaml`):
@@ -174,6 +219,7 @@ scorekit lint scene.yaml --grammar examples/grammars/grief.yaml
 ```
 
 - **A grammar is a constitution, not a composition.** It says what the style is *allowed* to sound like; the scene says what it does sound like. Keep them in separate files, both under version control.
+- **Use compiled structural rules for rhythm-first styles.** `percussion_events_per_bar_min`, `percussion_onsets`, and `automation_activity` can be global or added under named `section_rules`; see `examples/grammars/heavy_dubstep.yaml`.
 - **Lint in CI.** Every rule is deterministic and machine-checkable, so a pull request that breaks the project's musical language fails the same way one that breaks the schema does.
 
 ## Batch and CI

@@ -9,11 +9,12 @@
 
 use crate::error::{Error, Location, Result};
 use crate::schema::{
-    Articulation, Instrument, articulation_key, instrument_key, parse_instrument_key,
+    Articulation, AutomationTarget, Instrument, articulation_key, instrument_key,
+    parse_instrument_key,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Maps every instrument this profile covers to one `.sfz` file per
@@ -32,11 +33,46 @@ pub struct Profile {
     /// profile file's directory.
     #[serde(default)]
     pub root: Option<String>,
-    /// `instrument key -> articulation key -> .sfz path (relative to root)`.
+    /// `instrument key -> articulation key -> .sfz mapping (relative to root)`.
     /// Every instrument must define at least a `sustain` mapping, used as
     /// the fallback when a track asks for an articulation this profile
     /// doesn't have a dedicated sample for.
-    pub instruments: BTreeMap<String, BTreeMap<String, String>>,
+    pub instruments: BTreeMap<String, BTreeMap<String, PatchMapping>>,
+}
+
+/// Backward-compatible renderer mapping: legacy profiles use a bare path;
+/// automation-aware profiles use an object that declares supported controls.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PatchMapping {
+    Path(String),
+    Detailed(PatchSpec),
+}
+
+impl PatchMapping {
+    fn path(&self) -> &str {
+        match self {
+            PatchMapping::Path(path) => path,
+            PatchMapping::Detailed(spec) => &spec.path,
+        }
+    }
+
+    fn controls(&self) -> BTreeSet<AutomationTarget> {
+        match self {
+            PatchMapping::Path(_) => BTreeSet::new(),
+            PatchMapping::Detailed(spec) => spec.controls.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PatchSpec {
+    /// SFZ path relative to the renderer profile root.
+    pub path: String,
+    /// MIDI automation targets the patch intentionally implements.
+    #[serde(default)]
+    pub controls: BTreeSet<AutomationTarget>,
 }
 
 /// One explicit instrument/articulation mapping resolved to a local path.
@@ -48,12 +84,14 @@ pub struct ResolvedMapping {
     pub instrument_key: String,
     pub articulation_key: String,
     pub path: PathBuf,
+    pub controls: BTreeSet<AutomationTarget>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedPatch {
     pub articulation_key: String,
     pub path: PathBuf,
+    pub controls: BTreeSet<AutomationTarget>,
 }
 
 impl Profile {
@@ -90,11 +128,17 @@ impl Profile {
                         .to_owned(),
                 );
             }
-            for akey in arts.keys() {
+            for (akey, mapping) in arts {
                 if crate::schema::parse_articulation_key(akey).is_none() {
                     return fail(
                         format!("instruments.{ikey}.{akey}"),
                         format!("`{akey}` is not a known articulation name"),
+                    );
+                }
+                if mapping.path().trim().is_empty() {
+                    return fail(
+                        format!("instruments.{ikey}.{akey}"),
+                        "SFZ path must not be empty".to_owned(),
                     );
                 }
             }
@@ -108,7 +152,7 @@ impl Profile {
     /// is an authoring error, not a merge. Unknown keys are left as-is for
     /// `validate()` to report with suggestions.
     fn canonicalize_instrument_keys(&mut self) -> Result<()> {
-        let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        let mut out: BTreeMap<String, BTreeMap<String, PatchMapping>> = BTreeMap::new();
         for (key, arts) in std::mem::take(&mut self.instruments) {
             let canonical = match crate::instrument::resolve_name(&key) {
                 Some(r) => instrument_key(r.instrument),
@@ -180,13 +224,14 @@ impl Profile {
         let akey = articulation_key(articulation);
         // `validate()` guarantees `sustain` exists, so this unwrap is safe
         // for any profile that passed `load_profile`.
-        let (articulation_key, rel) = arts
+        let (articulation_key, mapping) = arts
             .get_key_value(&akey)
             .or_else(|| arts.get_key_value("sustain"))
             .expect("validate() guarantees a sustain fallback");
         Ok(ResolvedPatch {
             articulation_key: articulation_key.clone(),
-            path: self.resolved_root(profile_dir).join(rel),
+            path: self.resolved_root(profile_dir).join(mapping.path()),
+            controls: mapping.controls(),
         })
     }
 
@@ -198,12 +243,13 @@ impl Profile {
         for (instrument_key, articulations) in &self.instruments {
             let instrument = parse_instrument_key(instrument_key)
                 .expect("validate() guarantees known instrument keys");
-            for (articulation_key, rel) in articulations {
+            for (articulation_key, mapping) in articulations {
                 out.push(ResolvedMapping {
                     instrument,
                     instrument_key: instrument_key.clone(),
                     articulation_key: articulation_key.clone(),
-                    path: root.join(rel),
+                    path: root.join(mapping.path()),
+                    controls: mapping.controls(),
                 });
             }
         }

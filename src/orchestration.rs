@@ -109,6 +109,41 @@ impl LoadedOrchestration {
                 palette
                     .profile
                     .resolve_patch(palette.profile_dir(), target, track.articulation)?;
+            let mut clip_names = BTreeSet::new();
+            if scene.sections.is_empty() {
+                if let Some(clip) = &track.clip {
+                    clip_names.insert(clip.as_str());
+                }
+            } else {
+                for section in &scene.sections {
+                    if section.mute.contains(&track.id) {
+                        continue;
+                    }
+                    if let Some(clip) = section.clips.get(&track.id).or(track.clip.as_ref()) {
+                        clip_names.insert(clip.as_str());
+                    }
+                }
+            }
+            for clip_name in clip_names {
+                let clip = scene
+                    .clips
+                    .get(clip_name)
+                    .expect("scene validation guarantees referenced clips exist");
+                for (lane_name, lane) in &clip.automation {
+                    if !patch.controls.contains(&lane.target) {
+                        return Err(Error::Validation {
+                            path: format!("clips.{clip_name}.automation.{lane_name}.target"),
+                            message: format!(
+                                "renderer profile `{}` mapping for {}.{} does not declare `{}` support",
+                                palette.profile.name,
+                                crate::schema::instrument_key(target),
+                                patch.articulation_key,
+                                lane.target.key()
+                            ),
+                        });
+                    }
+                }
+            }
             resolved.set_renderer_patch(&patch.articulation_key, &patch.path);
         }
         Ok(resolution)
