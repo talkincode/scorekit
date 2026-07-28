@@ -1,0 +1,124 @@
+# Dry interlocking pocket: bass, Clavinet and muted guitar leave each other air.
+title: Chrome Pocket
+story: >-
+  A dry Disco-Funk loop where pull bass, Clavinet, muted guitar, brass and sax
+  trade short phrases instead of stacking a wall of sound.
+tempo: 112
+key: D_minor
+time_signature: 4/4
+bars: 4
+loop: true
+harmony: [i, IV, i, v]
+performance:
+  humanize: { timing_ms: 16, velocity: 9, seed: 1127 }
+  swing: 0.14
+
+clips:
+  funk_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      d_1: { at: 0, duration: 0.375, pitch: D1, velocity: 112 }
+      d_2: { at: 0.75, duration: 0.25, pitch: A1, velocity: 102 }
+      d_3: { at: 1.5, duration: 0.25, pitch: C2, velocity: 106 }
+      d_4: { at: 2.25, duration: 0.375, pitch: D2, velocity: 116 }
+      d_5: { at: 3, duration: 0.25, pitch: A1, velocity: 100 }
+      d_6: { at: 3.5, duration: 0.25, pitch: C2, velocity: 104 }
+      g_1: { at: 4, duration: 0.375, pitch: G1, velocity: 112 }
+      g_2: { at: 4.75, duration: 0.25, pitch: D2, velocity: 102 }
+      g_3: { at: 5.5, duration: 0.25, pitch: F2, velocity: 106 }
+      g_4: { at: 6.25, duration: 0.375, pitch: G2, velocity: 116 }
+      g_5: { at: 7, duration: 0.25, pitch: D2, velocity: 100 }
+      g_6: { at: 7.5, duration: 0.25, pitch: F2, velocity: 104 }
+      d2_1: { at: 8, duration: 0.375, pitch: D1, velocity: 112 }
+      d2_2: { at: 8.75, duration: 0.25, pitch: A1, velocity: 102 }
+      d2_3: { at: 9.5, duration: 0.25, pitch: C2, velocity: 106 }
+      d2_4: { at: 10.25, duration: 0.375, pitch: D2, velocity: 116 }
+      d2_5: { at: 11, duration: 0.25, pitch: A1, velocity: 100 }
+      d2_6: { at: 11.5, duration: 0.25, pitch: C2, velocity: 104 }
+      a_1: { at: 12, duration: 0.375, pitch: A1, velocity: 112 }
+      a_2: { at: 12.75, duration: 0.25, pitch: E2, velocity: 102 }
+      a_3: { at: 13.5, duration: 0.25, pitch: G2, velocity: 106 }
+      a_4: { at: 14.25, duration: 0.375, pitch: A2, velocity: 116 }
+      a_5: { at: 15, duration: 0.25, pitch: E2, velocity: 100 }
+      a_6: { at: 15.5, duration: 0.25, pitch: G2, velocity: 104 }
+  funk_clav:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      hit_01: { at: 0.5, duration: 0.125, pitch: F4, velocity: 96 }
+      hit_02: { at: 1.25, duration: 0.125, pitch: A4, velocity: 86 }
+      hit_03: { at: 2.5, duration: 0.125, pitch: C5, velocity: 92 }
+      hit_04: { at: 3.25, duration: 0.125, pitch: D5, velocity: 88 }
+      hit_05: { at: 4.5, duration: 0.125, pitch: Bb4, velocity: 96 }
+      hit_06: { at: 5.25, duration: 0.125, pitch: D5, velocity: 86 }
+      hit_07: { at: 6.5, duration: 0.125, pitch: F5, velocity: 92 }
+      hit_08: { at: 7.25, duration: 0.125, pitch: G5, velocity: 88 }
+      hit_09: { at: 8.5, duration: 0.125, pitch: F4, velocity: 96 }
+      hit_10: { at: 9.25, duration: 0.125, pitch: A4, velocity: 86 }
+      hit_11: { at: 10.5, duration: 0.125, pitch: C5, velocity: 92 }
+      hit_12: { at: 11.25, duration: 0.125, pitch: D5, velocity: 88 }
+      hit_13: { at: 12.5, duration: 0.125, pitch: C5, velocity: 96 }
+      hit_14: { at: 13.25, duration: 0.125, pitch: E5, velocity: 86 }
+      hit_15: { at: 14.5, duration: 0.125, pitch: G5, velocity: 92 }
+      hit_16: { at: 15.25, duration: 0.125, pitch: A5, velocity: 90 }
+  funk_guitar:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      chop_01: { at: 0.25, duration: 0.125, pitch: A3, velocity: 78 }
+      chop_02: { at: 2.75, duration: 0.125, pitch: D4, velocity: 82 }
+      chop_03: { at: 4.25, duration: 0.125, pitch: D4, velocity: 78 }
+      chop_04: { at: 6.75, duration: 0.125, pitch: G4, velocity: 82 }
+      chop_05: { at: 8.25, duration: 0.125, pitch: A3, velocity: 78 }
+      chop_06: { at: 10.75, duration: 0.125, pitch: D4, velocity: 82 }
+      chop_07: { at: 12.25, duration: 0.125, pitch: E4, velocity: 78 }
+      chop_08: { at: 14.75, duration: 0.125, pitch: A4, velocity: 84 }
+  funk_horns:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      punch_1: { at: 3.5, duration: 0.25, pitch: D5, velocity: 104 }
+      punch_2: { at: 7.5, duration: 0.25, pitch: G4, velocity: 100 }
+      punch_3: { at: 11.5, duration: 0.25, pitch: D5, velocity: 104 }
+      punch_4: { at: 15.5, duration: 0.25, pitch: A4, velocity: 108 }
+  funk_sax:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      answer_1: { at: 1.5, duration: 0.5, pitch: F4, velocity: 88 }
+      answer_2: { at: 5.5, duration: 0.5, pitch: Bb4, velocity: 86 }
+      answer_3: { at: 9.5, duration: 0.5, pitch: A4, velocity: 88 }
+      answer_4: { at: 13.5, duration: 0.5, pitch: G4, velocity: 90 }
+  funk_drums:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_1: { at: 0, voice: kick, velocity: 110 }
+      kick_2: { at: 1, voice: kick, velocity: 102 }
+      kick_3: { at: 2, voice: kick, velocity: 112 }
+      kick_4: { at: 3, voice: kick, velocity: 104 }
+      snare_1: { at: 1, voice: snare, velocity: 112 }
+      snare_2: { at: 3, voice: snare, velocity: 116 }
+      hat_1: { at: 0, voice: closed_hat, velocity: 68 }
+      hat_2: { at: 0.5, voice: closed_hat, velocity: 76 }
+      hat_3: { at: 1, voice: closed_hat, velocity: 70 }
+      hat_4: { at: 1.5, voice: open_hat, velocity: 86 }
+      hat_5: { at: 2, voice: closed_hat, velocity: 72 }
+      hat_6: { at: 2.5, voice: closed_hat, velocity: 78 }
+      hat_7: { at: 3, voice: closed_hat, velocity: 74 }
+      hat_8: { at: 3.5, voice: open_hat, velocity: 90 }
+
+tracks:
+  - { id: bass, palette: funk, instrument: slap_bass, pattern: clip, clip: funk_bass, intensity: 0.82 }
+  - { id: clav, palette: funk, instrument: clavinet, pattern: clip, clip: funk_clav, intensity: 0.65 }
+  - { id: guitar, palette: funk, instrument: muted_guitar, pattern: clip, clip: funk_guitar, intensity: 1 }
+  - { id: horns, palette: funk, instrument: brass, pattern: clip, clip: funk_horns, intensity: 0.36 }
+  - { id: sax, palette: funk, instrument: sax, pattern: clip, clip: funk_sax, intensity: 0.65 }
+  - { id: kit, palette: funk, instrument: drums, pattern: clip, clip: funk_drums, intensity: 0.58 }

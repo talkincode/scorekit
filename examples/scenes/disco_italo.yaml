@@ -1,0 +1,99 @@
+# Rigid 80s machine pulse with octave bass, synth brass and a concise lead cell.
+title: Automatic Romance
+story: >-
+  An Italo-Disco loop built from a rigid machine pulse, octave synth bass,
+  synthetic strings, dramatic brass stabs, cowbell and a compact saw hook.
+tempo: 124
+key: C_minor
+time_signature: 4/4
+bars: 4
+loop: true
+harmony: [i, VI, III, VII]
+performance:
+  humanize: { timing_ms: 3, velocity: 3, seed: 1984 }
+  swing: 0.02
+
+clips:
+  italo_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      c_1: { at: 0, duration: 0.5, pitch: C2, velocity: 112 }
+      c_2: { at: 1, duration: 0.5, pitch: C3, velocity: 106 }
+      c_3: { at: 2, duration: 0.5, pitch: C2, velocity: 114 }
+      c_4: { at: 3, duration: 0.5, pitch: G2, velocity: 104 }
+      ab_1: { at: 4, duration: 0.5, pitch: Ab1, velocity: 112 }
+      ab_2: { at: 5, duration: 0.5, pitch: Ab2, velocity: 106 }
+      ab_3: { at: 6, duration: 0.5, pitch: Ab1, velocity: 114 }
+      ab_4: { at: 7, duration: 0.5, pitch: Eb2, velocity: 104 }
+      eb_1: { at: 8, duration: 0.5, pitch: Eb2, velocity: 112 }
+      eb_2: { at: 9, duration: 0.5, pitch: Eb3, velocity: 106 }
+      eb_3: { at: 10, duration: 0.5, pitch: Eb2, velocity: 114 }
+      eb_4: { at: 11, duration: 0.5, pitch: Bb2, velocity: 104 }
+      bb_1: { at: 12, duration: 0.5, pitch: Bb1, velocity: 112 }
+      bb_2: { at: 13, duration: 0.5, pitch: Bb2, velocity: 106 }
+      bb_3: { at: 14, duration: 0.5, pitch: Bb1, velocity: 114 }
+      bb_4: { at: 15, duration: 0.5, pitch: F2, velocity: 104 }
+  italo_brass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      c_1: { at: 0.5, duration: 0.25, pitch: G4, velocity: 92 }
+      c_2: { at: 2.5, duration: 0.25, pitch: C5, velocity: 96 }
+      ab_1: { at: 4.5, duration: 0.25, pitch: Eb5, velocity: 92 }
+      ab_2: { at: 6.5, duration: 0.25, pitch: Ab4, velocity: 96 }
+      eb_1: { at: 8.5, duration: 0.25, pitch: Bb4, velocity: 92 }
+      eb_2: { at: 10.5, duration: 0.25, pitch: Eb5, velocity: 96 }
+      bb_1: { at: 12.5, duration: 0.25, pitch: F5, velocity: 92 }
+      bb_2: { at: 14.5, duration: 0.25, pitch: Bb4, velocity: 98 }
+  italo_lead:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      note_1: { at: 1.5, duration: 0.5, pitch: G5, velocity: 92 }
+      note_2: { at: 3, duration: 0.5, pitch: C6, velocity: 98 }
+      note_3: { at: 5.5, duration: 0.5, pitch: Eb6, velocity: 92 }
+      note_4: { at: 7, duration: 0.5, pitch: C6, velocity: 88 }
+      note_5: { at: 9.5, duration: 0.5, pitch: Bb5, velocity: 92 }
+      note_6: { at: 11, duration: 0.5, pitch: G5, velocity: 88 }
+      note_7: { at: 13.5, duration: 0.5, pitch: F5, velocity: 92 }
+      note_8: { at: 15, duration: 0.5, pitch: G5, velocity: 100 }
+  italo_drums:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_1: { at: 0, voice: kick, velocity: 116 }
+      kick_2: { at: 1, voice: kick, velocity: 112 }
+      kick_3: { at: 2, voice: kick, velocity: 118 }
+      kick_4: { at: 3, voice: kick, velocity: 114 }
+      clap_1: { at: 1, voice: clap, velocity: 108 }
+      clap_2: { at: 3, voice: clap, velocity: 112 }
+      hat_1: { at: 0, voice: closed_hat, velocity: 70 }
+      hat_2: { at: 0.5, voice: open_hat, velocity: 90 }
+      hat_3: { at: 1, voice: closed_hat, velocity: 72 }
+      hat_4: { at: 1.5, voice: open_hat, velocity: 94 }
+      hat_5: { at: 2, voice: closed_hat, velocity: 70 }
+      hat_6: { at: 2.5, voice: open_hat, velocity: 92 }
+      hat_7: { at: 3, voice: closed_hat, velocity: 74 }
+      hat_8: { at: 3.5, voice: open_hat, velocity: 96 }
+  italo_aux:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      bell_1: { at: 0.75, voice: cowbell, velocity: 72 }
+      bell_2: { at: 1.75, voice: cowbell, velocity: 78 }
+      bell_3: { at: 2.75, voice: cowbell, velocity: 72 }
+      bell_4: { at: 3.75, voice: cowbell, velocity: 82 }
+
+tracks:
+  - { id: bass, palette: italo, instrument: synth_bass, pattern: clip, clip: italo_bass, intensity: 0.8 }
+  - { id: strings, palette: italo, instrument: synth_strings, pattern: sustain, intensity: 0.3 }
+  - { id: brass, palette: italo, instrument: synth_brass, pattern: clip, clip: italo_brass, intensity: 0.65 }
+  - { id: lead, palette: italo, instrument: saw_lead, pattern: clip, clip: italo_lead, intensity: 0.7 }
+  - { id: kit, palette: italo, instrument: drums, pattern: clip, clip: italo_drums, intensity: 0.58 }
+  - { id: auxiliary, palette: italo, instrument: drums, pattern: clip, clip: italo_aux, intensity: 0.38 }

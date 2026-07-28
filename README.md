@@ -17,7 +17,7 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 - **Seamless loops** — sample-exact length, no click at the loopback point.
 - **Stems** — one file per track (strings, piano, bass, drums…), all equal length and sample-aligned, so the engine can layer them dynamically (calm exploration → add drums when combat starts).
 - **Scene suites** — intro / explore / combat / victory sections that share the same musical motifs, compiled from a single file.
-- **Exact event clips** — stable-ID pitched/percussion events, section variants, and step automation for arrangements that need authored syncopation, fills, or talking-bass motion.
+- **Exact event clips** — stable-ID pitched/percussion events, section variants, and deterministic step/linear automation for arrangements that need authored syncopation, fills, filter sweeps, or talking-bass motion.
 - **Sound textures** — layer field recordings, ambience, and SFX (water, birds, engines…) as deterministic loops or beat-scheduled one-shots without baking local paths into the scene.
 - **`meta.json`** — exact loop points and sample counts, ready for your engine to consume.
 
@@ -110,6 +110,19 @@ profile-only melodic identities before writing a file rather than publish MIDI
 that a GM player would interpret as piano. Render those scenes through
 `build --renderer sfizz --orchestration <file>` instead; Tabla remains a
 channel-10 MIDI instrument.
+
+## Disco composition primitives
+
+The additive portable vocabulary includes exact GM `clavinet` (program 7) and
+`synth_brass` (program 62). A scene may use several `drums`/`tabla` tracks:
+they remain separate MIDI tracks and stems while sharing General MIDI channel
+10. Percussion clips also expose standard GM tambourine, cowbell, bongo,
+conga, timbale, agogo, cabasa, and maracas voices.
+
+Automation lanes accept `interpolation: step | linear` (`step` by default).
+Linear CC1/CC11/CC74/pitch-bend motion is sampled deterministically every 60
+ticks (a 32nd note at PPQ 480), so House filter movement remains diffable and
+byte-reproducible rather than becoming renderer-specific synthesis data.
 
 ## Field recordings, ambience, and SFX
 
@@ -245,6 +258,26 @@ scorekit build examples/scenes/heavy_dubstep.yaml --renderer sfizz \
   --orchestration "$SCOREDATA_ROOT/profiles/orchestrations/heavy-dubstep.yaml" \
   --texture-profile "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml" \
   --tail 0 --stems -o heavy-dubstep.wav
+```
+
+The Disco family ships as five deliberately different scene/grammar pairs:
+`nu_disco`, `disco_70s`, `disco_funk`, `disco_italo`, and `disco_house`.
+Their companion ScoreData identities use different drum, bass, keyboard, and
+ensemble sources behind one `disco.yaml` orchestration rather than copying one
+renderer profile. Every reference track selects its family palette explicitly;
+the House scene also demonstrates deterministic linear CC74 movement.
+
+```bash
+STYLE=nu-disco # disco-70s | disco-funk | disco-italo | disco-house
+SCENE=${STYLE//-/_}
+scorekit lint "examples/scenes/$SCENE.yaml" \
+  --grammar "examples/grammars/$SCENE.yaml"
+scorekit inspect-instruments "examples/scenes/$SCENE.yaml" \
+  --orchestration "$SCOREDATA_ROOT/profiles/orchestrations/disco.yaml" \
+  --fallback-mode strict
+scorekit build "examples/scenes/$SCENE.yaml" --renderer sfizz \
+  --orchestration "$SCOREDATA_ROOT/profiles/orchestrations/disco.yaml" \
+  --fallback-mode strict --tail 0 --stems -o "$STYLE.wav"
 ```
 
 ## Real instruments (SFZ sample libraries)

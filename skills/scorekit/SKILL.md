@@ -158,9 +158,10 @@ clips:                         # exact, stable-ID events for authored rhythm
     mode: loop                 # once | loop
     events:
       bark_01: { at: 0, duration: 0.5, pitch: F1, velocity: 127 }
-    automation:                # step lanes: cc1 | cc11 | cc74 | pitch_bend
+    automation:                # cc1 | cc11 | cc74 | pitch_bend
       mouth:
         target: cc1
+        interpolation: linear  # step (default) | linear (fixed 60-tick grid)
         points:
           shut: { at: 0, value: 0 }
           open: { at: 0.25, value: 127 }
@@ -192,12 +193,13 @@ Every track needs a stable, unique `id` (`[a-z][a-z0-9_-]{0,63}`) — used by
 Patterns: `melody` (plays its `motif`) · `sustain` (whole-bar chords) ·
 `arpeggio` (broken chords) · `bass` (roots) · `drums` (groove, `drums`
 instrument only) · `tabla` (fixed 16-beat theka, `tabla` instrument only) ·
-`clip` (exact pitched/percussion events and optional step automation).
+`clip` (exact pitched/percussion events and optional step/linear automation).
 Clip/event/lane/point maps use stable IDs, so key reordering is MIDI- and
 diff-inert. Beat positions quantize to PPQ 480; loop clips must divide every
 active scene/section and automation must return to its initial value. Clip
 timing ignores swing/legato/humanize; intensity/dynamics still scale velocity.
-The vocabulary contains the 60-instrument core plus 11 exact-source world
+The vocabulary contains the 60-instrument core, the exact GM `clavinet` and
+`synth_brass` Disco extensions, plus 11 exact-source world
 identities (`erhu`, `pipa`, `guzheng`, `dizi`, `shakuhachi`, `shamisen`,
 `sitar`, `tabla`, `oud`, `ney`, `duduk`). Only shakuhachi, sitar, and shamisen
 have exact GM programs; the others require real renderer-profile mappings and
@@ -322,6 +324,16 @@ scorekit build examples/scenes/heavy_dubstep.yaml --renderer sfizz \
   --texture-profile "$SCOREDATA_ROOT/profiles/textures/heavy-dubstep.yaml" \
   --tail 0 --stems -o heavy-dubstep.wav
 ```
+
+Five shipped Disco constitutions exercise the additive M16 protocol:
+`nu_disco`, `disco_70s`, `disco_funk`, `disco_italo`, and `disco_house`
+under `examples/scenes/` with matching grammars. The ScoreData companion
+provides one `profiles/orchestrations/disco.yaml` entrypoint whose `nu-disco`,
+`seventies`, `funk`, `italo`, and `house` palettes retain five independent
+renderer profiles. Every reference track names its palette explicitly. Always
+inspect with `--fallback-mode strict` before building; do not exchange leaf
+profiles to silence a gap because their different sources are the family
+identity.
 
 ## Arrangement audit (self-check + standalone)
 

@@ -1,0 +1,131 @@
+# Live late-1970s palette: acoustic kit, rhythm section, strings and horn lifts.
+title: Mirrorball Avenue
+story: >-
+  A live dancefloor loop with warm bass, clipped guitar, electric keys,
+  tambourine lift, lush strings, and short horn answers.
+tempo: 120
+key: E_major
+time_signature: 4/4
+bars: 4
+loop: true
+harmony: [I, IV, ii, V]
+performance:
+  humanize: { timing_ms: 14, velocity: 8, seed: 1977 }
+  swing: 0.1
+
+clips:
+  seventies_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      e_1: { at: 0, duration: 0.5, pitch: E1, velocity: 108 }
+      e_2: { at: 0.75, duration: 0.25, pitch: B1, velocity: 96 }
+      e_3: { at: 1.5, duration: 0.5, pitch: E2, velocity: 104 }
+      e_4: { at: 2.5, duration: 0.25, pitch: G#1, velocity: 98 }
+      e_5: { at: 3.25, duration: 0.5, pitch: B1, velocity: 102 }
+      a_1: { at: 4, duration: 0.5, pitch: A1, velocity: 108 }
+      a_2: { at: 4.75, duration: 0.25, pitch: E2, velocity: 96 }
+      a_3: { at: 5.5, duration: 0.5, pitch: A2, velocity: 104 }
+      a_4: { at: 6.5, duration: 0.25, pitch: C#2, velocity: 98 }
+      a_5: { at: 7.25, duration: 0.5, pitch: E2, velocity: 102 }
+      fs_1: { at: 8, duration: 0.5, pitch: F#1, velocity: 108 }
+      fs_2: { at: 8.75, duration: 0.25, pitch: C#2, velocity: 96 }
+      fs_3: { at: 9.5, duration: 0.5, pitch: F#2, velocity: 104 }
+      fs_4: { at: 10.5, duration: 0.25, pitch: A1, velocity: 98 }
+      fs_5: { at: 11.25, duration: 0.5, pitch: C#2, velocity: 102 }
+      b_1: { at: 12, duration: 0.5, pitch: B1, velocity: 108 }
+      b_2: { at: 12.75, duration: 0.25, pitch: F#2, velocity: 96 }
+      b_3: { at: 13.5, duration: 0.5, pitch: B2, velocity: 104 }
+      b_4: { at: 14.5, duration: 0.25, pitch: D#2, velocity: 98 }
+      b_5: { at: 15.25, duration: 0.5, pitch: F#2, velocity: 104 }
+  seventies_guitar:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      e_1: { at: 0.5, duration: 0.25, pitch: B3, velocity: 82 }
+      e_2: { at: 2.5, duration: 0.25, pitch: G#4, velocity: 86 }
+      a_1: { at: 4.5, duration: 0.25, pitch: E4, velocity: 82 }
+      a_2: { at: 6.5, duration: 0.25, pitch: C#4, velocity: 86 }
+      fs_1: { at: 8.5, duration: 0.25, pitch: C#4, velocity: 82 }
+      fs_2: { at: 10.5, duration: 0.25, pitch: A4, velocity: 86 }
+      b_1: { at: 12.5, duration: 0.25, pitch: F#4, velocity: 82 }
+      b_2: { at: 14.5, duration: 0.25, pitch: D#4, velocity: 88 }
+  seventies_keys:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      e_1: { at: 1.5, duration: 0.25, pitch: G#4, velocity: 70 }
+      e_2: { at: 3.5, duration: 0.25, pitch: B4, velocity: 74 }
+      a_1: { at: 5.5, duration: 0.25, pitch: C#5, velocity: 70 }
+      a_2: { at: 7.5, duration: 0.25, pitch: E5, velocity: 74 }
+      fs_1: { at: 9.5, duration: 0.25, pitch: A4, velocity: 70 }
+      fs_2: { at: 11.5, duration: 0.25, pitch: C#5, velocity: 74 }
+      b_1: { at: 13.5, duration: 0.25, pitch: D#5, velocity: 70 }
+      b_2: { at: 15.5, duration: 0.25, pitch: F#5, velocity: 76 }
+  seventies_clav:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      stab_1: { at: 0.25, duration: 0.125, pitch: E4, velocity: 86 }
+      stab_2: { at: 3.25, duration: 0.125, pitch: B4, velocity: 82 }
+      stab_3: { at: 4.25, duration: 0.125, pitch: A4, velocity: 86 }
+      stab_4: { at: 7.25, duration: 0.125, pitch: E5, velocity: 82 }
+      stab_5: { at: 8.25, duration: 0.125, pitch: F#4, velocity: 86 }
+      stab_6: { at: 11.25, duration: 0.125, pitch: C#5, velocity: 82 }
+      stab_7: { at: 12.25, duration: 0.125, pitch: B4, velocity: 86 }
+      stab_8: { at: 15.25, duration: 0.125, pitch: F#5, velocity: 84 }
+  seventies_horns:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      horn_1: { at: 3.5, duration: 0.25, pitch: E5, velocity: 92 }
+      horn_2: { at: 7.5, duration: 0.25, pitch: A4, velocity: 90 }
+      horn_3: { at: 11.5, duration: 0.25, pitch: F#5, velocity: 94 }
+      horn_4: { at: 15.5, duration: 0.25, pitch: B4, velocity: 98 }
+  seventies_drums:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_1: { at: 0, voice: kick, velocity: 112 }
+      kick_2: { at: 1, voice: kick, velocity: 108 }
+      kick_3: { at: 2, voice: kick, velocity: 114 }
+      kick_4: { at: 3, voice: kick, velocity: 110 }
+      snare_1: { at: 1, voice: snare, velocity: 108 }
+      snare_2: { at: 3, voice: snare, velocity: 112 }
+      hat_1: { at: 0, voice: closed_hat, velocity: 66 }
+      hat_2: { at: 0.5, voice: open_hat, velocity: 82 }
+      hat_3: { at: 1, voice: closed_hat, velocity: 70 }
+      hat_4: { at: 1.5, voice: open_hat, velocity: 86 }
+      hat_5: { at: 2, voice: closed_hat, velocity: 68 }
+      hat_6: { at: 2.5, voice: open_hat, velocity: 84 }
+      hat_7: { at: 3, voice: closed_hat, velocity: 72 }
+      hat_8: { at: 3.5, voice: open_hat, velocity: 90 }
+  seventies_aux:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      tamb_1: { at: 0.5, voice: tambourine, velocity: 78 }
+      tamb_2: { at: 1, voice: tambourine, velocity: 72 }
+      tamb_3: { at: 1.5, voice: tambourine, velocity: 82 }
+      tamb_4: { at: 2.5, voice: tambourine, velocity: 80 }
+      tamb_5: { at: 3, voice: tambourine, velocity: 74 }
+      tamb_6: { at: 3.5, voice: tambourine, velocity: 86 }
+      cowbell_1: { at: 1.75, voice: cowbell, velocity: 62 }
+      cowbell_2: { at: 3.75, voice: cowbell, velocity: 66 }
+
+tracks:
+  - { id: bass, palette: seventies, instrument: bass, pattern: clip, clip: seventies_bass, intensity: 0.78 }
+  - { id: guitar, palette: seventies, instrument: muted_guitar, pattern: clip, clip: seventies_guitar, intensity: 0.9 }
+  - { id: keys, palette: seventies, instrument: epiano, pattern: clip, clip: seventies_keys, intensity: 0.85 }
+  - { id: clav, palette: seventies, instrument: clavinet, pattern: clip, clip: seventies_clav, intensity: 0.55 }
+  - { id: strings, palette: seventies, instrument: strings, pattern: sustain, intensity: 0.28 }
+  - { id: horns, palette: seventies, instrument: brass, pattern: clip, clip: seventies_horns, intensity: 0.45 }
+  - { id: kit, palette: seventies, instrument: drums, pattern: clip, clip: seventies_drums, intensity: 0.58 }
+  - { id: auxiliary, palette: seventies, instrument: drums, pattern: clip, clip: seventies_aux, intensity: 0.5 }

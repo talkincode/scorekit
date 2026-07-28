@@ -1,0 +1,118 @@
+# Polished Nu-Disco: exact rhythm clips over one restrained synth-string bed.
+title: Neon Highway
+story: >-
+  A bright, controlled night-drive loop with a clean four-on-the-floor pulse,
+  syncopated bass, clipped guitar and keys, and one concise brass hook.
+tempo: 118
+key: A_major
+time_signature: 4/4
+bars: 4
+loop: true
+harmony: [I, vi, IV, V]
+performance:
+  humanize: { timing_ms: 8, velocity: 5, seed: 118 }
+  swing: 0.08
+
+clips:
+  nu_disco_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      a_01: { at: 0, duration: 0.5, pitch: A1, velocity: 112 }
+      a_02: { at: 0.75, duration: 0.25, pitch: E2, velocity: 102 }
+      a_03: { at: 1, duration: 0.5, pitch: A2, velocity: 108 }
+      a_04: { at: 2, duration: 0.5, pitch: A1, velocity: 116 }
+      a_05: { at: 2.75, duration: 0.25, pitch: C#2, velocity: 100 }
+      a_06: { at: 3.5, duration: 0.25, pitch: E2, velocity: 106 }
+      fs_01: { at: 4, duration: 0.5, pitch: F#1, velocity: 112 }
+      fs_02: { at: 4.75, duration: 0.25, pitch: C#2, velocity: 102 }
+      fs_03: { at: 5, duration: 0.5, pitch: F#2, velocity: 108 }
+      fs_04: { at: 6, duration: 0.5, pitch: F#1, velocity: 116 }
+      fs_05: { at: 6.75, duration: 0.25, pitch: A1, velocity: 100 }
+      fs_06: { at: 7.5, duration: 0.25, pitch: C#2, velocity: 106 }
+      d_01: { at: 8, duration: 0.5, pitch: D2, velocity: 112 }
+      d_02: { at: 8.75, duration: 0.25, pitch: A2, velocity: 102 }
+      d_03: { at: 9, duration: 0.5, pitch: D3, velocity: 108 }
+      d_04: { at: 10, duration: 0.5, pitch: D2, velocity: 116 }
+      d_05: { at: 10.75, duration: 0.25, pitch: F#2, velocity: 100 }
+      d_06: { at: 11.5, duration: 0.25, pitch: A2, velocity: 106 }
+      e_01: { at: 12, duration: 0.5, pitch: E2, velocity: 112 }
+      e_02: { at: 12.75, duration: 0.25, pitch: B2, velocity: 102 }
+      e_03: { at: 13, duration: 0.5, pitch: E3, velocity: 108 }
+      e_04: { at: 14, duration: 0.5, pitch: E2, velocity: 116 }
+      e_05: { at: 14.75, duration: 0.25, pitch: G#2, velocity: 100 }
+      e_06: { at: 15.5, duration: 0.25, pitch: B2, velocity: 106 }
+  nu_disco_guitar:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      a_1: { at: 0.5, duration: 0.25, pitch: E4, velocity: 88 }
+      a_2: { at: 2.5, duration: 0.25, pitch: C#4, velocity: 82 }
+      fs_1: { at: 4.5, duration: 0.25, pitch: C#4, velocity: 88 }
+      fs_2: { at: 6.5, duration: 0.25, pitch: A3, velocity: 82 }
+      d_1: { at: 8.5, duration: 0.25, pitch: A3, velocity: 88 }
+      d_2: { at: 10.5, duration: 0.25, pitch: F#4, velocity: 82 }
+      e_1: { at: 12.5, duration: 0.25, pitch: B3, velocity: 88 }
+      e_2: { at: 14.5, duration: 0.25, pitch: G#4, velocity: 84 }
+  nu_disco_keys:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      a_1: { at: 1.5, duration: 0.25, pitch: C#5, velocity: 76 }
+      a_2: { at: 3.5, duration: 0.25, pitch: E5, velocity: 72 }
+      fs_1: { at: 5.5, duration: 0.25, pitch: A4, velocity: 76 }
+      fs_2: { at: 7.5, duration: 0.25, pitch: C#5, velocity: 72 }
+      d_1: { at: 9.5, duration: 0.25, pitch: F#4, velocity: 76 }
+      d_2: { at: 11.5, duration: 0.25, pitch: A4, velocity: 72 }
+      e_1: { at: 13.5, duration: 0.25, pitch: G#4, velocity: 76 }
+      e_2: { at: 15.5, duration: 0.25, pitch: B4, velocity: 74 }
+  nu_disco_hook:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      hook_1: { at: 3.25, duration: 0.25, pitch: A4, velocity: 94 }
+      hook_2: { at: 7.25, duration: 0.25, pitch: F#4, velocity: 90 }
+      hook_3: { at: 11.25, duration: 0.25, pitch: D5, velocity: 96 }
+      hook_4: { at: 15.25, duration: 0.25, pitch: E5, velocity: 100 }
+  nu_disco_drums:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_1: { at: 0, voice: kick, velocity: 118 }
+      kick_2: { at: 1, voice: kick, velocity: 112 }
+      kick_3: { at: 2, voice: kick, velocity: 120 }
+      kick_4: { at: 3, voice: kick, velocity: 114 }
+      clap_1: { at: 1, voice: clap, velocity: 110 }
+      clap_2: { at: 3, voice: clap, velocity: 114 }
+      hat_1: { at: 0, voice: closed_hat, velocity: 72 }
+      hat_2: { at: 0.5, voice: open_hat, velocity: 92 }
+      hat_3: { at: 1, voice: closed_hat, velocity: 76 }
+      hat_4: { at: 1.5, voice: open_hat, velocity: 96 }
+      hat_5: { at: 2, voice: closed_hat, velocity: 74 }
+      hat_6: { at: 2.5, voice: open_hat, velocity: 94 }
+      hat_7: { at: 3, voice: closed_hat, velocity: 78 }
+      hat_8: { at: 3.5, voice: open_hat, velocity: 100 }
+  nu_disco_aux:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      tamb_1: { at: 0.5, voice: tambourine, velocity: 72 }
+      tamb_2: { at: 1.5, voice: tambourine, velocity: 76 }
+      tamb_3: { at: 2.5, voice: tambourine, velocity: 74 }
+      tamb_4: { at: 3.5, voice: tambourine, velocity: 82 }
+      bell: { at: 3.75, voice: cowbell, velocity: 66 }
+
+tracks:
+  - { id: bass, palette: nu-disco, instrument: bass, pattern: clip, clip: nu_disco_bass, intensity: 0.82 }
+  - { id: guitar, palette: nu-disco, instrument: muted_guitar, pattern: clip, clip: nu_disco_guitar, intensity: 0.85 }
+  - { id: keys, palette: nu-disco, instrument: epiano, pattern: clip, clip: nu_disco_keys, intensity: 0.8 }
+  - { id: strings, palette: nu-disco, instrument: synth_strings, pattern: sustain, intensity: 0.3 }
+  - { id: hook, palette: nu-disco, instrument: synth_brass, pattern: clip, clip: nu_disco_hook, intensity: 0.75 }
+  - { id: kit, palette: nu-disco, instrument: drums, pattern: clip, clip: nu_disco_drums, intensity: 0.58 }
+  - { id: auxiliary, palette: nu-disco, instrument: drums, pattern: clip, clip: nu_disco_aux, intensity: 0.35 }

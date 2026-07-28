@@ -154,9 +154,17 @@ pub const WORLD_INSTRUMENTS: [Instrument; 11] = {
     ]
 };
 
+/// Additive Disco vocabulary. These identities do not alter the original core
+/// baseline or the exact-source-only world-instrument extension.
+#[cfg(test)]
+pub const DISCO_INSTRUMENTS: [Instrument; 2] = {
+    use Instrument::*;
+    [Clavinet, SynthBrass]
+};
+
 /// Every `Instrument` variant, in enum declaration order. Guarded by a test
 /// against the exported JSON schema so it cannot silently fall out of sync.
-pub const ALL: [Instrument; 71] = {
+pub const ALL: [Instrument; 73] = {
     use Instrument::*;
     [
         Piano,
@@ -230,6 +238,8 @@ pub const ALL: [Instrument; 71] = {
         Oud,
         Ney,
         Duduk,
+        Clavinet,
+        SynthBrass,
     ]
 };
 
@@ -1196,6 +1206,30 @@ pub fn spec(i: Instrument) -> InstrumentSpec {
             0.36,
             0.86,
         ),
+        I::Clavinet => s(
+            F::Keyboards,
+            "clavinet",
+            36,
+            96,
+            ART_BASIC,
+            DECAY_FAST,
+            &[RM, RH, RR],
+            false,
+            0.72,
+            0.42,
+        ),
+        I::SynthBrass => s(
+            F::Synth,
+            "synth_brass",
+            36,
+            96,
+            ART_BASIC,
+            SUS_FAST,
+            &[RM, RH, RP, RR],
+            true,
+            0.70,
+            0.50,
+        ),
     }
 }
 
@@ -1242,6 +1276,7 @@ const ALIASES: &[(&str, Instrument)] = &[
     ("bright_acoustic_piano", Instrument::BrightPiano),
     ("choir_aahs", Instrument::Choir),
     ("church_organ", Instrument::Organ),
+    ("clav", Instrument::Clavinet),
     ("classical_guitar", Instrument::Guitar),
     ("contra_bass", Instrument::Contrabass),
     ("cor_anglais", Instrument::EnglishHorn),
@@ -1268,6 +1303,7 @@ const ALIASES: &[(&str, Instrument)] = &[
     ("square_wave", Instrument::SquareLead),
     ("string_ensemble", Instrument::Strings),
     ("string_section", Instrument::Strings),
+    ("synth_brass_1", Instrument::SynthBrass),
     ("synth_pad", Instrument::Pad),
     ("upright_bass", Instrument::Contrabass),
     ("vibes", Instrument::Vibraphone),
@@ -1398,11 +1434,19 @@ mod tests {
             ALL.iter().map(|&i| instrument_key(i)).collect();
         assert_eq!(names, ours);
         assert_eq!(ALL.len(), names.len(), "duplicate entries in ALL");
-        assert_eq!(ALL.len(), CORE_INSTRUMENT_COUNT + WORLD_INSTRUMENTS.len());
         assert_eq!(
-            &ALL[CORE_INSTRUMENT_COUNT..],
+            ALL.len(),
+            CORE_INSTRUMENT_COUNT + WORLD_INSTRUMENTS.len() + DISCO_INSTRUMENTS.len()
+        );
+        assert_eq!(
+            &ALL[CORE_INSTRUMENT_COUNT..CORE_INSTRUMENT_COUNT + WORLD_INSTRUMENTS.len()],
             &WORLD_INSTRUMENTS,
             "world vocabulary must stay an additive extension after the core baseline"
+        );
+        assert_eq!(
+            &ALL[CORE_INSTRUMENT_COUNT + WORLD_INSTRUMENTS.len()..],
+            &DISCO_INSTRUMENTS,
+            "Disco vocabulary must stay additive after the world extension"
         );
     }
 

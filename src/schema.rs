@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const MAX_EXPANDED_CLIP_EVENTS_PER_TRACK: u64 = 65_536;
+/// Linear automation is sampled every 1/8 of a quarter note (a 32nd note).
+pub const AUTOMATION_GRID_TICKS: u32 = 480 / 8;
 
 /// A scene is the unit of compilation: one loopable piece of game music, or —
 /// when `sections` is present — a suite of related cues sharing tracks,
@@ -63,8 +65,8 @@ pub struct Scene {
     #[serde(default)]
     #[schemars(length(max = 16))]
     pub textures: Vec<TextureTrack>,
-    /// Instrument tracks. 1..=16 entries, at most 15 melodic plus one
-    /// percussion track (`drums` or `tabla`).
+    /// Instrument tracks. 1..=16 entries, with at most 15 melodic tracks.
+    /// Any percussion tracks share General MIDI channel 10.
     #[schemars(length(min = 1, max = 16))]
     pub tracks: Vec<Track>,
     /// Suite sections. When present, `build` emits one asset per section
@@ -123,7 +125,7 @@ pub struct Clip {
     /// Stable event identity to exact note/percussion data.
     #[schemars(length(min = 1, max = 2048))]
     pub events: BTreeMap<String, ClipEvent>,
-    /// Deterministic step automation keyed by stable lane identity.
+    /// Deterministic step or linear automation keyed by stable lane identity.
     #[serde(default)]
     #[schemars(length(max = 4))]
     pub automation: BTreeMap<String, AutomationLane>,
@@ -171,9 +173,21 @@ pub struct ClipEvent {
 pub struct AutomationLane {
     /// Portable MIDI controller or pitch-bend target.
     pub target: AutomationTarget,
-    /// Stable point identity to exact step value.
+    /// Hold each point until the next one, or sample a linear ramp on the
+    /// protocol's fixed 60-tick grid. Default: `step`.
+    #[serde(default)]
+    pub interpolation: AutomationInterpolation,
+    /// Stable point identity to exact authored value.
     #[schemars(length(min = 1, max = 512))]
     pub points: BTreeMap<String, AutomationPoint>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationInterpolation {
+    #[default]
+    Step,
+    Linear,
 }
 
 #[derive(
@@ -235,6 +249,19 @@ pub enum PercussionVoice {
     HighTom,
     Crash,
     Ride,
+    Tambourine,
+    Cowbell,
+    HighBongo,
+    LowBongo,
+    MuteHighConga,
+    OpenHighConga,
+    LowConga,
+    HighTimbale,
+    LowTimbale,
+    HighAgogo,
+    LowAgogo,
+    Cabasa,
+    Maracas,
 }
 
 impl PercussionVoice {
@@ -251,6 +278,19 @@ impl PercussionVoice {
             PercussionVoice::HighTom => 50,
             PercussionVoice::Crash => 49,
             PercussionVoice::Ride => 51,
+            PercussionVoice::Tambourine => 54,
+            PercussionVoice::Cowbell => 56,
+            PercussionVoice::HighBongo => 60,
+            PercussionVoice::LowBongo => 61,
+            PercussionVoice::MuteHighConga => 62,
+            PercussionVoice::OpenHighConga => 63,
+            PercussionVoice::LowConga => 64,
+            PercussionVoice::HighTimbale => 65,
+            PercussionVoice::LowTimbale => 66,
+            PercussionVoice::HighAgogo => 67,
+            PercussionVoice::LowAgogo => 68,
+            PercussionVoice::Cabasa => 69,
+            PercussionVoice::Maracas => 70,
         }
     }
 }
@@ -277,7 +317,7 @@ fn expanded_clip_event_count(clip: &Clip, timeline_ticks: u32) -> u64 {
         + clip
             .automation
             .values()
-            .map(|lane| lane.points.len() as u64)
+            .map(automation_lane_event_count)
             .sum::<u64>();
     let passes = match clip.mode {
         ClipMode::Once => 1,
@@ -288,6 +328,26 @@ fn expanded_clip_event_count(clip: &Clip, timeline_ticks: u32) -> u64 {
         }
     };
     authored.saturating_mul(passes)
+}
+
+fn automation_lane_event_count(lane: &AutomationLane) -> u64 {
+    if lane.interpolation == AutomationInterpolation::Step || lane.points.len() < 2 {
+        return lane.points.len() as u64;
+    }
+    let mut ticks: Vec<u32> = lane
+        .points
+        .values()
+        .map(|point| quarter_beats_to_ticks(point.at).expect("automation point is validated"))
+        .collect();
+    ticks.sort_unstable();
+    let sampled_segments = ticks
+        .windows(2)
+        .map(|pair| {
+            let span = pair[1] - pair[0];
+            u64::from(span.div_ceil(AUTOMATION_GRID_TICKS))
+        })
+        .sum::<u64>();
+    sampled_segments + 1
 }
 
 /// Parse scientific pitch notation with `C-1 = 0`, `C4 = 60`, `A4 = 69`.
@@ -650,6 +710,8 @@ pub enum Instrument {
     Oud,
     Ney,
     Duduk,
+    Clavinet,
+    SynthBrass,
 }
 
 impl Instrument {
@@ -720,6 +782,8 @@ impl Instrument {
             Shakuhachi => Some(77),
             Sitar => Some(104),
             Shamisen => Some(106),
+            Clavinet => Some(7),
+            SynthBrass => Some(62),
             Drums | Erhu | Pipa | Guzheng | Dizi | Tabla | Oud | Ney | Duduk => None,
         }
     }
@@ -1267,20 +1331,14 @@ impl Scene {
             .iter()
             .filter(|t| !t.instrument.is_percussion())
             .count();
-        let percussion = self.tracks.len() - melodic;
         if melodic > 15 {
             return fail(
                 "tracks",
                 format!("{melodic} melodic tracks exceed the 15-channel limit"),
             );
         }
-        if percussion > 1 {
-            return fail(
-                "tracks",
-                "at most one percussion track (`drums` or `tabla`) is supported".to_owned(),
-            );
-        }
         let mut track_ids = std::collections::BTreeSet::new();
+        let mut percussion_channel_state: Option<(Option<u8>, Option<u8>)> = None;
         let scene_ticks =
             u32::from(self.bars) * u32::from(time_sig.num) * 480 * 4 / u32::from(time_sig.den);
         for (i, t) in self.tracks.iter().enumerate() {
@@ -1330,6 +1388,30 @@ impl Scene {
                     &format!("tracks[{i}].reverb"),
                     format!("{reverb} out of range 0.0..=1.0"),
                 );
+            }
+            if t.instrument.is_percussion() {
+                let state = (
+                    t.pan.map(|value| (value * 127.0).round() as u8),
+                    t.reverb.map(|value| (value * 127.0).round() as u8),
+                );
+                if let Some(expected) = percussion_channel_state {
+                    if state.0 != expected.0 {
+                        return fail(
+                            &format!("tracks[{i}].pan"),
+                            "percussion tracks share MIDI channel 10 and must use the same `pan`"
+                                .to_owned(),
+                        );
+                    }
+                    if state.1 != expected.1 {
+                        return fail(
+                            &format!("tracks[{i}].reverb"),
+                            "percussion tracks share MIDI channel 10 and must use the same `reverb`"
+                                .to_owned(),
+                        );
+                    }
+                } else {
+                    percussion_channel_state = Some(state);
+                }
             }
             if let Some(glide) = t.glide {
                 if !(0.0..=1.0).contains(&glide) {
@@ -1692,4 +1774,29 @@ pub fn load_scene(path: &Path) -> Result<Scene> {
 pub fn schema_json() -> String {
     let schema = schemars::schema_for!(Scene);
     serde_json::to_string_pretty(&schema).expect("schema serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percussion_voice_midi_keys_are_unique() {
+        let schema: serde_json::Value = serde_json::from_str(&schema_json()).unwrap();
+        let names = schema["$defs"]["PercussionVoice"]["enum"]
+            .as_array()
+            .expect("PercussionVoice enum");
+        let mut keys = std::collections::BTreeMap::new();
+        for name in names {
+            let voice: PercussionVoice = serde_json::from_value(name.clone()).unwrap();
+            let name = name.as_str().unwrap().to_owned();
+            if let Some(existing) = keys.insert(voice.midi_key(), name.clone()) {
+                panic!(
+                    "percussion voices `{existing}` and `{name}` share GM key {}",
+                    voice.midi_key()
+                );
+            }
+        }
+        assert_eq!(keys.len(), names.len());
+    }
 }

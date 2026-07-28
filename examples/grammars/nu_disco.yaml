@@ -1,0 +1,13 @@
+name: nu_disco
+description: Polished Nu-Disco with a steady four-on-the-floor pocket.
+rules:
+  tempo_min: 118
+  tempo_max: 118
+  pads_max: 1
+  melodic_voices_max: 0
+  harmony_allowed: [I, vi, IV, V]
+  require_performance: true
+  percussion_events_per_bar_min: 18
+  percussion_onsets:
+    - { voice: kick, positions: [0, 1, 2, 3], coverage_min: 1 }
+    - { voice: clap, positions: [1, 3], coverage_min: 1 }

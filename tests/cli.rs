@@ -544,6 +544,248 @@ fn validate_applies_clip_expansion_budget_to_suite_sections() {
 }
 
 #[test]
+fn validate_counts_generated_linear_samples_against_the_event_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("linear-explosive.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\ntime_signature: 12/2\nbars: 256\nclips:\n  sweep:\n    kind: pitched\n    length_beats: 24\n    mode: loop\n    events:\n      hit: { at: 0, duration: 1, pitch: C2, velocity: 100 }\n    automation:\n      brightness:\n        target: cc74\n        interpolation: linear\n        points:\n          start: { at: 0, value: 0 }\n          peak: { at: 12, value: 127 }\n          seal: { at: 23.875, value: 0 }\n      expression:\n        target: cc11\n        interpolation: linear\n        points:\n          start: { at: 0, value: 0 }\n          peak: { at: 12, value: 127 }\n          seal: { at: 23.875, value: 0 }\ntracks:\n  - { id: stab, instrument: synth_brass, pattern: clip, clip: sweep }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "validate"])
+        .arg(&scene)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "tracks[0].clip");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("expands to 98560"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn multiple_percussion_tracks_share_channel_ten_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("multi-percussion.yaml");
+    fs::write(
+        &scene,
+        "tempo: 118\nbars: 2\ntracks:\n  - { id: kit, instrument: drums, pattern: drums }\n  - { id: auxiliary, instrument: drums, pattern: drums }\n",
+    )
+    .unwrap();
+
+    bin().arg("validate").arg(&scene).assert().success();
+
+    let first = dir.path().join("first.mid");
+    let second = dir.path().join("second.mid");
+    for output in [&first, &second] {
+        bin()
+            .arg("midi")
+            .arg(&scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&first).unwrap();
+    assert_eq!(bytes, fs::read(&second).unwrap());
+
+    let smf = midly::Smf::parse(&bytes).expect("multi-percussion MIDI parses");
+    assert_eq!(smf.tracks.len(), 3, "conductor plus two percussion tracks");
+    for track in &smf.tracks[1..] {
+        let mut note_ons = 0;
+        for event in track {
+            match event.kind {
+                midly::TrackEventKind::Midi {
+                    channel,
+                    message: midly::MidiMessage::NoteOn { vel, .. },
+                } if vel.as_int() > 0 => {
+                    assert_eq!(channel.as_int(), 9);
+                    note_ons += 1;
+                }
+                midly::TrackEventKind::Midi {
+                    message: midly::MidiMessage::ProgramChange { .. },
+                    ..
+                } => panic!("percussion tracks must not emit program changes"),
+                _ => {}
+            }
+        }
+        assert!(note_ons > 0);
+    }
+}
+
+#[test]
+fn validate_rejects_conflicting_channel_controls_across_percussion_tracks() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "pan",
+            "  - { id: kit, instrument: drums, pattern: drums, pan: 0.25 }\n  - { id: auxiliary, instrument: drums, pattern: drums, pan: 0.75 }\n",
+        ),
+        (
+            "reverb",
+            "  - { id: kit, instrument: drums, pattern: drums, reverb: 0.1 }\n  - { id: auxiliary, instrument: drums, pattern: drums, reverb: 0.5 }\n",
+        ),
+    ];
+    for (field, tracks) in cases {
+        let scene = dir.path().join(format!("conflicting-{field}.yaml"));
+        fs::write(&scene, format!("tempo: 118\nbars: 2\ntracks:\n{tracks}")).unwrap();
+        let out = bin()
+            .args(["--json", "validate"])
+            .arg(&scene)
+            .assert()
+            .code(2);
+        let error: serde_json::Value =
+            serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+        assert_eq!(error["field"], format!("tracks[1].{field}"));
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("share MIDI channel 10"),
+            "error: {error}"
+        );
+    }
+}
+
+#[test]
+fn disco_auxiliary_percussion_voices_are_public_and_emit_standard_gm_keys() {
+    let schema_out = bin().arg("schema").assert().success();
+    let schema: serde_json::Value =
+        serde_json::from_slice(&schema_out.get_output().stdout).expect("schema is JSON");
+    let voices = schema["$defs"]["PercussionVoice"]["enum"]
+        .as_array()
+        .expect("PercussionVoice enum");
+    let expected = [
+        ("tambourine", 54u8),
+        ("cowbell", 56),
+        ("high_bongo", 60),
+        ("low_bongo", 61),
+        ("mute_high_conga", 62),
+        ("open_high_conga", 63),
+        ("low_conga", 64),
+        ("high_timbale", 65),
+        ("low_timbale", 66),
+        ("high_agogo", 67),
+        ("low_agogo", 68),
+        ("cabasa", 69),
+        ("maracas", 70),
+    ];
+    for (name, _) in expected {
+        assert!(
+            voices.iter().any(|voice| voice == name),
+            "schema is missing `{name}`"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("disco-percussion.yaml");
+    fs::write(
+        &scene,
+        "tempo: 118\nbars: 1\nclips:\n  auxiliary:\n    kind: percussion\n    length_beats: 4\n    mode: once\n    events:\n      e01: { at: 0.00, duration: 0.125, voice: tambourine, velocity: 100 }\n      e02: { at: 0.25, duration: 0.125, voice: cowbell, velocity: 100 }\n      e03: { at: 0.50, duration: 0.125, voice: high_bongo, velocity: 100 }\n      e04: { at: 0.75, duration: 0.125, voice: low_bongo, velocity: 100 }\n      e05: { at: 1.00, duration: 0.125, voice: mute_high_conga, velocity: 100 }\n      e06: { at: 1.25, duration: 0.125, voice: open_high_conga, velocity: 100 }\n      e07: { at: 1.50, duration: 0.125, voice: low_conga, velocity: 100 }\n      e08: { at: 1.75, duration: 0.125, voice: high_timbale, velocity: 100 }\n      e09: { at: 2.00, duration: 0.125, voice: low_timbale, velocity: 100 }\n      e10: { at: 2.25, duration: 0.125, voice: high_agogo, velocity: 100 }\n      e11: { at: 2.50, duration: 0.125, voice: low_agogo, velocity: 100 }\n      e12: { at: 2.75, duration: 0.125, voice: cabasa, velocity: 100 }\n      e13: { at: 3.00, duration: 0.125, voice: maracas, velocity: 100 }\ntracks:\n  - { id: auxiliary, instrument: drums, pattern: clip, clip: auxiliary }\n",
+    )
+    .unwrap();
+    bin().arg("validate").arg(&scene).assert().success();
+    let midi = dir.path().join("disco-percussion.mid");
+    bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&midi)
+        .assert()
+        .success();
+
+    let bytes = fs::read(midi).unwrap();
+    let smf = midly::Smf::parse(&bytes).expect("auxiliary percussion MIDI parses");
+    let keys: Vec<u8> = smf.tracks[1]
+        .iter()
+        .filter_map(|event| match event.kind {
+            midly::TrackEventKind::Midi {
+                channel,
+                message: midly::MidiMessage::NoteOn { key, vel },
+            } if vel.as_int() > 0 => {
+                assert_eq!(channel.as_int(), 9);
+                Some(key.as_int())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        expected.iter().map(|(_, key)| *key).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disco_instruments_are_public_and_emit_exact_gm_programs() {
+    let schema_out = bin().arg("schema").assert().success();
+    let schema: serde_json::Value =
+        serde_json::from_slice(&schema_out.get_output().stdout).expect("schema is JSON");
+    let instruments = schema["$defs"]["Instrument"]["enum"]
+        .as_array()
+        .expect("Instrument enum");
+    for name in ["clavinet", "synth_brass"] {
+        assert!(
+            instruments.iter().any(|instrument| instrument == name),
+            "schema is missing `{name}`"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("disco-instruments.yaml");
+    fs::write(
+        &scene,
+        "tempo: 118\nbars: 1\ntracks:\n  - { id: clav, instrument: clavinet, pattern: sustain }\n  - { id: brass, instrument: synth_brass, pattern: sustain }\n",
+    )
+    .unwrap();
+    bin().arg("validate").arg(&scene).assert().success();
+    let inspect = bin()
+        .args(["--json", "inspect-instruments"])
+        .arg(&scene)
+        .args(["--fallback-mode", "strict"])
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&inspect.get_output().stdout).expect("inspect report is JSON");
+    assert_eq!(report["summary"]["exact"], 2);
+    assert_eq!(report["summary"]["missing"], 0);
+
+    let midi = dir.path().join("disco-instruments.mid");
+    bin()
+        .arg("midi")
+        .arg(&scene)
+        .arg("-o")
+        .arg(&midi)
+        .assert()
+        .success();
+
+    let bytes = fs::read(midi).unwrap();
+    let smf = midly::Smf::parse(&bytes).expect("Disco instrument MIDI parses");
+    let programs: Vec<u8> = smf.tracks[1..]
+        .iter()
+        .map(|track| {
+            track
+                .iter()
+                .find_map(|event| match event.kind {
+                    midly::TrackEventKind::Midi {
+                        message: midly::MidiMessage::ProgramChange { program },
+                        ..
+                    } => Some(program.as_int()),
+                    _ => None,
+                })
+                .expect("melodic track has a program change")
+        })
+        .collect();
+    assert_eq!(programs, [7, 62]);
+}
+
+#[test]
 fn clip_step_automation_emits_canonical_deterministic_midi_events() {
     let dir = tempfile::tempdir().unwrap();
     let scene = dir.path().join("automated.yaml");
@@ -615,6 +857,83 @@ fn clip_step_automation_emits_canonical_deterministic_midi_events() {
     assert!(observed.contains(&(240, "bend=12288".to_owned())));
     assert!(observed.contains(&(480, "off29".to_owned())));
     assert!(observed.contains(&(480, "cc11=127".to_owned())));
+}
+
+#[test]
+fn clip_linear_automation_uses_a_fixed_grid_and_preserves_the_step_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let linear = dir.path().join("linear.yaml");
+    let linear_text = "tempo: 120\nbars: 1\nclips:\n  filter:\n    kind: pitched\n    length_beats: 4\n    mode: once\n    events:\n      hit: { at: 0, duration: 1, pitch: C2, velocity: 100 }\n    automation:\n      brightness:\n        target: cc74\n        interpolation: linear\n        points:\n          start: { at: 0, value: 0 }\n          peak: { at: 0.25, value: 127 }\n          settle: { at: 0.5, value: 0 }\n      bend:\n        target: pitch_bend\n        interpolation: linear\n        points:\n          start: { at: 0, value: -8192 }\n          peak: { at: 0.25, value: 8191 }\n          settle: { at: 0.5, value: 0 }\ntracks:\n  - { id: stab, instrument: synth_brass, pattern: clip, clip: filter }\n";
+    fs::write(&linear, linear_text).unwrap();
+    let first = dir.path().join("linear-first.mid");
+    let second = dir.path().join("linear-second.mid");
+    for output in [&first, &second] {
+        bin()
+            .arg("midi")
+            .arg(&linear)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    let bytes = fs::read(&first).unwrap();
+    assert_eq!(bytes, fs::read(&second).unwrap());
+
+    let smf = midly::Smf::parse(&bytes).expect("linear automation MIDI parses");
+    let mut tick = 0u32;
+    let mut controls = Vec::new();
+    let mut bends = Vec::new();
+    for event in &smf.tracks[1] {
+        tick += event.delta.as_int();
+        match event.kind {
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::Controller { controller, value },
+                ..
+            } if controller.as_int() == 74 => controls.push((tick, value.as_int())),
+            midly::TrackEventKind::Midi {
+                message: midly::MidiMessage::PitchBend { bend },
+                ..
+            } => bends.push((tick, bend.0.as_int())),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        controls,
+        [(0, 0), (60, 64), (120, 127), (180, 64), (240, 0)]
+    );
+    assert_eq!(
+        bends,
+        [(0, 0), (60, 8191), (120, 16383), (180, 12288), (240, 8192),]
+    );
+
+    let omitted = dir.path().join("step-omitted.yaml");
+    let explicit = dir.path().join("step-explicit.yaml");
+    fs::write(
+        &omitted,
+        linear_text.replace("        interpolation: linear\n", ""),
+    )
+    .unwrap();
+    fs::write(
+        &explicit,
+        linear_text.replace("interpolation: linear", "interpolation: step"),
+    )
+    .unwrap();
+    let omitted_midi = dir.path().join("step-omitted.mid");
+    let explicit_midi = dir.path().join("step-explicit.mid");
+    for (scene, output) in [(&omitted, &omitted_midi), (&explicit, &explicit_midi)] {
+        bin()
+            .arg("midi")
+            .arg(scene)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        fs::read(omitted_midi).unwrap(),
+        fs::read(explicit_midi).unwrap(),
+        "omitted interpolation must retain the legacy step semantics"
+    );
 }
 
 #[test]
@@ -1865,6 +2184,69 @@ fn build_stems_are_aligned_and_sum_to_mix() {
         serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
     assert_eq!(meta["stems"].as_array().unwrap().len(), 4);
     assert_eq!(meta["stems"][0], "forest.stems/01-harmony.wav");
+}
+
+#[test]
+fn build_multiple_percussion_stems_are_independent_aligned_and_sum_to_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("multi-percussion.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntracks:\n  - { id: kit, instrument: drums, pattern: drums }\n  - { id: auxiliary, instrument: drums, pattern: drums, intensity: 0.5 }\n",
+    )
+    .unwrap();
+    let wav = dir.path().join("multi-percussion.wav");
+    write_tone_sfz(dir.path(), "drums", 120.0);
+    let profile = dir.path().join("percussion-profile.yaml");
+    fs::write(
+        &profile,
+        "name: percussion-test\ninstruments:\n  drums:\n    sustain: drums.sfz\n",
+    )
+    .unwrap();
+    let orchestration = write_orchestration_for_profile(dir.path(), &profile);
+    bin()
+        .arg("build")
+        .arg(&scene)
+        .args(["--renderer", "sfizz"])
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(&wav)
+        .arg("--stems")
+        .env("PATH", sfizz_path_env())
+        .assert()
+        .success();
+
+    let stems_dir = dir.path().join("multi-percussion.stems");
+    assert_dir_contains_exactly(&stems_dir, &["01-kit.wav", "02-auxiliary.wav"]);
+    let (spec, mix) = read_frames(&wav);
+    let stems: Vec<Vec<i16>> = ["01-kit.wav", "02-auxiliary.wav"]
+        .iter()
+        .map(|name| {
+            let (stem_spec, data) = read_frames(&stems_dir.join(name));
+            assert_eq!(stem_spec.channels, spec.channels);
+            assert_eq!(data.len(), mix.len(), "stem {name} must align to the mix");
+            assert!(
+                data.iter().any(|&sample| sample != 0),
+                "stem {name} is silent"
+            );
+            data
+        })
+        .collect();
+    assert_ne!(stems[0], stems[1], "percussion stems must stay independent");
+
+    let (mut diff2, mut ref2) = (0f64, 0f64);
+    for i in 0..mix.len() {
+        let sum: f64 = stems.iter().map(|stem| f64::from(stem[i])).sum();
+        let reference = f64::from(mix[i]);
+        diff2 += (sum - reference) * (sum - reference);
+        ref2 += reference * reference;
+    }
+    let ratio = (diff2 / ref2.max(1.0)).sqrt();
+    assert!(
+        ratio < 0.02,
+        "percussion stems do not sum to mix: RMS ratio {ratio:.4}"
+    );
 }
 
 #[test]
@@ -4971,6 +5353,42 @@ fn heavy_dubstep_reference_scene_is_valid_linted_and_deterministic() {
         fs::read(b).unwrap(),
         "the shipped heavy-Dubstep protocol example must remain byte-deterministic"
     );
+}
+
+#[test]
+fn disco_family_reference_scenes_are_valid_linted_and_palette_explicit() {
+    for (style, palette) in [
+        ("nu_disco", "nu-disco"),
+        ("disco_70s", "seventies"),
+        ("disco_funk", "funk"),
+        ("disco_italo", "italo"),
+        ("disco_house", "house"),
+    ] {
+        let scene = repo(&format!("examples/scenes/{style}.yaml"));
+        let grammar = repo(&format!("examples/grammars/{style}.yaml"));
+        bin().arg("validate").arg(&scene).assert().success();
+        bin()
+            .arg("lint")
+            .arg(&scene)
+            .arg("--grammar")
+            .arg(&grammar)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(format!(
+                "ok: conforms to `{style}`"
+            )));
+
+        let authored: serde_yaml_ng::Value =
+            serde_yaml_ng::from_slice(&fs::read(&scene).unwrap()).unwrap();
+        let tracks = authored["tracks"].as_sequence().unwrap();
+        for (index, track) in tracks.iter().enumerate() {
+            assert_eq!(
+                track["palette"].as_str(),
+                Some(palette),
+                "{style} tracks[{index}] must explicitly select `{palette}`"
+            );
+        }
+    }
 }
 
 /// Violations carry the measured value so the agent can fix the scene:

@@ -1,0 +1,115 @@
+# Club loop with filtered minor-seventh stabs driven by linear CC74 automation.
+title: Filtered Floor
+story: >-
+  A warm Disco-House loop where the kick and offbeat hats stay fixed while
+  bass, electric piano and a CC74-filtered chord stab open across four bars.
+tempo: 124
+key: F_minor
+time_signature: 4/4
+bars: 4
+loop: true
+harmony: [i, VI, III, VII]
+performance:
+  humanize: { timing_ms: 5, velocity: 4, seed: 12474 }
+  swing: 0.06
+
+clips:
+  house_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      f_1: { at: 0, duration: 0.5, pitch: F1, velocity: 112 }
+      f_2: { at: 1.5, duration: 0.25, pitch: C2, velocity: 102 }
+      f_3: { at: 2, duration: 0.5, pitch: F2, velocity: 108 }
+      f_4: { at: 3.25, duration: 0.25, pitch: Ab1, velocity: 104 }
+      db_1: { at: 4, duration: 0.5, pitch: Db2, velocity: 112 }
+      db_2: { at: 5.5, duration: 0.25, pitch: Ab2, velocity: 102 }
+      db_3: { at: 6, duration: 0.5, pitch: Db3, velocity: 108 }
+      db_4: { at: 7.25, duration: 0.25, pitch: F2, velocity: 104 }
+      ab_1: { at: 8, duration: 0.5, pitch: Ab1, velocity: 112 }
+      ab_2: { at: 9.5, duration: 0.25, pitch: Eb2, velocity: 102 }
+      ab_3: { at: 10, duration: 0.5, pitch: Ab2, velocity: 108 }
+      ab_4: { at: 11.25, duration: 0.25, pitch: C2, velocity: 104 }
+      eb_1: { at: 12, duration: 0.5, pitch: Eb2, velocity: 112 }
+      eb_2: { at: 13.5, duration: 0.25, pitch: Bb2, velocity: 102 }
+      eb_3: { at: 14, duration: 0.5, pitch: Eb3, velocity: 108 }
+      eb_4: { at: 15.25, duration: 0.25, pitch: G2, velocity: 104 }
+  house_keys:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      f_1: { at: 0.5, duration: 0.25, pitch: Ab4, velocity: 76 }
+      f_2: { at: 2.5, duration: 0.25, pitch: C5, velocity: 72 }
+      db_1: { at: 4.5, duration: 0.25, pitch: F4, velocity: 76 }
+      db_2: { at: 6.5, duration: 0.25, pitch: Ab4, velocity: 72 }
+      ab_1: { at: 8.5, duration: 0.25, pitch: C5, velocity: 76 }
+      ab_2: { at: 10.5, duration: 0.25, pitch: Eb5, velocity: 72 }
+      eb_1: { at: 12.5, duration: 0.25, pitch: G4, velocity: 76 }
+      eb_2: { at: 14.5, duration: 0.25, pitch: Bb4, velocity: 74 }
+  house_stab:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      f_1: { at: 1.5, duration: 0.25, pitch: F3, velocity: 92 }
+      f_2: { at: 3.5, duration: 0.25, pitch: F3, velocity: 88 }
+      db_1: { at: 5.5, duration: 0.25, pitch: Db3, velocity: 92 }
+      db_2: { at: 7.5, duration: 0.25, pitch: Db3, velocity: 88 }
+      ab_1: { at: 9.5, duration: 0.25, pitch: Ab2, velocity: 92 }
+      ab_2: { at: 11.5, duration: 0.25, pitch: Ab2, velocity: 88 }
+      eb_1: { at: 13.5, duration: 0.25, pitch: Eb3, velocity: 92 }
+      eb_2: { at: 15.5, duration: 0.25, pitch: Eb3, velocity: 96 }
+    automation:
+      filter:
+        target: cc74
+        interpolation: linear
+        points:
+          closed: { at: 0, value: 16 }
+          warm: { at: 4, value: 48 }
+          open: { at: 8, value: 112 }
+          settle: { at: 12, value: 62 }
+          seal: { at: 15.75, value: 16 }
+  house_drums:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      kick_1: { at: 0, voice: kick, velocity: 118 }
+      kick_2: { at: 1, voice: kick, velocity: 114 }
+      kick_3: { at: 2, voice: kick, velocity: 120 }
+      kick_4: { at: 3, voice: kick, velocity: 116 }
+      clap_1: { at: 1, voice: clap, velocity: 108 }
+      clap_2: { at: 3, voice: clap, velocity: 112 }
+      hat_1: { at: 0, voice: closed_hat, velocity: 68 }
+      hat_2: { at: 0.5, voice: open_hat, velocity: 94 }
+      hat_3: { at: 1, voice: closed_hat, velocity: 70 }
+      hat_4: { at: 1.5, voice: open_hat, velocity: 98 }
+      hat_5: { at: 2, voice: closed_hat, velocity: 68 }
+      hat_6: { at: 2.5, voice: open_hat, velocity: 96 }
+      hat_7: { at: 3, voice: closed_hat, velocity: 72 }
+      hat_8: { at: 3.5, voice: open_hat, velocity: 100 }
+  house_aux:
+    kind: percussion
+    length_beats: 4
+    mode: loop
+    events:
+      cabasa_1: { at: 0.25, voice: cabasa, velocity: 64 }
+      cabasa_2: { at: 0.75, voice: cabasa, velocity: 70 }
+      cabasa_3: { at: 1.25, voice: cabasa, velocity: 66 }
+      cabasa_4: { at: 1.75, voice: cabasa, velocity: 72 }
+      cabasa_5: { at: 2.25, voice: cabasa, velocity: 64 }
+      cabasa_6: { at: 2.75, voice: cabasa, velocity: 70 }
+      cabasa_7: { at: 3.25, voice: cabasa, velocity: 66 }
+      cabasa_8: { at: 3.75, voice: cabasa, velocity: 74 }
+      conga_1: { at: 1.5, voice: open_high_conga, velocity: 72 }
+      conga_2: { at: 3.5, voice: low_conga, velocity: 76 }
+
+tracks:
+  - { id: bass, palette: house, instrument: synth_bass, pattern: clip, clip: house_bass, intensity: 0.8 }
+  - { id: keys, palette: house, instrument: epiano, pattern: clip, clip: house_keys, intensity: 0.85 }
+  - { id: stab, palette: house, instrument: synth_brass, pattern: clip, clip: house_stab, intensity: 0.8 }
+  - { id: strings, palette: house, instrument: synth_strings, pattern: sustain, intensity: 0.2 }
+  - { id: kit, palette: house, instrument: drums, pattern: clip, clip: house_drums, intensity: 0.58 }
+  - { id: auxiliary, palette: house, instrument: drums, pattern: clip, clip: house_aux, intensity: 0.28 }

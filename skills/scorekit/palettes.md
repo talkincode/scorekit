@@ -63,6 +63,11 @@ within the identity.
 | `sacred-organ` | vast interior, awe, dread | organ→sustain · choir→melody · tubular_bells→melody (accents) · contrabass→bass | modal harmony, slow, let bells ring |
 | `baroque-chamber` | precise, courtly, clockwork | violin→melody · harpsichord→arpeggio · cello→bass | 2–3 voices max — chamber, not symphony |
 | `electro-drive` | motion, neon, pursuit | saw_lead→melody · synth_bass→bass · drums→drums · sweep_pad→sustain | 120+ BPM, 16th-note arps |
+| `nu-disco` | polished Nu-Disco drive | synth_bass→clip · muted_guitar→clip · epiano→sustain · synth_brass→clip · drums→clip | 112–122 BPM, four-on-floor, syncopated bass, bright restrained hook |
+| `disco-70s` | orchestral dancefloor | bass→clip · muted_guitar→clip · strings/brass→sustain · drums + auxiliary drums→clip | tambourine/cowbell lift, live-kit feel, no EDM supersaw |
+| `disco-funk` | dry pocket and rhythmic bite | clavinet→clip · slap_bass→clip · muted_guitar→clip · brass→clip · drums + conga→clip | interlocking rests matter more than layer count |
+| `disco-italo` | 80s machine romance | synth_bass→clip · synth_brass→clip · saw_lead→melody · pad→sustain · drums→clip | rigid machine pulse, octave bass, arps, dramatic minor/major color |
+| `disco-house` | loop-driven club propulsion | epiano/organ→clip · synth_bass→clip · synth_brass→clip with linear CC74 · drums→clip | 118–126 BPM, offbeat hats, filtered chord motion; keep source paths in profiles |
 | `desert-modal` | arid, ancient routes | pan_flute or ocarina→melody · harp→arpeggio · contrabass→bass · drums→drums (sparse) | minor with modal color: lean on VI/VII/v, avoid raised-leading-tone pull; *profile*: oud, ney, duduk, tabla→tabla |
 | `lo-fi-bedroom` | private, unpolished, tender | epiano→melody · muted_guitar→arpeggio · fretless_bass→bass · drums→drums (very low intensity) | mid-slow, `humanize` timing high (30+) |
 | `heroic-brass` | triumph, arrival, banners | trumpet→melody · horn→sustain · tuba→bass · timpani→drums-adjacent accents (pattern: bass) · brass→sustain | the *earned* orchestral pick — brass-led, not string-led |

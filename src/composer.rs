@@ -3,8 +3,9 @@
 //! no hash maps, no randomness, no time or environment reads.
 
 use crate::schema::{
-    AutomationTarget, Clip, ClipKind, ClipMode, Key, Pattern, Performance, Scene, TimeSig,
-    parse_absolute_pitch, parse_key, parse_numeral, parse_time_signature, quarter_beats_to_ticks,
+    AUTOMATION_GRID_TICKS, AutomationInterpolation, AutomationLane, AutomationTarget, Clip,
+    ClipKind, ClipMode, Key, Pattern, Performance, Scene, TimeSig, parse_absolute_pitch, parse_key,
+    parse_numeral, parse_time_signature, quarter_beats_to_ticks,
 };
 
 pub const PPQ: u32 = 480;
@@ -53,7 +54,7 @@ pub struct TrackIr {
     /// CC91 value at track start; `None` emits no controller.
     pub reverb: Option<u8>,
     pub notes: Vec<NoteEvent>,
-    /// Authored step automation for MIDI CC1/CC11/CC74.
+    /// Authored step or deterministic linear automation for MIDI CC1/CC11/CC74.
     pub controls: Vec<ControlEvent>,
     /// Tail-portamento pitch bends (`glide`), tick-sorted by construction.
     pub bends: Vec<BendEvent>,
@@ -224,8 +225,7 @@ fn clip_automation(clip: &Clip, total_ticks: u32) -> (Vec<ControlEvent>, Vec<Ben
     let mut offset = 0u32;
     loop {
         for lane in clip.automation.values() {
-            for point in lane.points.values() {
-                let at = quarter_beats_to_ticks(point.at).expect("automation point is validated");
+            for (at, value) in automation_events(lane) {
                 let tick = offset.saturating_add(at);
                 if tick >= total_ticks {
                     continue;
@@ -233,14 +233,14 @@ fn clip_automation(clip: &Clip, total_ticks: u32) -> (Vec<ControlEvent>, Vec<Ben
                 match lane.target {
                     AutomationTarget::PitchBend => bends.push(BendEvent {
                         tick,
-                        value: (8192 + i32::from(point.value)) as u16,
+                        value: (8192 + i32::from(value)) as u16,
                     }),
                     target => controls.push(ControlEvent {
                         tick,
                         controller: target
                             .controller()
                             .expect("non-bend automation has a controller"),
-                        value: point.value as u8,
+                        value: value as u8,
                     }),
                 }
             }
@@ -256,6 +256,41 @@ fn clip_automation(clip: &Clip, total_ticks: u32) -> (Vec<ControlEvent>, Vec<Ben
     controls.sort_unstable_by_key(|event| (event.tick, event.controller, event.value));
     bends.sort_unstable_by_key(|event| (event.tick, event.value));
     (controls, bends)
+}
+
+fn automation_events(lane: &AutomationLane) -> Vec<(u32, i16)> {
+    let mut points: Vec<(u32, i16)> = lane
+        .points
+        .values()
+        .map(|point| {
+            (
+                quarter_beats_to_ticks(point.at).expect("automation point is validated"),
+                point.value,
+            )
+        })
+        .collect();
+    points.sort_unstable_by_key(|(tick, _)| *tick);
+    if lane.interpolation == AutomationInterpolation::Step || points.len() < 2 {
+        return points;
+    }
+
+    let mut events = Vec::new();
+    for pair in points.windows(2) {
+        let (start_tick, start_value) = pair[0];
+        let (end_tick, end_value) = pair[1];
+        let span = end_tick - start_tick;
+        let mut tick = start_tick;
+        while tick < end_tick {
+            let fraction = f64::from(tick - start_tick) / f64::from(span);
+            let value = (f64::from(start_value)
+                + fraction * f64::from(i32::from(end_value) - i32::from(start_value)))
+            .round() as i16;
+            events.push((tick, value));
+            tick += AUTOMATION_GRID_TICKS;
+        }
+    }
+    events.push(*points.last().expect("linear lane has at least two points"));
+    events
 }
 
 pub fn compose(scene: &Scene) -> ScoreIr {

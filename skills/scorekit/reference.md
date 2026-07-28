@@ -53,9 +53,9 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 | `harmony` | `[numeral, …]` | minor `i-VI-III-VII`, major `I-V-vi-IV` | one chord per bar, cycles; diatonic `i..vii` (case-insensitive, triads from scale) |
 | `performance` | object | absent | see below; absent = raw compile (bit-stable) |
 | `motifs` | `{name: [note, …]}` | `{}` | melodies for `pattern: melody` tracks |
-| `clips` | `{stable_id: clip, …}` | `{}` | exact pitched/percussion events plus step automation; map order is semantically inert |
+| `clips` | `{stable_id: clip, …}` | `{}` | exact pitched/percussion events plus step/linear automation; map order is semantically inert |
 | `textures` | `[texture, …]` | `[]` | field recordings/ambience/SFX; portable source names bind through `--texture-profile` |
-| `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic + ≤1 percussion: `drums` or `tabla`) |
+| `tracks` | `[track, …]` | required | 1..=16 (≤15 melodic; percussion tracks share channel 10 but keep independent MIDI tracks/stems) |
 | `sections` | `[section, …]` | `[]` | turns the scene into a suite |
 
 ### Track
@@ -76,7 +76,8 @@ Unknown fields are rejected (typos fail loudly, with line/column).
 
 `pan`/`reverb`/`glide` compile to deterministic MIDI (CC10/CC91/pitch-bend).
 fluidsynth/timidity honor all three; sfizz honors pitch bend, but CC10/91
-only take effect if the `.sfz` maps those CCs.
+only take effect if the `.sfz` maps those CCs. Multiple percussion tracks share
+channel state, so their `pan` and `reverb` values must be identical.
 
 ### Event clip
 
@@ -96,6 +97,7 @@ clips:
     automation:                   # pitched clips only; at most 4 lanes
       mouth:
         target: cc1               # cc1 | cc11 | cc74 | pitch_bend
+        interpolation: linear     # step (default) | linear
         points:
           shut: { at: 0, value: 0 }
           open: { at: 0.25, value: 127 }
@@ -108,17 +110,20 @@ All positions use quarter-note beats regardless of meter and quantize with
 `round(beats * 480)`. Pitched events require scientific `pitch`
 (`C-1=0`, `C4=60`, `A4=69`) and `duration`; percussion events require a frozen
 GM `voice` (`kick`, `snare`, `clap`, closed/pedal/open hats, low/mid/high tom,
-`crash`, `ride`) and default to 0.125 beat. Velocity is 1..=127.
+`crash`, `ride`, `tambourine`, `cowbell`, high/low bongo, mute/open-high/low
+conga, high/low timbale, high/low agogo, `cabasa`, `maracas`) and default to
+0.125 beat. Velocity is 1..=127.
 
 A loop clip must divide every active scene/section timeline. Events cannot
 cross the boundary; equal-pitch pitched events cannot overlap; duplicate
 voice/tick percussion onsets are rejected. Automation values are 0..=127 for
 CCs and -8192..=8191 for bend, start at beat 0, and return to the initial value
-at the end of a loop lane. Steps emit exactly; there is no linear mode.
+at the end of a loop lane. `step` emits authored points exactly; `linear`
+adds rounded samples every 60 ticks (PPQ/8) between authored points.
 Same-tick order is note-off -> automation CC -> pitch bend -> note-on.
-Expanded authored notes plus automation points are capped at 65,536 per active
-track for every scene/section timeline; `validate` rejects larger loop
-expansions before composition.
+Expanded notes plus authored/generated automation points are capped at 65,536
+per active track for every scene/section timeline; `validate` rejects larger
+loop expansions before composition.
 
 Clip timing is exact and ignores swing/legato/humanize; intensity and dynamics
 still scale velocities. For sfizz, every automated target must be declared by
@@ -216,7 +221,7 @@ duplication — loop math stays sample-exact.
 
 ## Instruments (GM program in parentheses)
 
-- **Keys:** `piano` (0), `bright_piano` (1), `epiano` (4), `harpsichord` (6), `celesta` (8), `organ` (19), `accordion` (21)
+- **Keys:** `piano` (0), `bright_piano` (1), `epiano` (4), `harpsichord` (6), `clavinet` (7), `celesta` (8), `organ` (19), `accordion` (21)
 - **Mallets/bells:** `glockenspiel` (9), `music_box` (10), `vibraphone` (11), `marimba` (12), `xylophone` (13), `tubular_bells` (14)
 - **Guitars:** `guitar` (24), `steel_guitar` (25), `electric_guitar` (27), `muted_guitar` (28)
 - **Basses:** `bass` (33), `picked_bass` (34), `fretless_bass` (35), `slap_bass` (36), `synth_bass` (38)
@@ -224,7 +229,7 @@ duplication — loop math stays sample-exact.
 - **Voices (vowels, no lyrics):** `choir` (52), `voice` (53), `choir_pad` (91)
 - **Brass:** `trumpet` (56), `trombone` (57), `tuba` (58), `horn` (60), `brass` (61)
 - **Winds:** `sax` (65), `oboe` (68), `english_horn` (69), `bassoon` (70), `clarinet` (71), `piccolo` (72), `flute` (73), `recorder` (74), `pan_flute` (75), `whistle` (78), `ocarina` (79)
-- **Synth:** `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
+- **Synth:** `synth_brass` (62), `square_lead` (80), `saw_lead` (81), `pad` (88), `warm_pad` (89), `bowed_pad` (92), `halo_pad` (94), `sweep_pad` (95)
 - **World, exact GM:** `shakuhachi` (77), `sitar` (104), `shamisen` (106)
 - **World, renderer-profile source required:** `erhu`, `pipa`, `guzheng`, `dizi`, `oud`, `ney`, `duduk`
 - **Percussion:** `timpani` (47) — pitched; `drums` — GM percussion channel, `pattern: drums` or a percussion `clip`; `tabla` — exact profile source on channel 10, `pattern: tabla` only
