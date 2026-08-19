@@ -28,7 +28,7 @@ The scene protocol is versioned by the scorekit binary's semantic version. There
 
 Within a major version:
 
-- **Additive only.** New fields are optional with defaults that preserve prior output — a scene that does not use a new field compiles to *byte-identical MIDI* before and after the addition. (Precedent: when `pan`/`reverb`/`glide` landed in 0.2.0, the golden SMF byte-comparison test did not change.)
+- **Additive only.** New fields are optional with defaults that preserve prior output — a scene that does not use a new field compiles to *byte-identical MIDI* before and after the addition. (Precedent: when `pan`/`reverb`/`glide` landed in 0.2.0, the golden SMF byte-comparison test did not change.) Additional compile targets such as `scorekit makecode` must not add schema fields that only that target can fulfill.
 - **No repurposing.** An existing field's name, type, range, default, or compile semantic does not change. The normative transform order (below) is part of the semantic and is equally frozen.
 - **Old scene, new binary:** always valid, same MIDI bytes.
 - **New scene, old binary:** rejected with exit 2 and the offending field path — a readable upgrade signal, not a corrupted asset.

@@ -1,6 +1,6 @@
 # scorekit reference
 
-Verified against scorekit v0.6. When in doubt, trust the binary:
+Verified against scorekit v0.7.1. When in doubt, trust the binary:
 `scorekit schema` / `scorekit schema --grammar` /
 `scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
@@ -25,6 +25,7 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | `texture check <profile>` | certify every declared source exists, decodes, and is audible | `--sample-rate` (44100); reports `sha256`/`duration_seconds`/`frames`/`peak_abs`/`rms` per source; exit 4 if undecodable, 2 for `missing`/`silent`; global `--json` emits the full report |
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track id>`, `--section <name>`; profile-only melodic identities are rejected before writing because no renderer profile is available |
+| `makecode <scene> -o <out.ts>` | compile MakeCode `music.createSong` TypeScript + `.meta.json` | one song per suite section; chip/drum amplitudes follow `intensity` against a 1.2-scale mix budget; rejects `glide`/pitch bends, clip CC automation, `textures`, and sub-255-tick grids (`humanize`); `pan`/`reverb` dropped with WARN |
 | `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
 | `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz only; routes each track's `palette` to a certified leaf renderer profile); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |

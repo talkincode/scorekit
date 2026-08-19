@@ -14,6 +14,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `schema --resolver` | Print the instrument-resolver config schema |
 | `lint <scene> --grammar <file>` | Check compiled music against measurable style rules |
 | `midi <scene> -o <file>` | Compile deterministic Standard MIDI |
+| `makecode <scene> -o <file>` | Compile MakeCode `music.createSong` TypeScript (plus a `.meta.json` manifest) |
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
 | `export <audio> -o <file>` | Convert or trim audio through FFmpeg |
 | `build <scene> -o <file>` | Run the complete asset pipeline |
@@ -42,6 +43,21 @@ channel-10 `drums`/`tabla`. It rejects profile-only melodic identities before
 writing the output: the command has no renderer-profile input, and omitting a
 program change would make a generic GM player select piano. Use
 `build --renderer sfizz --orchestration <file>` to render those identities.
+
+`makecode` compiles a scene to Microsoft MakeCode's synth-song format (song
+encoding v0, played by MakeCode Arcade and micro:bit V2): a paste-ready `.ts`
+snippet with one ``let <name> = music.createSong(hex`…`)`` statement per song
+— one song per section for a suite — plus a `.meta.json` manifest reporting
+the tick grid and each track's mapped MakeCode chip or drum voice. Synthesis
+happens entirely in the MakeCode runtime. Chip and drum amplitudes are scaled
+from track `intensity` against a ~1.2 full-scale mix budget so stacked voices
+stay near the MakeCode editor's own 220–384 / 1024 range; tiny PWM speakers
+clip if every voice is written at full scale. Features the format cannot
+express fail with structured exit-2 errors (pitch bends/`glide`, clip CC
+automation, `textures`, timing finer than 255 ticks per beat such as
+`humanize`); `pan`/`reverb` are dropped with a WARN line and a manifest
+record. Keep bass in a chip-safe register — sub-bass square waves distort on
+Arcade and micro:bit speakers.
 
 ## Instrument resolution
 
