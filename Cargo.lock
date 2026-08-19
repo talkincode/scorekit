@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "scorekit"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "assert_cmd",
  "clap",

@@ -19,6 +19,7 @@ Because the score is plain text, it lives in git next to your code: diff it, rev
 - **Scene suites** — intro / explore / combat / victory sections that share the same musical motifs, compiled from a single file.
 - **Exact event clips** — stable-ID pitched/percussion events, section variants, and deterministic step/linear automation for arrangements that need authored syncopation, fills, filter sweeps, or talking-bass motion.
 - **Sound textures** — layer field recordings, ambience, and SFX (water, birds, engines…) as deterministic loops or beat-scheduled one-shots without baking local paths into the scene.
+- **MakeCode songs** — `scorekit makecode` compiles the same scene into ``music.createSong(hex`…`)`` TypeScript for MakeCode Arcade and micro:bit V2, one song per section, with a manifest of every voice mapping.
 - **`meta.json`** — exact loop points and sample counts, ready for your engine to consume.
 
 ## Install

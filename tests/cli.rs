@@ -1562,6 +1562,194 @@ fn midi_invalid_scene_leaves_no_partial_file() {
     assert_dir_contains_exactly(dir.path(), &["bad.yaml"]);
 }
 
+// ---- makecode ----
+
+#[test]
+fn makecode_happy_path_writes_song_and_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("forest.ts");
+    bin()
+        .arg("makecode")
+        .arg(forest())
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_dir_contains_exactly(dir.path(), &["forest.ts", "forest.meta.json"]);
+
+    let ts = fs::read_to_string(&out).unwrap();
+    assert!(
+        ts.contains("let forest = music.createSong(hex`"),
+        "generated TypeScript declares the song: {ts}"
+    );
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("forest.meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["target"], "makecode-song-v0");
+    let song = &meta["songs"][0];
+    assert_eq!(song["name"], "forest");
+    assert_eq!(song["bpm"], 92);
+    assert_eq!(song["beats_per_measure"], 4);
+    assert_eq!(song["measures"], 8);
+    assert_eq!(song["loop"], true);
+    let tracks = song["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 4, "all four scene tracks are reported");
+    assert_eq!(tracks[0]["scene_track"], "harmony");
+    assert_eq!(tracks[0]["kind"], "melodic");
+    assert_eq!(tracks[0]["chip_preset"], "fish");
+    let drums = &tracks[3];
+    assert_eq!(drums["kind"], "drums");
+    assert_eq!(drums["drum_voices"][0]["key"], 36);
+    assert_eq!(drums["drum_voices"][0]["voice"], "neutral kick");
+}
+
+#[test]
+fn makecode_matches_golden_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("forest.ts");
+    bin()
+        .arg("makecode")
+        .arg(forest())
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    let produced = fs::read(&out).unwrap();
+    let golden = fs::read(repo("tests/golden/forest.makecode.ts")).unwrap();
+    assert_eq!(
+        produced, golden,
+        "MakeCode source must be identical to the golden file"
+    );
+}
+
+#[test]
+fn makecode_is_deterministic_across_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    for sub in ["a", "b"] {
+        fs::create_dir(dir.path().join(sub)).unwrap();
+        bin()
+            .arg("makecode")
+            .arg(forest())
+            .arg("-o")
+            .arg(dir.path().join(sub).join("forest.ts"))
+            .assert()
+            .success();
+    }
+    for name in ["forest.ts", "forest.meta.json"] {
+        assert_eq!(
+            fs::read(dir.path().join("a").join(name)).unwrap(),
+            fs::read(dir.path().join("b").join(name)).unwrap(),
+            "{name} differs between identical runs"
+        );
+    }
+}
+
+#[test]
+fn makecode_suite_emits_one_song_per_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("suite.ts");
+    bin()
+        .arg("makecode")
+        .arg(repo("examples/scenes/forest_suite.yaml"))
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    let ts = fs::read_to_string(&out).unwrap();
+    for name in [
+        "suite_intro",
+        "suite_explore",
+        "suite_combat",
+        "suite_victory",
+    ] {
+        assert!(
+            ts.contains(&format!("let {name} = music.createSong(hex`")),
+            "missing section song `{name}`: {ts}"
+        );
+    }
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("suite.meta.json")).unwrap()).unwrap();
+    let songs = meta["songs"].as_array().unwrap();
+    assert_eq!(songs.len(), 4);
+    assert_eq!(songs[1]["section"], "explore");
+    assert_eq!(songs[1]["loop"], true);
+    assert_eq!(songs[2]["section"], "combat");
+    assert_eq!(songs[2]["bpm"], 132, "section tempo override is honored");
+    assert_eq!(songs[3]["loop"], false);
+}
+
+#[test]
+fn makecode_glide_scene_fails_with_no_partial_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("glide.yaml");
+    fs::write(
+        &scene,
+        "tempo: 100\nkey: C_major\nbars: 2\nmotifs:\n  m:\n    - { degree: 1, beats: 2 }\n    - { degree: 5, beats: 2 }\ntracks:\n  - id: lead\n    instrument: flute\n    pattern: melody\n    motif: m\n    glide: 0.5\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "makecode"])
+        .arg(&scene)
+        .arg("-o")
+        .arg(dir.path().join("glide.ts"))
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "tracks[0]");
+    assert!(
+        error["message"].as_str().unwrap().contains("pitch bends"),
+        "error explains the missing capability: {error}"
+    );
+    assert_dir_contains_exactly(dir.path(), &["glide.yaml"]);
+}
+
+#[test]
+fn makecode_texture_scene_fails_with_no_partial_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("tex.yaml");
+    fs::write(
+        &scene,
+        "tempo: 100\nkey: C_major\nbars: 2\ntextures:\n  - source: wind\n    mode: loop\ntracks:\n  - id: lead\n    instrument: flute\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "makecode"])
+        .arg(&scene)
+        .arg("-o")
+        .arg(dir.path().join("tex.ts"))
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stderr).expect("validation error is JSON");
+    assert_eq!(error["field"], "textures");
+    assert_dir_contains_exactly(dir.path(), &["tex.yaml"]);
+}
+
+#[test]
+fn makecode_humanized_scene_fails_with_grid_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("human.yaml");
+    fs::write(
+        &scene,
+        "tempo: 100\nkey: C_major\nbars: 2\nperformance:\n  humanize:\n    timing_ms: 7\n    seed: 42\ntracks:\n  - id: lead\n    instrument: flute\n    pattern: sustain\n",
+    )
+    .unwrap();
+    let out = bin()
+        .arg("makecode")
+        .arg(&scene)
+        .arg("-o")
+        .arg(dir.path().join("human.ts"))
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("ticks per beat") && stderr.contains("humanize"),
+        "error names the grid limit and the fix: {stderr}"
+    );
+    assert_dir_contains_exactly(dir.path(), &["human.yaml"]);
+}
+
 // ---- render ----
 
 fn make_midi(dir: &Path) -> PathBuf {

@@ -1,6 +1,6 @@
 # Agent Skill
 
-The release archive and source repository include an Agent skill under `skills/scorekit`. It teaches a skill-capable coding Agent how to query the schema, write scenes, validate musical structure, apply grammar profiles, and build assets.
+The release archive and source repository include an Agent skill under `skills/scorekit`. It teaches a skill-capable coding Agent how to query the schema, write scenes, validate musical structure, apply grammar profiles, build audio assets, and compile MakeCode `music.createSong` TypeScript.
 
 Install it together with the local binary:
 

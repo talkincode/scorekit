@@ -11,7 +11,8 @@ The machine interface follows semantic versioning. Within a major version, the f
 - Exit codes: `0` success · `1` I/O failure · `2` invalid input · `3` missing dependency · `4` external tool failure.
 - The `--json` error object shape on stderr (below).
 - The JSON Schemas exported by `scorekit schema`, `schema --grammar`, `schema --profile`, `schema --orchestration`, `schema --texture-profile`, and `schema --resolver` (fields are added, not removed or repurposed).
-- The `meta.json` / `report.json` artifact fields.
+- The `meta.json` / `report.json` artifact fields, including the MakeCode
+  manifest (`target: makecode-song-v0`, per-song header and voice mapping).
 
 Determinism boundary: the same scene + same sound source + same tool versions produces byte-identical MIDI, and audio identical within documented tolerances. Reproducibility across *different* FluidSynth/FFmpeg versions is explicitly **not** promised — pin your toolchain (e.g. in a container image) if you need cross-machine identical audio.
 

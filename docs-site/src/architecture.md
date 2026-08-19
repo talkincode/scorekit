@@ -6,15 +6,16 @@ scorekit is a thin compiler and orchestration layer.
 YAML scene
   -> semantic validation
   -> Score IR
-  -> deterministic MIDI
-  -> external renderer
-  -> PCM audio
-  -> external FFmpeg export
+      -> deterministic MIDI
+          -> external renderer
+          -> PCM audio
+          -> external FFmpeg export
+      -> MakeCode song bytes (`scorekit makecode`)
 ```
 
 ## Guarantees
 
-- The same DSL and compiler inputs produce byte-identical MIDI.
+- The same DSL and compiler inputs produce byte-identical MIDI, and the same scene produces byte-identical MakeCode song encoding.
 - Loop and stem lengths are derived from quantized musical time.
 - File-writing commands stage output and publish it atomically.
 - JSON Schema and structured errors expose the same contract used by the CLI.

@@ -2,14 +2,15 @@
 name: scorekit
 description: >
   Compose and render game music with scorekit, an agent-oriented music
-  compiler: write a YAML scene DSL, compile it deterministically to MIDI,
-  render seamless loops, stems, and OGG/WAV assets, and lint compositions
-  against aesthetic grammar profiles. Use when the user asks for game BGM,
-  background music, a music loop, adaptive-music stems, film-style scoring,
-  a scene.yaml, or scorekit itself (game score, background music, looping
-  music, stems, generated music, composing a piece). Also use it to audit,
-  review, or critique an existing arrangement/scene (arrangement audit,
-  编曲审计) — standalone or as the post-build self-check.
+  compiler: write a YAML scene DSL, compile it deterministically to MIDI
+  or MakeCode `music.createSong` TypeScript, render seamless loops, stems,
+  and OGG/WAV assets, and lint compositions against aesthetic grammar
+  profiles. Use when the user asks for game BGM, background music, a music
+  loop, adaptive-music stems, film-style scoring, MakeCode Arcade / micro:bit
+  songs, a scene.yaml, or scorekit itself (game score, background music,
+  looping music, stems, generated music, composing a piece). Also use it to
+  audit, review, or critique an existing arrangement/scene (arrangement
+  audit, 编曲审计) — standalone or as the post-build self-check.
   Not for singing with lyrics, audio analysis, or editing existing recordings.
 ---
 
@@ -17,10 +18,12 @@ description: >
 
 scorekit is a **music compiler, not a music generator**: you (the agent) do
 all the composing in a YAML scene file; scorekit deterministically turns it
-into MIDI and rendered audio. Same input → byte-identical MIDI, sample-exact
-audio. There is no AI inside the tool — the creativity is yours.
+into MIDI, MakeCode songs, and rendered audio. Same input → byte-identical
+MIDI / MakeCode hex, sample-exact audio. There is no AI inside the tool —
+the creativity is yours.
 
 Pipeline: `scene.yaml → validate → (lint) → build → .ogg/.wav + meta.json (+ stems/)`
+MakeCode: `scorekit makecode scene.yaml -o song.ts` → `.ts` + `.meta.json`
 
 ## Setup check
 
@@ -74,7 +77,11 @@ or pass an explicit file to override it.
    Add `--stems` for per-track files in `out/scene.ogg.stems/` (adaptive
    game audio), `--renderer timidity` for the alternate backend. Non-loop
    scenes get a reverb tail (`--tail`, default 4s). A scene declaring
-   `textures` also needs `--texture-profile <file>`.
+   `textures` also needs `--texture-profile <file>`. For MakeCode Arcade
+   or micro:bit V2, compile instead with
+   `scorekit makecode scene.yaml -o song.ts` (no renderer; do not use
+   `humanize`, `glide`, clip CC/`pitch_bend`, or `textures`; keep bass
+   out of the sub-bass register so PWM speakers do not fold).
 7. **Self-audit:** run the arrangement audit ([audit.md](audit.md)) —
    deterministic gates (G1–G5) plus the craft rubric — and fix or justify
    every finding before reporting completion.
