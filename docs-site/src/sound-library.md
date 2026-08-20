@@ -114,6 +114,23 @@ CC0-1.0 unless noted.
 | Button Accordion HN | 2024-03-29 | |
 | MuldjordKit (acoustic drums) | 2020-10-18 | CC-BY-4.0 |
 
+### Vocals (ScoreData vocal palettes)
+
+| Library | Version | License | Channel / notes |
+|---|---|---|---|
+| VPO Vocals (male/female/mixed) | 3.2 waves + 3.3 scripts | VPO mixed-open (no repackaging) | Local `scoredata-fix1` strips `delay_random`; male exposed via `scoredata-choir-male` palette |
+| Legato Vocal Tutorial (Hadzi-Fia a) | 0.100 | CC0-1.0 | `github.com/sfzinstruments/legato_vocal_tutorial` — solo `a` vowel only |
+| MuseScore GM vocal extract | 0.2.0 | MIT (from MuseScore General) | Deterministic extract of GM 52/53/54/91 → `libraries/musescore/gm-vocals/0.2.0` (Aahs/Oohs/Synth/Space + treble/whisper filters) |
+
+Orchestration entrypoints (ScoreData companion):
+
+| file | default | notes |
+|---|---|---|
+| `profiles/orchestrations/hybrid-cinematic.yaml` | `default` | **General cinematic entry** — 11 palettes: arrangement roles `default` / `solo` (chamber) / `ensemble` / `electronic`, plus thin vocals `choir_male` / `choir_female` / `voice_solo` / `choir_aahs` / `voice_oohs` / `choir_treble` / `voice_whisper`. One `--orchestration` per build. |
+| `profiles/orchestrations/scoredata-vocals.yaml` | `mixed` | Vocals-only short names (`male`, `female`, `solo`, `aahs`, `oohs`, `treble`, `whisper`) over the **same** thin leaf profiles. |
+
+Thin vocal palettes map only `choir` / `voice` / `choir_pad` — put supporting instruments on `default` (or another arrangement role). `treble` is a high-pass filter colour, not a children's choir; `whisper` is a soft filter, not breath phonation. World/ethnic sung vocals remain an honest coverage gap.
+
 ### Community one-offs
 
 | Library | Version | License | Channel |

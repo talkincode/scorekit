@@ -103,6 +103,8 @@ scorekit 当前构建脚本固定 sfizz 1.2.3。sfizz 官方 1.2.3 README 同时
 - **sfizz 风险：中到高**。教程的价值恰恰在复杂 legato/CC/include；scorekit 当前 articulation 只选文件，不会主动发送这些控制状态。只能先取最简单的 polyphonic patch 做实验。
 - **官方来源**：[项目说明](https://github.com/sfzinstruments/legato_vocal_tutorial) · [CC0 LICENSE](https://github.com/sfzinstruments/legato_vocal_tutorial/blob/main/LICENSE) · [v0.100 下载](https://github.com/sfzinstruments/legato_vocal_tutorial/releases/tag/v0.100)
 
+**ScoreData 状态（2026-08-03）：** 已安装并认证。仅映射 polyphonic no-legato `a` 元音为 `scoredata-voice-solo` palette 的 `voice`。多元音第二套 choir/voice 色彩改由 MuseScore General GM 52/53/54/91 确定性提取（`musescore/gm-vocals`）提供；VPO male 经 `scoredata-fix1` 暴露为 `male` palette。不要把教程的 multi-vowel 模块当完整库（v0.100 未附带 o/u/e 样本）。
+
 ## 暂不纳入短名单
 
 | 项目 | 分类 | 暂不采用的原因 | 官方证据 |
