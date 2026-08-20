@@ -14,7 +14,7 @@ workflow — see [Building a Sound Library](sound-library.md).
 ## Orchestration profiles
 
 ```yaml
-# orchestration.yaml
+# orchestration.yaml — minimal teaching example (two roles)
 schema_version: 1
 name: hybrid-cinematic
 default_palette: ensemble
@@ -25,6 +25,14 @@ palettes:
     profile: ../renderers/scoredata-symphonic.yaml
 ```
 
+The ScoreData companion ships a fuller `hybrid-cinematic.yaml` with **11**
+palettes: arrangement roles `default` / `solo` / `ensemble` / `electronic`,
+plus thin vocal colours (`choir_male`, `choir_female`, `voice_solo`,
+`choir_aahs`, `voice_oohs`, `choir_treble`, `voice_whisper`). Vocal palettes
+are intentionally thin (only `choir` / `voice` / `choir_pad`); supporting
+tracks stay on an arrangement role. See
+[Building a Sound Library](sound-library.md#vocals-scoredata-vocal-palettes).
+
 ```bash
 scorekit schema --orchestration
 scorekit orchestration check orchestration.yaml
@@ -34,7 +42,8 @@ scorekit --json orchestration check orchestration.yaml
 `orchestration check` loads every referenced leaf profile relative to the
 orchestration file, resolves every leaf profile's `.sfz` paths, and fails
 loudly — with no partial output — if a palette's leaf profile or any mapped
-SFZ file is missing.
+SFZ file is missing. A build takes **exactly one** `--orchestration` file;
+layer multiple identities with per-track `palette:`, not multiple flags.
 
 Each scene track carries a stable `id` and an optional `palette`
 (`[a-z][a-z0-9_-]{0,63}`, same syntax as `id`). A track that omits `palette`
