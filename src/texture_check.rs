@@ -247,7 +247,13 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
             texture::TextureSourceBinding::LegacyPath(_) => None,
             texture::TextureSourceBinding::Discoverable(source) => Some(source),
         };
-        let mut report = entry(name, &resolved, source, profile.schema_version, "ok");
+        let mut report = entry(
+            name,
+            &resolved,
+            source.as_deref(),
+            profile.schema_version,
+            "ok",
+        );
         if !resolved.is_file() {
             report.status = "missing".to_owned();
             report.error = Some(format!(
