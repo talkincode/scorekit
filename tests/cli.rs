@@ -2593,10 +2593,12 @@ fn build_unknown_texture_source_suggests_a_profile_key() {
     let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
     assert_eq!(error["field"], "texture_profile.sources.rivr");
     assert!(error["message"].as_str().unwrap().contains("river"));
-    assert!(error["message"]
-        .as_str()
-        .unwrap()
-        .contains("scorekit texture inspect"));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("scorekit texture inspect")
+    );
     assert!(!dir.path().join("out").exists());
 }
 
@@ -6357,11 +6359,13 @@ fn legacy_texture_profile_builds_and_discovery_marks_metadata_unknown() {
         .success();
     let report: serde_json::Value = serde_json::from_slice(&check.get_output().stdout).unwrap();
     assert_eq!(report["sources"], 2);
-    assert!(report["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|entry| { entry["status"] == "ok" }));
+    assert!(
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| { entry["status"] == "ok" })
+    );
 }
 
 /// Structured profiles must carry complete discovery metadata. The additive

@@ -14,7 +14,7 @@
 //! report.
 
 use crate::error::{Error, Result};
-use crate::texture::{self, mode_key, TextureProfile, TextureSource};
+use crate::texture::{self, TextureProfile, TextureSource, mode_key};
 use crate::tools;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
