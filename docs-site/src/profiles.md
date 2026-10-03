@@ -255,10 +255,10 @@ scene uses must be mapped to a real file; failure leaves no normalized,
 arranged, output, stem, or metadata artifact behind.
 
 For compatibility, a legacy binding such as `river: ambience/river.flac` can
-still be used by `build`. It cannot be enumerated or certified:
-`texture inspect` and `texture check` reject profiles containing path-only
-bindings until they are migrated to structured sources. This preserves old
-renders without fabricating category, playback, or provenance facts.
+still be used by `build`. It is also enumerable and certifiable:
+`texture inspect` reports its key/path/existence and
+`metadata_available: false`, while `texture check` verifies the file decodes
+and is audible. No category, playback, or provenance facts are fabricated.
 
 ### Why every source carries metadata
 
@@ -267,27 +267,29 @@ authoring agent reads before it writes `textures[].source`. Without it, two
 entries named `amb1` and `amb2` are indistinguishable without opening the
 files, and there is no way to conclude that nothing in the profile fits.
 
-For every structured source, the descriptive fields are required, not
-optional: optional metadata makes the discovery contract only as good as the
-laziest entry.
+Schema v1 structured sources require every descriptive field. Schema v2
+supports an explicit family, scenes, and optional curated audio descriptors;
+the versioned schema makes both formats machine-readable:
 
-- `description` — one line on what is actually audible.
-- `category` — a **closed** vocabulary compiled into the binary, so it stays
+- V1 `description` — one line on what is actually audible.
+- V1 `category` — a **closed** vocabulary compiled into the binary, so it stays
   a stable filter axis instead of drifting into `ambience` / `ambient` /
   `ambiences`. Run `scorekit schema --texture-profile` to see the full list
   with per-value meaning: `ambience`, `foley`, `impact`, `transition`,
   `tonal`, `industrial`, `organic`, `sound_design`.
-- `tags` and `use_cases` — open vocabularies (`[a-z][a-z0-9_-]{0,31}`, 1–16
+- V2 `family` — a validated exact token, alongside `tags` and `scenes` —
+  open vocabularies (`[a-z][a-z0-9_-]{0,31}`, 1–16
   entries) for expressive room the closed enum deliberately lacks.
 - `playback.modes` — which of `loop` / `one_shot` the recording actually
   supports, plus a `default_mode` that must be one of them. This is enforced
   at build time: a scene that loops a one-shot is rejected before staging.
 - `provenance.library` — the versioned library identity the source came from.
 
-Physics is deliberately **not** declared here. Duration, sample rate, peak
-and checksum are measured by `scorekit texture check`, because a
-hand-written duration is a fact nothing can verify and every re-export
-silently invalidates.
+V2 `audio.duration_seconds`, `intensity`, `brightness`, and `tonality` are
+curated discovery descriptors, not measured guarantees. `texture check`
+independently verifies readability and reports measured duration, sample
+rate, peak, RMS, and source checksum; consumers should use those measurements
+when they need physical values.
 
 ### Finding sources: `texture inspect`
 
@@ -296,6 +298,8 @@ scorekit texture inspect textures.yaml                      # enumerate everythi
 scorekit texture inspect textures.yaml --category impact
 scorekit texture inspect textures.yaml --tag rain --tag soft
 scorekit texture inspect textures.yaml --mode loop --use-case forest
+scorekit texture inspect textures.yaml --family industrial --scene factory \
+  --min-duration 2 --max-intensity 0.7 --limit 100 --offset 0
 scorekit --json texture inspect textures.yaml --source river
 ```
 
@@ -304,7 +308,8 @@ scorekit never ranks by similarity. It answers "which sources satisfy all of
 these constraints", never "which is closest" — so `"status": "no_match"` is
 a truthful answer rather than a plausible wrong pick, and it exits 0 the way
 `diff` does. A `--category` outside the closed vocabulary is a typo, not an
-empty result set, and exits 2.
+empty result set, and exits 2. `--limit`/`--offset` paginate; `total` is
+inventory size and `matched` is the complete count after filtering.
 
 ### Certifying sources: `texture check`
 

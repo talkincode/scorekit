@@ -2565,6 +2565,44 @@ fn build_missing_texture_source_leaves_no_partial_artifact() {
 }
 
 #[test]
+fn build_unknown_texture_source_suggests_a_profile_key() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.5);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(&profile, river_birds_profile()).unwrap();
+    let scene = dir.path().join("scene.yaml");
+    fs::write(
+        &scene,
+        "tempo: 120\nbars: 1\ntextures:\n  - { source: rivr, mode: loop }\n\
+         tracks:\n  - { id: piano, instrument: piano, pattern: sustain }\n",
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("--texture-profile")
+        .arg(&profile)
+        .arg("-o")
+        .arg(dir.path().join("out").join("scene.wav"))
+        .assert()
+        .failure()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "texture_profile.sources.rivr");
+    assert!(error["message"].as_str().unwrap().contains("river"));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("scorekit texture inspect")
+    );
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
 fn suite_failure_rolls_back_all_previously_built_sections() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("long-bell.wav");
@@ -5945,7 +5983,21 @@ fn mcp_exposes_texture_inspect_and_check() {
     let tools = replies[0]["result"]["tools"].as_array().unwrap();
     let find = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap();
     let inspect = find("inspect_textures");
-    for arg in ["profile", "category", "tags", "mode", "use_case"] {
+    for arg in [
+        "profile",
+        "category",
+        "family",
+        "tags",
+        "mode",
+        "use_case",
+        "scene",
+        "min_duration",
+        "min_intensity",
+        "min_brightness",
+        "loopable",
+        "limit",
+        "offset",
+    ] {
         assert!(
             inspect["inputSchema"]["properties"][arg].is_object(),
             "inspect_textures must accept {arg}: {inspect}"
@@ -6010,7 +6062,10 @@ fn texture_profile_schema_publishes_required_discovery_metadata() {
         .success();
     let schema: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
 
-    assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+    assert_eq!(
+        schema["properties"]["schema_version"]["enum"],
+        serde_json::json!([1, 2])
+    );
     assert_eq!(
         schema["properties"]["sources"]["additionalProperties"]["$ref"],
         "#/$defs/TextureSourceBinding"
@@ -6078,10 +6133,8 @@ fn texture_profile_schema_publishes_required_discovery_metadata() {
         );
     }
 
-    // Physics is measured by `texture check`, never declared here: a
-    // hand-written duration is a fact nothing can verify and every re-export
-    // silently invalidates.
-    for measured in ["duration_seconds", "sample_rate", "channels", "peak"] {
+    // Physical file measurements remain the responsibility of `texture check`.
+    for measured in ["sample_rate", "channels", "peak"] {
         assert!(
             source["properties"][measured].is_null(),
             "{measured} is measured, not declared: {source}"
@@ -6242,15 +6295,26 @@ fn texture_inspect_filters_exactly_and_admits_no_match() {
     );
 }
 
-/// Existing path-only profiles remain valid for the build behavior published
-/// before source discovery existed. Discovery refuses to invent metadata for
-/// them, so compatibility does not turn into a plausible but dishonest catalog.
+/// Existing path-only profiles remain valid for build and can be enumerated
+/// without inventing semantic metadata.
 #[test]
-fn legacy_texture_profile_builds_but_discovery_requires_metadata() {
+fn legacy_texture_profile_builds_and_discovery_marks_metadata_unknown() {
     let dir = tempfile::tempdir().unwrap();
     write_texture_wave(&dir.path().join("river.wav"), 180.0, 0.5);
+    write_texture_wave(&dir.path().join("creek.wav"), 260.0, 0.4);
     let profile = dir.path().join("textures.yaml");
-    fs::write(&profile, "name: legacy\nsources:\n  river: river.wav\n").unwrap();
+    let sources = format!(
+        "  river: river.wav\n{}",
+        texture_source_yaml(
+            "creek",
+            "creek.wav",
+            "organic",
+            &["water", "flowing"],
+            &["loop"],
+            &["forest"],
+        )
+    );
+    fs::write(&profile, texture_profile_yaml("mixed", &sources)).unwrap();
     let scene = dir.path().join("scene.yaml");
     fs::write(
         &scene,
@@ -6275,16 +6339,32 @@ fn legacy_texture_profile_builds_but_discovery_requires_metadata() {
         .args(["--json", "texture", "inspect"])
         .arg(&profile)
         .assert()
-        .failure()
-        .code(2);
-    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
-    assert_eq!(error["code"], "validation");
-    assert_eq!(error["field"], "sources.river");
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["status"], "match");
+    assert_eq!(report["total"], 2);
+    let sources = report["sources"].as_array().unwrap();
+    let legacy = sources
+        .iter()
+        .find(|source| source["source"] == "river")
+        .unwrap();
+    assert_eq!(legacy["exists"], true);
+    assert_eq!(legacy["metadata_available"], false);
+    assert_eq!(sources[0]["source"], "creek");
+
+    let check = bin()
+        .args(["--json", "texture", "check"])
+        .arg(&profile)
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&check.get_output().stdout).unwrap();
+    assert_eq!(report["sources"], 2);
     assert!(
-        error["message"]
-            .as_str()
+        report["entries"]
+            .as_array()
             .unwrap()
-            .contains("legacy binding")
+            .iter()
+            .all(|entry| { entry["status"] == "ok" })
     );
 }
 
@@ -6440,17 +6520,16 @@ fn texture_check_measures_physics_of_declared_sources() {
     assert_eq!(report, repeat, "check must be deterministic");
 }
 
-/// Certification must fail loudly on missing and silent sources — a silent
-/// file is the failure mode that survives every structural check and only
-/// surfaces as a missing layer in the finished mix — and must leave no
-/// scratch residue behind when it does.
+/// Certification must fail loudly on missing, silent, and undecodable
+/// sources, and must leave no scratch residue behind when it does.
 #[test]
-fn texture_check_rejects_missing_and_silent_sources_without_residue() {
+fn texture_check_rejects_missing_silent_and_undecodable_sources_without_residue() {
     let dir = tempfile::tempdir().unwrap();
     write_texture_wave(&dir.path().join("good.wav"), 220.0, 0.3);
     write_const_wav(&dir.path().join("silent.wav"), 0, 6615);
+    fs::write(dir.path().join("corrupt.wav"), "not an audio file").unwrap();
     let sources = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         texture_source_yaml("good", "good.wav", "tonal", &["tone"], &["loop"], &["test"]),
         texture_source_yaml(
             "gone",
@@ -6468,6 +6547,14 @@ fn texture_check_rejects_missing_and_silent_sources_without_residue() {
             &["loop"],
             &["test"]
         ),
+        texture_source_yaml(
+            "corrupt",
+            "corrupt.wav",
+            "sound_design",
+            &["broken"],
+            &["one_shot"],
+            &["test"]
+        ),
     );
     let profile = dir.path().join("textures.yaml");
     fs::write(&profile, texture_profile_yaml("broken", &sources)).unwrap();
@@ -6479,12 +6566,12 @@ fn texture_check_rejects_missing_and_silent_sources_without_residue() {
         .env("SCOREKIT_TMPDIR", &scratch)
         .assert()
         .failure()
-        .code(2);
+        .code(4);
     let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
     assert_eq!(err["code"], "texture_check");
     let report = &err["report"];
     assert_eq!(report["passed"], 1);
-    assert_eq!(report["failed"], 2);
+    assert_eq!(report["failed"], 3);
     let status = |name: &str| -> String {
         report["entries"]
             .as_array()
@@ -6499,6 +6586,7 @@ fn texture_check_rejects_missing_and_silent_sources_without_residue() {
     assert_eq!(status("good"), "ok");
     assert_eq!(status("gone"), "missing");
     assert_eq!(status("silent"), "silent");
+    assert_eq!(status("corrupt"), "undecodable");
 
     // The scratch root is honored and swept, so a corpus-sized check cannot
     // accumulate normalized copies of every source on failure.
@@ -6615,4 +6703,209 @@ fn mcp_tool_failure_passes_structured_error_through() {
     // Unknown tool and unknown method are JSON-RPC protocol errors.
     assert_eq!(replies[1]["error"]["code"], -32602);
     assert_eq!(replies[2]["error"]["code"], -32601);
+}
+
+#[test]
+fn texture_v2_sources_are_searchable_paginated_and_certifiable() {
+    let dir = tempfile::tempdir().unwrap();
+    write_texture_wave(&dir.path().join("chain.wav"), 210.0, 0.4);
+    write_texture_wave(&dir.path().join("machine.wav"), 110.0, 0.4);
+    let profile = dir.path().join("textures.yaml");
+    fs::write(
+        &profile,
+        r#"schema_version: 2
+name: industrial
+root: .
+sources:
+  chain_grind:
+    path: chain.wav
+    family: industrial
+    tags: [chain, metal, grinding]
+    playback:
+      modes: [loop]
+      default_mode: loop
+      loopable: true
+    audio:
+      duration_seconds: 0.4
+      intensity: 0.65
+      brightness: 0.35
+      tonality: atonal
+    scenes: [factory, machinery]
+  machine_grind:
+    path: machine.wav
+    family: industrial
+    tags: [machine, metal, grinding]
+    playback:
+      modes: [loop]
+      default_mode: loop
+      loopable: true
+    audio:
+      duration_seconds: 0.4
+      intensity: 0.68
+      brightness: 0.3
+      tonality: atonal
+    scenes: [factory, machinery]
+"#,
+    )
+    .unwrap();
+
+    let schema = bin()
+        .args(["--json", "schema", "--texture-profile"])
+        .assert()
+        .success();
+    let schema: serde_json::Value = serde_json::from_slice(&schema.get_output().stdout).unwrap();
+    assert!(
+        schema["properties"]["schema_version"]["enum"]
+            .as_array()
+            .is_some_and(|versions| versions.iter().any(|version| version == 2)),
+        "the exported schema must publish v2: {schema}"
+    );
+    let v2_schema = &schema["$defs"]["TextureSourceV2"];
+    assert_eq!(v2_schema["additionalProperties"], false);
+    let required: Vec<&str> = v2_schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|field| field.as_str().unwrap())
+        .collect();
+    for field in ["path", "family", "tags", "playback", "scenes"] {
+        assert!(
+            required.contains(&field),
+            "missing {field} from {v2_schema}"
+        );
+    }
+    let source_schema = &schema["$defs"]["TextureSource"];
+    assert!(source_schema["properties"]["family"].is_object());
+    assert!(source_schema["properties"]["scenes"].is_object());
+    assert!(schema["$defs"]["AudioMetadata"]["properties"]["brightness"].is_object());
+    assert_eq!(
+        schema["$defs"]["AudioMetadata"]["properties"]["intensity"]["maximum"],
+        1
+    );
+    assert!(schema["$defs"]["Playback"]["properties"]["loopable"].is_object());
+
+    let out = bin()
+        .args([
+            "--json",
+            "texture",
+            "inspect",
+            profile.to_str().unwrap(),
+            "--family",
+            "industrial",
+            "--tag",
+            "metal",
+            "--scene",
+            "factory",
+            "--mode",
+            "loop",
+            "--min-duration",
+            "0.3",
+            "--max-duration",
+            "0.5",
+            "--min-intensity",
+            "0.6",
+            "--max-intensity",
+            "0.7",
+            "--limit",
+            "1",
+            "--offset",
+            "1",
+        ])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(report["status"], "match");
+    assert_eq!(report["total"], 2);
+    assert_eq!(report["matched"], 2);
+    assert_eq!(report["returned"], 1);
+    assert_eq!(report["offset"], 1);
+    assert_eq!(report["sources"][0]["source"], "machine_grind");
+    assert_eq!(report["sources"][0]["family"], "industrial");
+    assert_eq!(report["sources"][0]["scenes"][0], "factory");
+    assert_eq!(report["sources"][0]["audio"]["duration_seconds"], 0.4);
+    assert_eq!(report["sources"][0]["audio"]["intensity"], 0.68);
+    assert_eq!(report["sources"][0]["audio"]["tonality"], "atonal");
+    assert_eq!(report["sources"][0]["playback"]["loopable"], true);
+    assert_eq!(report["sources"][0]["exists"], true);
+
+    let no_match = bin()
+        .args([
+            "--json",
+            "texture",
+            "inspect",
+            profile.to_str().unwrap(),
+            "--tag",
+            "glass",
+        ])
+        .assert()
+        .success();
+    let no_match: serde_json::Value =
+        serde_json::from_slice(&no_match.get_output().stdout).unwrap();
+    assert_eq!(no_match["status"], "no_match");
+    assert_eq!(no_match["matched"], 0);
+
+    bin()
+        .args(["--json", "texture", "check"])
+        .arg(profile)
+        .assert()
+        .success();
+}
+
+#[test]
+fn texture_v2_rejects_invalid_audio_and_playback_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("textures.yaml");
+    fs::write(
+        &profile,
+        r#"schema_version: 2
+name: invalid
+sources:
+  chain:
+    path: chain.wav
+    family: industrial
+    tags: [chain]
+    playback:
+      modes: [loop]
+      default_mode: loop
+    audio:
+      intensity: 1.01
+    scenes: [factory]
+"#,
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["--json", "texture", "inspect"])
+        .arg(&profile)
+        .assert()
+        .failure()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["code"], "validation");
+    assert_eq!(error["field"], "sources.chain.audio.intensity");
+
+    fs::write(
+        &profile,
+        r#"schema_version: 2
+name: invalid
+sources:
+  chain:
+    path: chain.wav
+    family: industrial
+    tags: [chain]
+    playback:
+      modes: [loop]
+      default_mode: one_shot
+    scenes: [factory]
+"#,
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "texture", "inspect"])
+        .arg(profile)
+        .assert()
+        .failure()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "sources.chain.playback.default_mode");
 }

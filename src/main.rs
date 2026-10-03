@@ -272,6 +272,7 @@ enum OrchestrationCommand {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum TextureCommand {
     /// Enumerate texture sources, filtered by exact declared properties
     Inspect {
@@ -282,6 +283,9 @@ enum TextureCommand {
         /// Sound family; see `scorekit schema --texture-profile` for the list
         #[arg(long)]
         category: Option<String>,
+        /// Exact sound family in a schema_version 2 profile
+        #[arg(long)]
+        family: Option<String>,
         /// Required tag; repeat the flag to require several (AND)
         #[arg(long = "tag")]
         tags: Vec<String>,
@@ -291,6 +295,39 @@ enum TextureCommand {
         /// Required scene use case
         #[arg(long)]
         use_case: Option<String>,
+        /// Required scene in a schema_version 2 profile
+        #[arg(long)]
+        scene: Option<String>,
+        /// Inclusive lower duration bound, in seconds
+        #[arg(long)]
+        min_duration: Option<f64>,
+        /// Inclusive upper duration bound, in seconds
+        #[arg(long)]
+        max_duration: Option<f64>,
+        /// Inclusive lower intensity bound (0..=1)
+        #[arg(long)]
+        min_intensity: Option<f64>,
+        /// Inclusive upper intensity bound (0..=1)
+        #[arg(long)]
+        max_intensity: Option<f64>,
+        /// Inclusive lower brightness bound (0..=1)
+        #[arg(long)]
+        min_brightness: Option<f64>,
+        /// Inclusive upper brightness bound (0..=1)
+        #[arg(long)]
+        max_brightness: Option<f64>,
+        /// Exact tonal character
+        #[arg(long)]
+        tonality: Option<String>,
+        /// Require an explicit seamless-loopability declaration
+        #[arg(long)]
+        loopable: Option<bool>,
+        /// Maximum number of results to return (default: all matching sources)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Number of matching sources to skip
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     /// Verify every declared source exists, decodes and is audible
     Check {
@@ -579,14 +616,29 @@ fn raw_instrument_spellings(path: &Path, tracks: usize) -> Vec<Option<String>> {
 /// Translate CLI selection flags into an exact texture filter, rejecting
 /// vocabulary that cannot match anything so a typo never silently returns
 /// "no source exists".
-fn build_texture_filter(
-    source: Option<&str>,
-    category: Option<&str>,
-    tags: &[String],
-    mode: Option<&str>,
-    use_case: Option<&str>,
-) -> Result<texture::Filter> {
-    let category = category
+struct TextureFilterArgs<'a> {
+    source: Option<&'a str>,
+    category: Option<&'a str>,
+    family: Option<&'a str>,
+    tags: &'a [String],
+    mode: Option<&'a str>,
+    use_case: Option<&'a str>,
+    scene: Option<&'a str>,
+    min_duration: Option<f64>,
+    max_duration: Option<f64>,
+    min_intensity: Option<f64>,
+    max_intensity: Option<f64>,
+    min_brightness: Option<f64>,
+    max_brightness: Option<f64>,
+    tonality: Option<&'a str>,
+    loopable: Option<bool>,
+    limit: Option<usize>,
+    offset: usize,
+}
+
+fn build_texture_filter(args: TextureFilterArgs<'_>) -> Result<texture::Filter> {
+    let category = args
+        .category
         .map(|key| {
             texture::Category::parse(key).ok_or_else(|| {
                 invalid_option(
@@ -599,12 +651,95 @@ fn build_texture_filter(
             })
         })
         .transpose()?;
+    for (flag, bound) in [
+        ("--min-duration", args.min_duration),
+        ("--max-duration", args.max_duration),
+        ("--min-intensity", args.min_intensity),
+        ("--max-intensity", args.max_intensity),
+        ("--min-brightness", args.min_brightness),
+        ("--max-brightness", args.max_brightness),
+    ] {
+        if bound.is_some_and(|value| !value.is_finite()) {
+            return Err(invalid_option(flag, "value must be finite".to_owned()));
+        }
+    }
+    for (flag, bound) in [
+        ("--min-duration", args.min_duration),
+        ("--max-duration", args.max_duration),
+    ] {
+        if bound.is_some_and(|value| value <= 0.0) {
+            return Err(invalid_option(
+                flag,
+                "value must be greater than 0".to_owned(),
+            ));
+        }
+    }
+    for (flag, bound) in [
+        ("--min-intensity", args.min_intensity),
+        ("--max-intensity", args.max_intensity),
+        ("--min-brightness", args.min_brightness),
+        ("--max-brightness", args.max_brightness),
+    ] {
+        if bound.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+            return Err(invalid_option(flag, "value must be in 0..=1".to_owned()));
+        }
+    }
+    for (min, max, name) in [
+        (args.min_duration, args.max_duration, "duration"),
+        (args.min_intensity, args.max_intensity, "intensity"),
+        (args.min_brightness, args.max_brightness, "brightness"),
+    ] {
+        if min.zip(max).is_some_and(|(min, max)| min > max) {
+            return Err(invalid_option(
+                "--min/--max",
+                format!("minimum {name} must not exceed maximum"),
+            ));
+        }
+    }
+    for (flag, value) in [("--family", args.family), ("--tonality", args.tonality)] {
+        if value.is_some_and(|value| !texture::valid_filter_token(value)) {
+            return Err(invalid_option(
+                flag,
+                "must match [a-z][a-z0-9_-]{0,31}".to_owned(),
+            ));
+        }
+    }
+    if args
+        .tags
+        .iter()
+        .any(|value| !texture::valid_filter_token(value))
+    {
+        return Err(invalid_option(
+            "--tag",
+            "values must match [a-z][a-z0-9_-]{0,31}".to_owned(),
+        ));
+    }
+    for (flag, value) in [("--scene", args.scene), ("--use-case", args.use_case)] {
+        if value.is_some_and(|value| !texture::valid_filter_token(value)) {
+            return Err(invalid_option(
+                flag,
+                "must match [a-z][a-z0-9_-]{0,31}".to_owned(),
+            ));
+        }
+    }
     Ok(texture::Filter {
-        source: source.map(str::to_owned),
+        source: args.source.map(str::to_owned),
         category,
-        tags: tags.to_vec(),
-        mode: mode.and_then(texture::parse_mode),
-        use_case: use_case.map(str::to_owned),
+        family: args.family.map(str::to_owned),
+        tags: args.tags.to_vec(),
+        mode: args.mode.and_then(texture::parse_mode),
+        use_case: args.use_case.map(str::to_owned),
+        scene: args.scene.map(str::to_owned),
+        min_duration: args.min_duration,
+        max_duration: args.max_duration,
+        min_intensity: args.min_intensity,
+        max_intensity: args.max_intensity,
+        min_brightness: args.min_brightness,
+        max_brightness: args.max_brightness,
+        tonality: args.tonality.map(str::to_owned),
+        loopable: args.loopable,
+        limit: args.limit,
+        offset: args.offset,
     })
 }
 
@@ -713,19 +848,43 @@ fn run(command: &Command, json: bool) -> Result<String> {
                     profile,
                     source,
                     category,
+                    family,
                     tags,
                     mode,
                     use_case,
+                    scene,
+                    min_duration,
+                    max_duration,
+                    min_intensity,
+                    max_intensity,
+                    min_brightness,
+                    max_brightness,
+                    tonality,
+                    loopable,
+                    limit,
+                    offset,
                 },
         } => {
             let loaded = texture::load_profile(profile)?;
-            let filter = build_texture_filter(
-                source.as_deref(),
-                category.as_deref(),
+            let filter = build_texture_filter(TextureFilterArgs {
+                source: source.as_deref(),
+                category: category.as_deref(),
+                family: family.as_deref(),
                 tags,
-                mode.as_deref(),
-                use_case.as_deref(),
-            )?;
+                mode: mode.as_deref(),
+                use_case: use_case.as_deref(),
+                scene: scene.as_deref(),
+                min_duration: *min_duration,
+                max_duration: *max_duration,
+                min_intensity: *min_intensity,
+                max_intensity: *max_intensity,
+                min_brightness: *min_brightness,
+                max_brightness: *max_brightness,
+                tonality: tonality.as_deref(),
+                loopable: *loopable,
+                limit: *limit,
+                offset: *offset,
+            })?;
             let report = texture::inspect(&loaded, &texture::profile_dir(profile), &filter)?;
             // A query nothing satisfies is an answer, not a failure: the
             // command exists so an agent can establish that no exact

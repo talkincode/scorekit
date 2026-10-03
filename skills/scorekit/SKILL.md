@@ -224,29 +224,32 @@ in a profile that also *describes* each source, so you can pick one without
 opening the files:
 
 ```yaml
-schema_version: 1
+schema_version: 2
 name: forest
 root: /path/to/recordings
 sources:
   river:
     path: river.flac
-    description: Wide river bed, mid-distance
-    category: organic          # closed enum — see schema --texture-profile
+    family: organic
     tags: [water, flowing]     # open vocabulary
-    playback: { modes: [loop], default_mode: loop }
-    use_cases: [forest]
-    provenance: { library: field-recordings@2024.1 }
+    playback: { modes: [loop], default_mode: loop, loopable: true }
+    audio: { duration_seconds: 18.2, intensity: 0.35, brightness: 0.2, tonality: atonal }
+    scenes: [forest]
 ```
 
-**Never guess a source name.** Enumerate and filter first:
+**Never guess a source name.** Enumerate, filter, and page through exact
+matches first. A legacy path-only entry is still enumerable, but explicitly
+has no semantic metadata:
 
 ```bash
-scorekit texture inspect textures.yaml --category organic --tag water
+scorekit --json texture inspect textures.yaml --family organic --tag water \
+  --scene forest --mode loop --limit 100 --offset 0
 scorekit texture check textures.yaml     # certify: exists, decodes, audible
 ```
 
 Filters are exact and conjunctive (repeated `--tag` intersects); there is no
-similarity ranking, so `no_match` means re-orchestrate or add a real source
+similarity ranking. `no_match` is an explicit empty result (exit 0), so it
+means re-orchestrate or add a real source
 — not "pick the closest one". `loop` repeats continuously; `one_shot`
 triggers at quarter-note beats, and a mode the profile does not declare in
 `playback.modes` is rejected at build time. Keep runtime/world-driven audio

@@ -133,10 +133,11 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "inspect_textures",
             description: "Enumerate a texture profile's sources and filter them by exact declared \
-                          properties (category, tags, playback mode, scene use case). Filters are \
-                          conjunctive and exact — never a similarity ranking — so an empty result \
-                          (`status: \"no_match\"`) is a definitive answer that no suitable source \
-                          exists rather than an invitation to substitute an approximation.",
+                          properties (family, tags, scenes, playback mode, and curated audio \
+                          descriptors). Filters are conjunctive and exact — never a similarity \
+                          ranking — so an empty result (`status: \"no_match\"`) is a definitive \
+                          answer that no suitable source exists rather than an invitation to \
+                          substitute an approximation.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -147,6 +148,7 @@ fn tools() -> Vec<Tool> {
                         "enum": crate::texture::Category::keys(),
                         "description": "Sound family"
                     },
+                    "family": { "type": "string", "description": "Exact v2 source family" },
                     "tags": {
                         "type": "array",
                         "items": { "type": "string" },
@@ -157,7 +159,18 @@ fn tools() -> Vec<Tool> {
                         "enum": ["loop", "one_shot"],
                         "description": "Scheduling mode the source must declare support for"
                     },
-                    "use_case": { "type": "string", "description": "Scene use case the source must declare" }
+                    "use_case": { "type": "string", "description": "Scene use case the source must declare" },
+                    "scene": { "type": "string", "description": "Exact scene name" },
+                    "min_duration": { "type": "number", "exclusiveMinimum": 0 },
+                    "max_duration": { "type": "number", "exclusiveMinimum": 0 },
+                    "min_intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "max_intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "min_brightness": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "max_brightness": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "tonality": { "type": "string" },
+                    "loopable": { "type": "boolean" },
+                    "limit": { "type": "integer", "minimum": 0 },
+                    "offset": { "type": "integer", "minimum": 0 }
                 },
                 "required": ["profile"],
                 "additionalProperties": false
@@ -296,12 +309,48 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             for (key, flag) in [
                 ("source", "--source"),
                 ("category", "--category"),
+                ("family", "--family"),
                 ("mode", "--mode"),
                 ("use_case", "--use-case"),
+                ("scene", "--scene"),
+                ("tonality", "--tonality"),
             ] {
                 if let Some(value) = optional_str(args, key)? {
                     argv.push(flag.into());
                     argv.push(value.to_owned());
+                }
+            }
+            for (key, flag) in [
+                ("min_duration", "--min-duration"),
+                ("max_duration", "--max-duration"),
+                ("min_intensity", "--min-intensity"),
+                ("max_intensity", "--max-intensity"),
+                ("min_brightness", "--min-brightness"),
+                ("max_brightness", "--max-brightness"),
+            ] {
+                if let Some(value) = args.get(key) {
+                    let number = value
+                        .as_f64()
+                        .ok_or_else(|| format!("`{key}` must be a number"))?;
+                    argv.push(flag.into());
+                    argv.push(number.to_string());
+                }
+            }
+            if let Some(value) = args.get("loopable") {
+                let value = value
+                    .as_bool()
+                    .ok_or_else(|| "`loopable` must be a boolean".to_owned())?;
+                argv.push("--loopable".into());
+                argv.push(value.to_string());
+            }
+            for key in ["limit", "offset"] {
+                if let Some(value) = args.get(key) {
+                    let value = value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or_else(|| format!("`{key}` must be a non-negative integer"))?;
+                    argv.push(format!("--{key}"));
+                    argv.push(value.to_string());
                 }
             }
             if let Some(tags) = args.get("tags") {

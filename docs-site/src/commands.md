@@ -21,6 +21,8 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `profile check <profile>` | Render probes through every mapped SFZ patch in a leaf renderer profile |
 | `orchestration check <file>` | Validate palette bindings and every referenced leaf profile/SFZ file |
 | `inspect-instruments <scene>` | Resolve every track's instrument and report substitutions and gaps |
+| `texture inspect <profile>` | Enumerate or exactly filter texture sources before writing `textures[].source` |
+| `texture check <profile>` | Verify every source exists, decodes, and is audible |
 | `diff <old> <new>` | Compare scene semantics |
 | `batch <scenes...> --out-dir <dir>` | Build several scenes and write a JSON report |
 | `mcp` | Serve MCP (Model Context Protocol) over stdio; each tool wraps one CLI command |
@@ -37,6 +39,18 @@ seconds, and `--crossfade-ms` is 0..=60000.
 Scenes with `textures` require `build`/`batch --texture-profile <file>`. This
 flag is independent of the musical renderer: it works alongside either an
 SF2 `--soundfont` or an sfizz `--orchestration` profile.
+
+Texture profile schema v1 structured sources and path-only mappings remain
+supported. Schema v2 adds `family`, `tags`, `playback`, optional curated
+`audio` descriptors (`duration_seconds`, `intensity`, `brightness`, and
+`tonality`), and `scenes`. `texture inspect <profile>` supports exact
+conjunctive filters (`--family`, repeated `--tag`, `--scene`, `--mode`,
+audio-property bounds, and `--loopable`); `--limit`/`--offset` page results.
+JSON includes the full inventory `total`, filter `matched` count, returned
+page, resolved paths, and file-existence flags. No candidate is reported as
+`status: "no_match"` with exit 0, never as an approximate match. Legacy
+path-only entries remain enumerable with `metadata_available: false`;
+`texture check` verifies file readability, decoding, and audible samples.
 
 Standalone `midi` can encode melodic instruments with exact GM programs plus
 channel-10 `drums`/`tabla`. It rejects profile-only melodic identities before

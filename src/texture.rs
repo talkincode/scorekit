@@ -9,17 +9,17 @@
 //! able to enumerate the available sources, tell materially different
 //! candidates apart, and conclude that nothing fits — before it writes
 //! `textures[].source` into a scene. That only works if every source carries
-//! the same metadata, so the descriptive fields are required, not optional:
-//! optional metadata makes the contract only as good as the laziest entry.
+//! stable metadata. V1 requires a complete descriptive record; v2 requires
+//! family, tags, playback, and scenes, with additional audio descriptors
+//! available where curators know them.
 //!
 //! The split of responsibility is deliberate:
 //!
-//! - **This file declares intent** — path, category, tags, playback
-//!   constraints, scene use cases, originating library.
-//! - **`texture_check` measures physics** — existence, decodability,
-//!   duration, loudness, checksum. Measured facts are never hand-written
-//!   here, because a hand-written duration is a fact nothing can verify and
-//!   everything can outdate.
+//! - **This file declares curated intent** — path, family, tags, playback
+//!   constraints, scenes, and optional descriptive audio properties.
+//! - **`texture_check` measures file facts** — existence, decodability,
+//!   actual duration, loudness, and checksum. Curated audio descriptors help
+//!   discovery but are not substitutes for measurements of the recording.
 
 use crate::error::{Error, Location, Result};
 use crate::schema::TextureMode;
@@ -31,8 +31,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Protocol version of the texture-profile format. The only supported value.
+/// Protocol version emitted for profiles that omit an explicit version.
 pub const SCHEMA_VERSION: u16 = 1;
+const LATEST_SCHEMA_VERSION: u16 = 2;
 
 fn default_schema_version() -> u16 {
     SCHEMA_VERSION
@@ -132,6 +133,9 @@ pub struct Playback {
     /// The mode to reach for when a scene has no specific reason otherwise.
     /// Must appear in `modes`.
     pub default_mode: TextureMode,
+    /// Whether the recording is known to loop seamlessly.
+    #[serde(default)]
+    pub loopable: Option<bool>,
 }
 
 /// Where the recording came from. Points at a corpus library identity
@@ -153,29 +157,58 @@ pub struct TextureSource {
     /// or absolute.
     pub path: String,
     /// One-line human description of what is actually audible.
-    pub description: String,
+    #[serde(default)]
+    pub description: Option<String>,
     /// Coarse sound family; the stable axis agents filter on first.
-    pub category: Category,
+    #[serde(default)]
+    pub category: Option<Category>,
+    /// V2 sound family; v1 uses the closed `category` vocabulary.
+    #[serde(default)]
+    pub family: Option<String>,
     /// Free-form descriptors (`[a-z][a-z0-9_-]{0,31}`), 1..=16, no duplicates.
     pub tags: Vec<String>,
     /// Declared scheduling constraints.
     pub playback: Playback,
     /// Scene intents this source is meant to serve (`forest`, `dungeon`,
     /// `tension`), same syntax and limits as `tags`.
+    #[serde(default)]
     pub use_cases: Vec<String>,
+    /// V2 scene intents this source is suitable for.
+    #[serde(default)]
+    pub scenes: Vec<String>,
     /// Originating library identity.
-    pub provenance: Provenance,
+    #[serde(default)]
+    pub provenance: Option<Provenance>,
+    /// Curated audio descriptors. `texture check` independently verifies
+    /// that the referenced recording exists and decodes.
+    #[serde(default)]
+    pub audio: Option<AudioMetadata>,
 }
 
-/// A source binding accepts the original path-only form for build
-/// compatibility, while discovery and certification require the structured
-/// form. Keeping both variants in the exported schema makes the v0 protocol
-/// additive rather than repurposing the published `sources` values.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AudioMetadata {
+    /// Declared duration in seconds; finite and greater than zero.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// Relative intensity in the inclusive range 0..=1.
+    #[serde(default)]
+    pub intensity: Option<f64>,
+    /// Relative brightness in the inclusive range 0..=1.
+    #[serde(default)]
+    pub brightness: Option<f64>,
+    /// Curated tonal character such as `atonal`, `dark`, or `bright`.
+    #[serde(default)]
+    pub tonality: Option<String>,
+}
+
+/// A source binding accepts original path-only profiles for build and
+/// metadata-free discovery, alongside structured source declarations.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum TextureSourceBinding {
     LegacyPath(String),
-    Discoverable(TextureSource),
+    Discoverable(Box<TextureSource>),
 }
 
 impl<'de> Deserialize<'de> for TextureSourceBinding {
@@ -211,7 +244,7 @@ impl<'de> Deserialize<'de> for TextureSourceBinding {
                 M: MapAccess<'de>,
             {
                 TextureSource::deserialize(de::value::MapAccessDeserializer::new(map))
-                    .map(TextureSourceBinding::Discoverable)
+                    .map(|source| TextureSourceBinding::Discoverable(Box::new(source)))
             }
         }
 
@@ -221,16 +254,16 @@ impl<'de> Deserialize<'de> for TextureSourceBinding {
 
 impl From<TextureSource> for TextureSourceBinding {
     fn from(source: TextureSource) -> Self {
-        Self::Discoverable(source)
+        Self::Discoverable(Box::new(source))
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TextureProfile {
-    /// Protocol version. The only supported value is 1.
+    /// Protocol version. Omitted versions retain the v1 compatibility format.
     #[serde(default = "default_schema_version")]
-    #[schemars(range(min = 1, max = 1))]
+    #[schemars(range(min = 1, max = 2))]
     pub schema_version: u16,
     /// Human-readable profile name.
     pub name: String,
@@ -260,6 +293,10 @@ fn valid_token(token: &str) -> bool {
         && token.bytes().enumerate().all(|(i, b)| {
             b.is_ascii_lowercase() || (i > 0 && (b.is_ascii_digit() || b == b'_' || b == b'-'))
         })
+}
+
+pub fn valid_filter_token(token: &str) -> bool {
+    valid_token(token)
 }
 
 fn fail<T>(path: String, message: String) -> Result<T> {
@@ -313,31 +350,142 @@ fn valid_library_identity(identity: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
 }
 
+fn edit_distance(left: &str, right: &str) -> usize {
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (i, left_byte) in left.bytes().enumerate() {
+        let mut current = Vec::with_capacity(right.len() + 1);
+        current.push(i + 1);
+        for (j, right_byte) in right.bytes().enumerate() {
+            current.push(
+                (previous[j + 1] + 1)
+                    .min(current[j] + 1)
+                    .min(previous[j] + usize::from(left_byte != right_byte)),
+            );
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
 impl TextureSource {
-    fn validate(&self, field: &str) -> Result<()> {
+    fn validate(&self, field: &str, schema_version: u16) -> Result<()> {
         if self.path.trim().is_empty() {
             return fail(
                 format!("{field}.path"),
                 "audio path must not be empty".to_owned(),
             );
         }
-        if self.description.trim().is_empty() {
+        if schema_version == 1
+            && self
+                .description
+                .as_deref()
+                .is_none_or(|description| description.trim().is_empty())
+        {
             return fail(
                 format!("{field}.description"),
                 "description must not be empty (it is what an agent reads when choosing)"
                     .to_owned(),
             );
         }
+        if self
+            .description
+            .as_deref()
+            .is_some_and(|description| description.trim().is_empty())
+        {
+            return fail(
+                format!("{field}.description"),
+                "description must not be empty".to_owned(),
+            );
+        }
         validate_tokens(&format!("{field}.tags"), &self.tags)?;
-        validate_tokens(&format!("{field}.use_cases"), &self.use_cases)?;
-        if !valid_library_identity(&self.provenance.library) {
+        if schema_version == 1 {
+            if self.category.is_none() {
+                return fail(
+                    format!("{field}.category"),
+                    "field is required in schema_version 1".to_owned(),
+                );
+            }
+            validate_tokens(&format!("{field}.use_cases"), &self.use_cases)?;
+            if self.provenance.is_none() {
+                return fail(
+                    format!("{field}.provenance.library"),
+                    "versioned library provenance is required in schema_version 1".to_owned(),
+                );
+            }
+        } else {
+            if self.family.is_none() {
+                return fail(
+                    format!("{field}.family"),
+                    "field is required in schema_version 2".to_owned(),
+                );
+            }
+            if self.category.is_some() {
+                return fail(
+                    format!("{field}.category"),
+                    "use `family` in schema_version 2".to_owned(),
+                );
+            }
+            if !self.use_cases.is_empty() {
+                return fail(
+                    format!("{field}.use_cases"),
+                    "use `scenes` in schema_version 2".to_owned(),
+                );
+            }
+            if let Some(family) = &self.family
+                && !valid_token(family)
+            {
+                return fail(
+                    format!("{field}.family"),
+                    format!("`{family}` must match [a-z][a-z0-9_-]{{0,31}}"),
+                );
+            }
+            let scenes = if self.scenes.is_empty() {
+                &self.use_cases
+            } else {
+                &self.scenes
+            };
+            validate_tokens(&format!("{field}.scenes"), scenes)?;
+        }
+        if let Some(provenance) = &self.provenance
+            && !valid_library_identity(&provenance.library)
+        {
             return fail(
                 format!("{field}.provenance.library"),
                 format!(
                     "`{}` must be a versioned identity matching <library>@<version>",
-                    self.provenance.library
+                    provenance.library
                 ),
             );
+        }
+        if let Some(audio) = &self.audio {
+            if audio
+                .duration_seconds
+                .is_some_and(|duration| !duration.is_finite() || duration <= 0.0)
+            {
+                return fail(
+                    format!("{field}.audio.duration_seconds"),
+                    "must be a finite number greater than 0".to_owned(),
+                );
+            }
+            for (key, value) in [
+                ("intensity", audio.intensity),
+                ("brightness", audio.brightness),
+            ] {
+                if value.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
+                    return fail(
+                        format!("{field}.audio.{key}"),
+                        "must be a finite number in the inclusive range 0..=1".to_owned(),
+                    );
+                }
+            }
+            if let Some(tonality) = &audio.tonality
+                && !valid_token(tonality)
+            {
+                return fail(
+                    format!("{field}.audio.tonality"),
+                    format!("`{tonality}` must match [a-z][a-z0-9_-]{{0,31}}"),
+                );
+            }
         }
         let modes = &self.playback.modes;
         if modes.is_empty() {
@@ -371,20 +519,49 @@ impl TextureSource {
         Ok(())
     }
 
-    pub fn to_json(&self, name: &str, resolved: &Path) -> serde_json::Value {
+    pub fn to_json(&self, name: &str, resolved: &Path, schema_version: u16) -> serde_json::Value {
+        if schema_version == 1 {
+            return json!({
+                "source": name,
+                "path": self.path,
+                "resolved_path": resolved.display().to_string(),
+                "exists": resolved.is_file(),
+                "description": self.description,
+                "category": self.category.map(Category::key),
+                "tags": self.tags,
+                "playback": {
+                    "modes": self.playback.modes.iter().map(|m| mode_key(*m)).collect::<Vec<_>>(),
+                    "default_mode": mode_key(self.playback.default_mode),
+                },
+                "use_cases": self.use_cases,
+                "provenance": self.provenance.as_ref().map(|p| json!({ "library": p.library })),
+            });
+        }
+        let family = self
+            .family
+            .as_deref()
+            .or_else(|| self.category.map(Category::key));
+        let scenes = if self.scenes.is_empty() {
+            &self.use_cases
+        } else {
+            &self.scenes
+        };
         json!({
             "source": name,
             "path": self.path,
             "resolved_path": resolved.display().to_string(),
+            "exists": resolved.is_file(),
             "description": self.description,
-            "category": self.category.key(),
+            "family": family,
             "tags": self.tags,
             "playback": {
                 "modes": self.playback.modes.iter().map(|m| mode_key(*m)).collect::<Vec<_>>(),
                 "default_mode": mode_key(self.playback.default_mode),
+                "loopable": self.playback.loopable,
             },
-            "use_cases": self.use_cases,
-            "provenance": { "library": self.provenance.library },
+            "scenes": scenes,
+            "audio": self.audio,
+            "provenance": self.provenance.as_ref().map(|p| json!({ "library": p.library })),
         })
     }
 }
@@ -397,25 +574,13 @@ impl TextureSourceBinding {
         }
     }
 
-    fn validate(&self, field: &str) -> Result<()> {
+    fn validate(&self, field: &str, schema_version: u16) -> Result<()> {
         match self {
             Self::LegacyPath(path) if path.trim().is_empty() => {
                 fail(field.to_owned(), "audio path must not be empty".to_owned())
             }
             Self::LegacyPath(_) => Ok(()),
-            Self::Discoverable(source) => source.validate(field),
-        }
-    }
-
-    pub fn discoverable(&self, field: &str) -> Result<&TextureSource> {
-        match self {
-            Self::Discoverable(source) => Ok(source),
-            Self::LegacyPath(_) => fail(
-                field.to_owned(),
-                "path-only legacy binding has no discovery metadata; migrate it to a structured \
-                 source before using `texture inspect` or `texture check`"
-                    .to_owned(),
-            ),
+            Self::Discoverable(source) => source.validate(field, schema_version),
         }
     }
 
@@ -439,12 +604,12 @@ impl TextureSourceBinding {
 
 impl TextureProfile {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != SCHEMA_VERSION {
+        if !(SCHEMA_VERSION..=LATEST_SCHEMA_VERSION).contains(&self.schema_version) {
             return fail(
                 "schema_version".to_owned(),
                 format!(
-                    "{} is unsupported; expected {SCHEMA_VERSION}",
-                    self.schema_version
+                    "{} is unsupported; expected {SCHEMA_VERSION} or {LATEST_SCHEMA_VERSION}",
+                    self.schema_version,
                 ),
             );
         }
@@ -467,7 +632,7 @@ impl TextureProfile {
                     format!("`{name}` must match [a-z][a-z0-9_-]{{0,63}} (portable source name)"),
                 );
             }
-            source.validate(&format!("sources.{name}"))?;
+            source.validate(&format!("sources.{name}"), self.schema_version)?;
         }
         Ok(())
     }
@@ -482,12 +647,42 @@ impl TextureProfile {
 
     /// Look up one declared source, or fail naming the exact profile field.
     pub fn source(&self, name: &str) -> Result<&TextureSourceBinding> {
-        self.sources.get(name).ok_or_else(|| Error::Validation {
-            path: format!("texture_profile.sources.{name}"),
-            message: format!(
-                "texture profile `{}` has no mapping for source `{name}`",
-                self.name
-            ),
+        self.sources.get(name).ok_or_else(|| {
+            let mut suggestions: Vec<(&String, usize)> = self
+                .sources
+                .keys()
+                .map(|candidate| (candidate, edit_distance(name, candidate)))
+                .filter(|(candidate, distance)| {
+                    *distance <= 2
+                        || candidate.starts_with(name)
+                        || name.starts_with(candidate.as_str())
+                })
+                .collect();
+            suggestions.sort_by(|(left, left_distance), (right, right_distance)| {
+                left_distance
+                    .cmp(right_distance)
+                    .then_with(|| left.cmp(right))
+            });
+            let hint = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; similar source key(s): {}",
+                    suggestions
+                        .iter()
+                        .take(3)
+                        .map(|(candidate, _)| candidate.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            Error::Validation {
+                path: format!("texture_profile.sources.{name}"),
+                message: format!(
+                    "texture profile `{}` has no mapping for source `{name}`{hint}; use `scorekit texture inspect <profile>` to enumerate available keys",
+                    self.name
+                ),
+            }
         })
     }
 
@@ -508,37 +703,53 @@ impl TextureProfile {
             .map(|(name, source)| (name, source, root.join(source.path())))
             .collect()
     }
-
-    pub fn resolved_discoverable_sources<'a>(
-        &'a self,
-        profile_dir: &Path,
-    ) -> Result<Vec<(&'a String, &'a TextureSource, PathBuf)>> {
-        self.resolved_sources(profile_dir)
-            .into_iter()
-            .map(|(name, binding, resolved)| {
-                binding
-                    .discoverable(&format!("sources.{name}"))
-                    .map(|source| (name, source, resolved))
-            })
-            .collect()
-    }
 }
 
 /// Exact, explainable selection criteria. Every populated field must match
-/// (AND), and every comparison is equality or set membership — never a
-/// similarity score. Ranking candidates by "closeness" would put creative
-/// judgement inside the compiler and would hand back a plausible-looking
-/// wrong answer exactly when the honest answer is "nothing fits".
+/// (AND), and every comparison is exact equality, set membership, or an
+/// inclusive numeric bound — never a similarity score. Ranking candidates by
+/// "closeness" would put creative judgement inside the compiler and would
+/// hand back a plausible-looking wrong answer exactly when the honest answer
+/// is "nothing fits".
 #[derive(Debug, Clone, Default)]
 pub struct Filter {
     pub source: Option<String>,
     pub category: Option<Category>,
+    pub family: Option<String>,
     pub tags: Vec<String>,
     pub mode: Option<TextureMode>,
     pub use_case: Option<String>,
+    pub scene: Option<String>,
+    pub min_duration: Option<f64>,
+    pub max_duration: Option<f64>,
+    pub min_intensity: Option<f64>,
+    pub max_intensity: Option<f64>,
+    pub min_brightness: Option<f64>,
+    pub max_brightness: Option<f64>,
+    pub tonality: Option<String>,
+    pub loopable: Option<bool>,
+    pub limit: Option<usize>,
+    pub offset: usize,
 }
 
 impl Filter {
+    fn has_metadata_constraints(&self) -> bool {
+        self.category.is_some()
+            || self.family.is_some()
+            || !self.tags.is_empty()
+            || self.mode.is_some()
+            || self.use_case.is_some()
+            || self.scene.is_some()
+            || self.min_duration.is_some()
+            || self.max_duration.is_some()
+            || self.min_intensity.is_some()
+            || self.max_intensity.is_some()
+            || self.min_brightness.is_some()
+            || self.max_brightness.is_some()
+            || self.tonality.is_some()
+            || self.loopable.is_some()
+    }
+
     fn matches(&self, name: &str, source: &TextureSource) -> bool {
         if let Some(wanted) = &self.source
             && name != wanted
@@ -546,7 +757,17 @@ impl Filter {
             return false;
         }
         if let Some(wanted) = self.category
-            && source.category != wanted
+            && source.category != Some(wanted)
+            && source.family.as_deref() != Some(wanted.key())
+        {
+            return false;
+        }
+        if let Some(wanted) = &self.family
+            && source
+                .family
+                .as_deref()
+                .or_else(|| source.category.map(Category::key))
+                != Some(wanted.as_str())
         {
             return false;
         }
@@ -560,6 +781,55 @@ impl Filter {
         }
         if let Some(use_case) = &self.use_case
             && !source.use_cases.contains(use_case)
+            && !source.scenes.contains(use_case)
+        {
+            return false;
+        }
+        if let Some(scene) = &self.scene
+            && !source.scenes.contains(scene)
+            && !source.use_cases.contains(scene)
+        {
+            return false;
+        }
+        if let Some(audio) = &source.audio {
+            for (bound, actual, is_min) in [
+                (self.min_duration, audio.duration_seconds, true),
+                (self.max_duration, audio.duration_seconds, false),
+                (self.min_intensity, audio.intensity, true),
+                (self.max_intensity, audio.intensity, false),
+                (self.min_brightness, audio.brightness, true),
+                (self.max_brightness, audio.brightness, false),
+            ] {
+                if let Some(bound) = bound
+                    && actual.is_none_or(|actual| {
+                        if is_min {
+                            actual < bound
+                        } else {
+                            actual > bound
+                        }
+                    })
+                {
+                    return false;
+                }
+            }
+            if let Some(tonality) = &self.tonality
+                && audio.tonality.as_ref() != Some(tonality)
+            {
+                return false;
+            }
+        } else if self.min_duration.is_some()
+            || self.max_duration.is_some()
+            || self.min_intensity.is_some()
+            || self.max_intensity.is_some()
+            || self.min_brightness.is_some()
+            || self.max_brightness.is_some()
+            || self.tonality.is_some()
+        {
+            return false;
+        }
+        if self
+            .loopable
+            .is_some_and(|wanted| source.playback.loopable != Some(wanted))
         {
             return false;
         }
@@ -570,9 +840,21 @@ impl Filter {
         json!({
             "source": self.source,
             "category": self.category.map(Category::key),
+            "family": self.family,
             "tags": self.tags,
             "mode": self.mode.map(mode_key),
             "use_case": self.use_case,
+            "scene": self.scene,
+            "min_duration": self.min_duration,
+            "max_duration": self.max_duration,
+            "min_intensity": self.min_intensity,
+            "max_intensity": self.max_intensity,
+            "min_brightness": self.min_brightness,
+            "max_brightness": self.max_brightness,
+            "tonality": self.tonality,
+            "loopable": self.loopable,
+            "limit": self.limit,
+            "offset": self.offset,
         })
     }
 }
@@ -581,6 +863,7 @@ impl Filter {
 pub struct InspectReport {
     pub profile: String,
     pub total: usize,
+    pub matching: usize,
     pub status: &'static str,
     filter: Filter,
     matched: Vec<serde_json::Value>,
@@ -588,7 +871,7 @@ pub struct InspectReport {
 
 impl InspectReport {
     pub fn matched(&self) -> usize {
-        self.matched.len()
+        self.matching
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -596,6 +879,9 @@ impl InspectReport {
             "profile": self.profile,
             "total": self.total,
             "matched": self.matched(),
+            "returned": self.matched.len(),
+            "offset": self.filter.offset,
+            "limit": self.filter.limit,
             "status": self.status,
             "filters": self.filter.to_json(),
             "categories": Category::keys(),
@@ -604,7 +890,7 @@ impl InspectReport {
     }
 
     pub fn summary(&self) -> String {
-        if self.matched.is_empty() {
+        if self.matching == 0 {
             return format!(
                 "no_match: profile `{}`: 0 of {} source(s) match; no suitable source exists — \
                  acquire and declare one rather than substituting an approximation",
@@ -612,10 +898,12 @@ impl InspectReport {
             );
         }
         let mut lines = vec![format!(
-            "ok: profile `{}`: {} of {} source(s) match",
+            "ok: profile `{}`: {} of {} source(s) match (showing {} from offset {})",
             self.profile,
             self.matched(),
-            self.total
+            self.total,
+            self.matched.len(),
+            self.filter.offset
         )];
         for source in &self.matched {
             let text = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
@@ -632,12 +920,23 @@ impl InspectReport {
                     .unwrap_or_default()
             };
             lines.push(format!(
-                "  {} [{}] modes={} tags={} use_cases={} — {}",
+                "  {} [{}] modes={} tags={} scenes={} — {}",
                 text(&source["source"]),
-                text(&source["category"]),
+                source["family"]
+                    .as_str()
+                    .or_else(|| source["category"].as_str())
+                    .unwrap_or_default(),
                 list(&source["playback"]["modes"]),
                 list(&source["tags"]),
-                list(&source["use_cases"]),
+                source["scenes"]
+                    .as_array()
+                    .or_else(|| source["use_cases"].as_array())
+                    .map(|values| values
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","))
+                    .unwrap_or_default(),
                 text(&source["description"]),
             ));
         }
@@ -654,20 +953,46 @@ pub fn inspect(
     profile_dir: &Path,
     filter: &Filter,
 ) -> Result<InspectReport> {
-    let matched: Vec<serde_json::Value> = profile
-        .resolved_discoverable_sources(profile_dir)?
-        .into_iter()
-        .filter(|(name, source, _)| filter.matches(name, source))
-        .map(|(name, source, resolved)| source.to_json(name, &resolved))
-        .collect();
+    let mut matched = Vec::new();
+    for (name, binding, resolved) in profile.resolved_sources(profile_dir) {
+        let entry = match binding {
+            TextureSourceBinding::Discoverable(source) => {
+                if !filter.matches(name, source) {
+                    continue;
+                }
+                source.to_json(name, &resolved, profile.schema_version)
+            }
+            TextureSourceBinding::LegacyPath(_) => {
+                if filter.has_metadata_constraints()
+                    || filter
+                        .source
+                        .as_deref()
+                        .is_some_and(|wanted| wanted != name)
+                {
+                    continue;
+                }
+                json!({
+                    "source": name,
+                    "path": binding.path(),
+                    "resolved_path": resolved.display().to_string(),
+                    "exists": resolved.is_file(),
+                    "metadata_available": false,
+                })
+            }
+        };
+        matched.push(entry);
+    }
+    let matching = matched.len();
+    let start = filter.offset.min(matching);
+    let end = filter
+        .limit
+        .map_or(matching, |limit| start.saturating_add(limit).min(matching));
+    let matched = matched.drain(start..end).collect();
     Ok(InspectReport {
         profile: profile.name.clone(),
         total: profile.sources.len(),
-        status: if matched.is_empty() {
-            "no_match"
-        } else {
-            "match"
-        },
+        matching,
+        status: if matching == 0 { "no_match" } else { "match" },
         filter: filter.clone(),
         matched,
     })
@@ -698,7 +1023,62 @@ pub fn profile_dir(path: &Path) -> PathBuf {
 pub fn schema_json() -> String {
     let schema = schemars::schema_for!(TextureProfile);
     let mut value = serde_json::to_value(schema).expect("schema serializes");
-    value["properties"]["schema_version"]["const"] = json!(SCHEMA_VERSION);
+    value["properties"]["schema_version"]["enum"] = json!([SCHEMA_VERSION, LATEST_SCHEMA_VERSION]);
+    value["$defs"]["TextureSource"]["required"] = json!([
+        "path",
+        "description",
+        "category",
+        "tags",
+        "playback",
+        "use_cases",
+        "provenance",
+    ]);
+    let source_properties = value["$defs"]["TextureSource"]["properties"].clone();
+    let mut v2_properties = serde_json::Map::new();
+    for field in [
+        "path",
+        "family",
+        "tags",
+        "playback",
+        "scenes",
+        "audio",
+        "description",
+        "provenance",
+    ] {
+        if let Some(schema) = source_properties.get(field) {
+            v2_properties.insert(field.to_owned(), schema.clone());
+        }
+    }
+    value["$defs"]["TextureSourceV2"] = json!({
+        "type": "object",
+        "properties": v2_properties,
+        "required": ["path", "family", "tags", "playback", "scenes"],
+        "additionalProperties": false,
+    });
+    let family_schema = &mut value["$defs"]["TextureSourceV2"]["properties"]["family"];
+    family_schema["type"] = "string".into();
+    if let Some(properties) = family_schema.as_object_mut() {
+        properties.remove("anyOf");
+    }
+    value["$defs"]["TextureSourceV2"]["properties"]["family"]["pattern"] =
+        "^[a-z][a-z0-9_-]{0,31}$".into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["items"]["pattern"] =
+        "^[a-z][a-z0-9_-]{0,31}$".into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["minItems"] = 1.into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["maxItems"] = MAX_TOKENS.into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["uniqueItems"] = true.into();
+    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["exclusiveMinimum"] =
+        true.into();
+    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["minimum"] = 0.into();
+    for field in ["intensity", "brightness"] {
+        value["$defs"]["AudioMetadata"]["properties"][field]["minimum"] = 0.into();
+        value["$defs"]["AudioMetadata"]["properties"][field]["maximum"] = 1.into();
+    }
+    value["$defs"]["AudioMetadata"]["properties"]["tonality"]["pattern"] =
+        "^[a-z][a-z0-9_-]{0,31}$".into();
+    if let Some(variants) = value["$defs"]["TextureSourceBinding"]["anyOf"].as_array_mut() {
+        variants.push(json!({"$ref": "#/$defs/TextureSourceV2"}));
+    }
     serde_json::to_string_pretty(&value).expect("schema serializes")
 }
 
@@ -709,17 +1089,21 @@ mod tests {
     fn source(path: &str) -> TextureSource {
         TextureSource {
             path: path.to_owned(),
-            description: "Wide river bed".to_owned(),
-            category: Category::Organic,
+            description: Some("Wide river bed".to_owned()),
+            category: Some(Category::Organic),
+            family: None,
             tags: vec!["water".to_owned(), "flowing".to_owned()],
             playback: Playback {
                 modes: vec![TextureMode::Loop],
                 default_mode: TextureMode::Loop,
+                loopable: None,
             },
             use_cases: vec!["forest".to_owned()],
-            provenance: Provenance {
+            scenes: Vec::new(),
+            provenance: Some(Provenance {
                 library: "vcsl@1.2.2".to_owned(),
-            },
+            }),
+            audio: None,
         }
     }
 
@@ -731,7 +1115,7 @@ mod tests {
             root: Some("audio".to_owned()),
             sources: sources
                 .into_iter()
-                .map(|(name, source)| (name.to_owned(), TextureSourceBinding::Discoverable(source)))
+                .map(|(name, source)| (name.to_owned(), TextureSourceBinding::from(source)))
                 .collect(),
         }
     }
@@ -766,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_path_bindings_remain_loadable_but_are_not_discoverable() {
+    fn legacy_path_bindings_remain_loadable_and_discoverable_without_invented_metadata() {
         let profile: TextureProfile =
             serde_yaml_ng::from_str("name: legacy\nsources:\n  river: river.wav\n").unwrap();
         assert_eq!(profile.schema_version, SCHEMA_VERSION);
@@ -775,14 +1159,15 @@ mod tests {
             profile.resolve(Path::new("/profiles"), "river").unwrap(),
             Path::new("/profiles/river.wav")
         );
-        let error = inspect(&profile, Path::new("/profiles"), &Filter::default()).unwrap_err();
-        assert!(matches!(error, Error::Validation { ref path, .. } if path == "sources.river"));
+        let report = inspect(&profile, Path::new("/profiles"), &Filter::default()).unwrap();
+        assert_eq!(report.matched(), 1);
+        assert_eq!(report.to_json()["sources"][0]["metadata_available"], false);
     }
 
     #[test]
     fn rejects_unsupported_schema_version() {
         let mut profile = profile(vec![("river", source("river.wav"))]);
-        profile.schema_version = 2;
+        profile.schema_version = 3;
         let error = profile.validate().unwrap_err();
         assert!(matches!(error, Error::Validation { ref path, .. } if path == "schema_version"));
     }
@@ -793,7 +1178,7 @@ mod tests {
         let cases: Vec<(&str, Mutate)> = vec![
             (
                 "sources.river.description",
-                Box::new(|s: &mut TextureSource| s.description = "  ".to_owned()),
+                Box::new(|s: &mut TextureSource| s.description = Some("  ".to_owned())),
             ),
             (
                 "sources.river.tags",
@@ -827,11 +1212,15 @@ mod tests {
             ),
             (
                 "sources.river.provenance.library",
-                Box::new(|s: &mut TextureSource| s.provenance.library = String::new()),
+                Box::new(|s: &mut TextureSource| {
+                    s.provenance.as_mut().unwrap().library = String::new()
+                }),
             ),
             (
                 "sources.river.provenance.library",
-                Box::new(|s: &mut TextureSource| s.provenance.library = "unversioned".to_owned()),
+                Box::new(|s: &mut TextureSource| {
+                    s.provenance.as_mut().unwrap().library = "unversioned".to_owned()
+                }),
             ),
         ];
         for (field, mutate) in cases {
@@ -854,7 +1243,7 @@ mod tests {
     #[test]
     fn filters_are_exact_and_conjunctive() {
         let mut grind = source("grind.wav");
-        grind.category = Category::Industrial;
+        grind.category = Some(Category::Industrial);
         grind.tags = vec!["metal".to_owned(), "grinding".to_owned()];
         grind.use_cases = vec!["factory".to_owned()];
         let profile = profile(vec![("river", source("river.wav")), ("grind", grind)]);
