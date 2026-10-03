@@ -14,7 +14,7 @@
 //! report.
 
 use crate::error::{Error, Result};
-use crate::texture::{self, TextureProfile, mode_key};
+use crate::texture::{self, mode_key, TextureProfile, TextureSource};
 use crate::tools;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -29,10 +29,18 @@ pub struct SourceReport {
     pub source: String,
     pub path: String,
     pub status: String,
-    pub category: String,
-    pub modes: Vec<String>,
-    pub default_mode: String,
-    pub library: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loopable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
     /// SHA-256 of the **source file** bytes, not of the normalized PCM: it
     /// identifies the recording itself and stays stable across FFmpeg
     /// versions, so a stored report doubles as a corpus-drift baseline.
@@ -181,20 +189,40 @@ fn sha256_file(path: &Path) -> Result<String> {
         .collect())
 }
 
-fn entry(name: &str, path: &Path, source: &texture::TextureSource, status: &str) -> SourceReport {
+fn entry(
+    name: &str,
+    path: &Path,
+    source: Option<&TextureSource>,
+    schema_version: u16,
+    status: &str,
+) -> SourceReport {
     SourceReport {
         source: name.to_owned(),
         path: path.display().to_string(),
         status: status.to_owned(),
-        category: source.category.key().to_owned(),
-        modes: source
-            .playback
-            .modes
-            .iter()
-            .map(|mode| mode_key(*mode).to_owned())
-            .collect(),
-        default_mode: mode_key(source.playback.default_mode).to_owned(),
-        library: source.provenance.library.clone(),
+        category: source
+            .and_then(|source| source.category.map(|category| category.key().to_owned())),
+        family: if schema_version == 2 {
+            source.and_then(|source| {
+                source
+                    .family
+                    .clone()
+                    .or_else(|| source.category.map(|category| category.key().to_owned()))
+            })
+        } else {
+            None
+        },
+        modes: source.map(|source| {
+            source
+                .playback
+                .modes
+                .iter()
+                .map(|mode| mode_key(*mode).to_owned())
+                .collect()
+        }),
+        default_mode: source.map(|source| mode_key(source.playback.default_mode).to_owned()),
+        loopable: source.and_then(|source| source.playback.loopable),
+        library: source.and_then(|source| source.provenance.as_ref().map(|p| p.library.clone())),
         sha256: None,
         duration_seconds: None,
         frames: None,
@@ -210,12 +238,16 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
     let scratch = Scratch::create()?;
 
     let mut entries = Vec::with_capacity(profile.sources.len());
-    for (index, (name, source, resolved)) in profile
-        .resolved_discoverable_sources(&profile_dir)?
+    for (index, (name, binding, resolved)) in profile
+        .resolved_sources(&profile_dir)
         .into_iter()
         .enumerate()
     {
-        let mut report = entry(name, &resolved, source, "ok");
+        let source = match binding {
+            texture::TextureSourceBinding::LegacyPath(_) => None,
+            texture::TextureSourceBinding::Discoverable(source) => Some(source),
+        };
+        let mut report = entry(name, &resolved, source, profile.schema_version, "ok");
         if !resolved.is_file() {
             report.status = "missing".to_owned();
             report.error = Some(format!(

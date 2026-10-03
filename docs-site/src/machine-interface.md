@@ -83,7 +83,7 @@ For the common case you don't need to write the wrapper at all:
 scorekit mcp        # MCP over stdio (newline-delimited JSON-RPC 2.0)
 ```
 
-`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, and `diff` as MCP tools. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers. The `build` and `inspect_instruments` tools take `orchestration` (the sfizz routing input) instead of the retired per-build `profile` argument.
+`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, and `diff` as MCP tools. Texture discovery accepts exact family/tag/scene/mode/audio filters and page limits; a query with no candidate returns `status: "no_match"` rather than a ranked substitute. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers. The `build` and `inspect_instruments` tools take `orchestration` (the sfizz routing input) instead of the retired per-build `profile` argument.
 
 Example client registration (Claude Desktop / any MCP client):
 

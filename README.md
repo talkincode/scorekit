@@ -141,38 +141,45 @@ describes each one, so an agent can choose without opening the files:
 
 ```yaml
 # textures.yaml
-schema_version: 1
+schema_version: 2
 name: forest-field-recordings
 root: /Volumes/Samples
 sources:
   river:
     path: ambience/river.flac
-    description: Wide river bed, mid-distance, no bird calls
-    category: organic
+    family: organic
     tags: [water, flowing, continuous]
-    playback: { modes: [loop], default_mode: loop }
-    use_cases: [forest, travel]
-    provenance: { library: field-recordings@2024.1 }
+    playback: { modes: [loop], default_mode: loop, loopable: true }
+    audio: { duration_seconds: 18.2, intensity: 0.35, brightness: 0.2, tonality: atonal }
+    scenes: [forest, travel]
   forest_birds:
     path: wildlife/birds.wav
-    description: Single dawn chorus swell, ends on silence
-    category: organic
+    family: organic
     tags: [wildlife, chirping]
     playback: { modes: [one_shot], default_mode: one_shot }
-    use_cases: [forest, dawn]
-    provenance: { library: field-recordings@2024.1 }
+    audio: { duration_seconds: 7.4, intensity: 0.55, brightness: 0.72, tonality: tonal }
+    scenes: [forest, dawn]
 ```
 
 Existing path-only bindings such as `river: ambience/river.flac` remain
-build-compatible. They are intentionally unavailable to `texture inspect` and
-`texture check` until migrated to the structured form above; scorekit never
-invents discovery metadata for a legacy entry.
+build-compatible and enumerable; their discovery result marks metadata as
+unavailable rather than inventing it. `texture check` also verifies legacy
+files exist, decode, and are audible. Schema v1 structured profiles remain
+supported unchanged.
 
 ```bash
-scorekit texture inspect textures.yaml --category organic --tag water
+scorekit --json texture inspect textures.yaml --family organic --tag water \
+  --scene forest --mode loop --min-duration 5 --max-intensity 0.6 \
+  --limit 100 --offset 0
 scorekit texture check textures.yaml
 scorekit build forest.yaml --texture-profile textures.yaml -o forest.ogg --stems
 ```
+
+Discovery filters are exact and conjunctive: no similarity ranking is used,
+and a zero-result query returns `status: "no_match"` with exit 0. `--limit`
+and `--offset` page large inventories; `total` is the full inventory count
+and `matched` is the count satisfying all filters. `texture check` is the
+decodability gate to run before relying on a selected source.
 
 `texture inspect` filters exactly and conjunctively — no similarity ranking,
 so "nothing fits" is an answer you can trust rather than a plausible wrong
