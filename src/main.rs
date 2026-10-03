@@ -272,6 +272,7 @@ enum OrchestrationCommand {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum TextureCommand {
     /// Enumerate texture sources, filtered by exact declared properties
     Inspect {

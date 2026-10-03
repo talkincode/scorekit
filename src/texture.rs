@@ -208,7 +208,7 @@ pub struct AudioMetadata {
 #[serde(untagged)]
 pub enum TextureSourceBinding {
     LegacyPath(String),
-    Discoverable(TextureSource),
+    Discoverable(Box<TextureSource>),
 }
 
 impl<'de> Deserialize<'de> for TextureSourceBinding {
@@ -244,7 +244,7 @@ impl<'de> Deserialize<'de> for TextureSourceBinding {
                 M: MapAccess<'de>,
             {
                 TextureSource::deserialize(de::value::MapAccessDeserializer::new(map))
-                    .map(TextureSourceBinding::Discoverable)
+                    .map(|source| TextureSourceBinding::Discoverable(Box::new(source)))
             }
         }
 
@@ -254,7 +254,7 @@ impl<'de> Deserialize<'de> for TextureSourceBinding {
 
 impl From<TextureSource> for TextureSourceBinding {
     fn from(source: TextureSource) -> Self {
-        Self::Discoverable(source)
+        Self::Discoverable(Box::new(source))
     }
 }
 
@@ -756,10 +756,11 @@ impl Filter {
         {
             return false;
         }
-        if let Some(wanted) = self.category {
-            if source.category != Some(wanted) && source.family.as_deref() != Some(wanted.key()) {
-                return false;
-            }
+        if let Some(wanted) = self.category
+            && source.category != Some(wanted)
+            && source.family.as_deref() != Some(wanted.key())
+        {
+            return false;
         }
         if let Some(wanted) = &self.family
             && source
@@ -1114,7 +1115,7 @@ mod tests {
             root: Some("audio".to_owned()),
             sources: sources
                 .into_iter()
-                .map(|(name, source)| (name.to_owned(), TextureSourceBinding::Discoverable(source)))
+                .map(|(name, source)| (name.to_owned(), TextureSourceBinding::from(source)))
                 .collect(),
         }
     }
