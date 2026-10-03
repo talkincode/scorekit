@@ -250,7 +250,7 @@ pub fn check(profile_path: &Path, sample_rate: u32) -> Result<Report> {
         let mut report = entry(
             name,
             &resolved,
-            source.as_deref(),
+            source.map(|source| source.as_ref()),
             profile.schema_version,
             "ok",
         );
