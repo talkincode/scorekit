@@ -1055,25 +1055,26 @@ pub fn schema_json() -> String {
         "additionalProperties": false,
     });
     let family_schema = &mut value["$defs"]["TextureSourceV2"]["properties"]["family"];
-    family_schema["type"] = "string";
+    family_schema["type"] = "string".into();
     if let Some(properties) = family_schema.as_object_mut() {
         properties.remove("anyOf");
     }
     value["$defs"]["TextureSourceV2"]["properties"]["family"]["pattern"] =
-        "^[a-z][a-z0-9_-]{0,31}$";
+        "^[a-z][a-z0-9_-]{0,31}$".into();
     value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["items"]["pattern"] =
-        "^[a-z][a-z0-9_-]{0,31}$";
-    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["minItems"] = 1;
-    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["maxItems"] = MAX_TOKENS;
-    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["uniqueItems"] = true;
-    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["exclusiveMinimum"] = true;
-    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["minimum"] = 0;
+        "^[a-z][a-z0-9_-]{0,31}$".into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["minItems"] = 1.into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["maxItems"] = MAX_TOKENS.into();
+    value["$defs"]["TextureSourceV2"]["properties"]["scenes"]["uniqueItems"] = true.into();
+    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["exclusiveMinimum"] =
+        true.into();
+    value["$defs"]["AudioMetadata"]["properties"]["duration_seconds"]["minimum"] = 0.into();
     for field in ["intensity", "brightness"] {
-        value["$defs"]["AudioMetadata"]["properties"][field]["minimum"] = 0;
-        value["$defs"]["AudioMetadata"]["properties"][field]["maximum"] = 1;
+        value["$defs"]["AudioMetadata"]["properties"][field]["minimum"] = 0.into();
+        value["$defs"]["AudioMetadata"]["properties"][field]["maximum"] = 1.into();
     }
     value["$defs"]["AudioMetadata"]["properties"]["tonality"]["pattern"] =
-        "^[a-z][a-z0-9_-]{0,31}$";
+        "^[a-z][a-z0-9_-]{0,31}$".into();
     if let Some(variants) = value["$defs"]["TextureSourceBinding"]["anyOf"].as_array_mut() {
         variants.push(json!({"$ref": "#/$defs/TextureSourceV2"}));
     }

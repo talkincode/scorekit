@@ -6876,7 +6876,7 @@ sources:
 
     let out = bin()
         .args(["--json", "texture", "inspect"])
-        .arg(profile)
+        .arg(&profile)
         .assert()
         .failure()
         .code(2);
