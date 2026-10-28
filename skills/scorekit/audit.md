@@ -26,7 +26,7 @@ mark it `n/a` in the report.
 | # | Gate | Command | Pass condition |
 | --- | --- | --- | --- |
 | G1 | Schema | `scorekit --json validate scene.yaml` | exit 0 |
-| G2 | Style | `scorekit --json lint scene.yaml --grammar <g>` | exit 0 for every grammar profile the project declares |
+| G2 | Style | `scorekit --json lint scene.yaml --grammar <g> [--corpus <dir> ...]` | exit 0 for every grammar profile the project declares (corpus rules need `--corpus`) |
 | G3 | Instruments | `scorekit --json inspect-instruments scene.yaml [--orchestration <o>]` | no `missing`/`rejected`; every `fallback` reviewed (below) |
 | G4 | Textures | `scorekit --json texture inspect <tp> --source <name>` per declared source, then `scorekit --json texture check <tp>` | every `textures[].source` exists, declares the scene's `mode` in `playback.modes`, and certifies audible |
 | G5 | Build evidence | read `meta.json` next to the audio | `instrument_resolution` clean or reviewed; `loop_samples`/`total_samples` sane; stems listed when `--stems`; `story` echoed |
@@ -60,12 +60,30 @@ grammar overrides them — note the override in the report.
 | J · source honesty | unreviewed fallbacks from G3/G5; texture sources picked by guess | 0 |
 | K · style independence | vs your recent deliverables (this session/project): instrument-set overlap, and variation axes changed (palette family, key+mode, tempo class, meter, lead timbre, pulse, harmony color, density — see [palettes.md](palettes.md)) | overlap <50% and ≥3 axes changed, unless the user pinned a series style; strings/orchestral palette carries a stated brief-based justification |
 
+**K is no longer a judgement call.** The eight axes and the overlap are
+computed by the tool: declare the corpus rules in the project's constitution
+(`corpus_instrument_overlap_max`, `corpus_axes_changed_min`) and run
+
+```bash
+scorekit lint scene.yaml --grammar grammars/anti-homogenization.yaml \
+  --corpus out/ --corpus examples/scenes
+```
+
+A passing run prints `nearest <scene> — instrument overlap 0.42 (shared …),
+5/8 axes changed (…)`; quote that line as the K evidence instead of a
+sentence. A failing run is a G2 violation with `measured` vs `want`, which
+makes a BLOCKED verdict — not a note-to-self. `--corpus` with no scenes in
+it, or corpus rules without `--corpus`, is an input error: an unmeasurable K
+must never be reported as passing.
+
 Measuring K: list the instrument sets side by side and count; run
 `scorekit diff` between the current and previous scene when both exist —
 a diff that only touches motif content while palette, tempo, key, and
 track list stay put is the homogenization signature. In standalone mode
 with no prior pieces available, mark K `n/a (no corpus)` — or, when the
 user supplies several scenes at once, measure K pairwise across them.
+Prefer the corpus lint above whenever a corpus exists; `scorekit diff`
+answers a different question (what changed inside one piece).
 
 Dimension shortcuts by pattern: `sustain`/`arpeggio`/`bass`/`drums` fill
 the whole scene, so B–D are shaped *only* by melody tracks' rests and by
@@ -79,11 +97,10 @@ One compact block per audit, always in this shape:
 
 ```text
 Arrangement audit — scene.yaml (mode: self-check | standalone)
-Gates: G1 PASS · G2 PASS (grief) · G3 PASS (1 fallback: oboe→english_horn, reviewed) · G4 n/a · G5 PASS
+Gates: G1 PASS · G2 PASS (grief; corpus: overlap 0.42, 5/8 axes) · G3 PASS (1 fallback: oboe→english_horn, reviewed) · G4 n/a · G5 PASS
 Craft:
   B voice discipline: measured peak 3, want ≤2 — fix: rest the harp under bars 13–16
   D curve: 20→40→70→70→70 — plateau after the peak; cut to silence or drop a role at bar 17
-  K style independence: 5/6 instruments shared with previous piece, 1 axis changed — fix: re-palette (see palettes.md) or justify as a series
   (A, C, E–J in range)
 Verdict: BLOCKED | SHIP WITH NOTES | CLEAN
 ```
@@ -106,7 +123,9 @@ a measurable rule in a grammar profile — `tempo_min`/`tempo_max`,
 `pads_max`, `melodic_voices_max`, `melody_rest_ratio_min`,
 `phrase_min_beats`, `resolution`, `harmony_allowed`,
 `require_performance`, `percussion_events_per_bar_min`,
-`percussion_onsets`, `automation_activity`, and named `section_rules` — and
+`percussion_onsets`, `automation_activity`,
+`corpus_instrument_overlap_max`, `corpus_axes_changed_min`, and named
+`section_rules` — and
 lint every new scene. The dimension then
 becomes a G2 gate that survives model changes. Dimensions grammar cannot
 yet measure (curve shape, register spacing, story alignment) stay in the

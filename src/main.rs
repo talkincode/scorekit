@@ -1,6 +1,7 @@
 mod audio;
 mod composer;
 mod diff;
+mod diversity;
 mod doctor;
 mod error;
 mod grammar;
@@ -69,6 +70,11 @@ enum Command {
         /// Grammar profile (YAML); see `scorekit schema --grammar`
         #[arg(long)]
         grammar: PathBuf,
+        /// Scene directory to measure style independence against (repeatable;
+        /// required by the `corpus_*` grammar rules). Files that are not
+        /// scenes are skipped.
+        #[arg(long = "corpus", value_name = "DIR")]
+        corpus: Vec<PathBuf>,
     },
     /// Inspect every SFZ mapping in a renderer profile
     Profile {
@@ -795,13 +801,63 @@ fn run(command: &Command, json: bool) -> Result<String> {
         Command::Lint {
             scene,
             grammar: profile,
+            corpus: corpus_dirs,
         } => {
             let s = schema::load_scene(scene)?;
             let g = grammar::load_grammar(profile)?;
-            let violations = grammar::check(&s, &g);
+            if g.rules.needs_corpus() && corpus_dirs.is_empty() {
+                return Err(error::Error::Validation {
+                    path: "--corpus".to_owned(),
+                    message: format!(
+                        "grammar `{}` declares corpus rules (style independence); pass \
+                         `--corpus <dir>` with the scenes this piece must differ from",
+                        g.name
+                    ),
+                });
+            }
+            let corpus = if corpus_dirs.is_empty() {
+                diversity::Corpus::default()
+            } else {
+                let loaded = diversity::load_corpus(corpus_dirs, Some(scene))?;
+                if loaded.is_empty() {
+                    return Err(error::Error::Validation {
+                        path: "--corpus".to_owned(),
+                        message: format!(
+                            "no scene files found in {} ({} yaml file(s) were not scenes)",
+                            corpus_dirs
+                                .iter()
+                                .map(|dir| dir.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            loaded.skipped
+                        ),
+                    });
+                }
+                loaded
+            };
+            let violations = grammar::check(&s, &g, &corpus);
+            let corpus_note = if corpus_dirs.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; corpus {} scene(s), {} skipped",
+                    corpus.scenes.len(),
+                    corpus.skipped
+                )
+            };
             if violations.is_empty() {
+                let evidence = if g.rules.needs_corpus() {
+                    diversity::summary(&diversity::compare_all(
+                        &diversity::Piece::measure(&s),
+                        &corpus,
+                    ))
+                    .map(|line| format!("\n{line}"))
+                    .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 Ok(format!(
-                    "ok: conforms to `{}` ({} rule(s) checked)",
+                    "ok: conforms to `{}` ({} rule(s) checked{corpus_note}){evidence}",
                     g.name,
                     g.rules.active_count()
                 ))

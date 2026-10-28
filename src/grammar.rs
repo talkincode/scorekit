@@ -5,6 +5,7 @@
 //! agent gets a regression test for its own aesthetics.
 
 use crate::composer::{self, PPQ};
+use crate::diversity::{self, Corpus};
 use crate::error::{Error, Result};
 use crate::schema::{
     AutomationTarget, Instrument, Pattern, PercussionVoice, Scene, parse_key, parse_numeral,
@@ -76,6 +77,16 @@ pub struct Rules {
     /// Minimum authored automation activity, optionally scoped to a track ID.
     #[serde(default)]
     pub automation_activity: Vec<AutomationActivityRule>,
+    /// Maximum instrument-set overlap (0..=1, `|A ∩ B| / max(|A|,|B|)`) with
+    /// any scene in the corpus supplied by `lint --corpus`. See
+    /// `scorekit schema --grammar` and `skills/scorekit/palettes.md`.
+    #[serde(default)]
+    pub corpus_instrument_overlap_max: Option<f64>,
+    /// Minimum number of the eight variation axes that must differ from
+    /// every scene in the corpus (palette family, key+mode, tempo class,
+    /// meter, lead timbre, pulse, harmony color, density).
+    #[serde(default)]
+    pub corpus_axes_changed_min: Option<u8>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -152,6 +163,13 @@ impl Rules {
             + usize::from(self.percussion_events_per_bar_min.is_some())
             + usize::from(!self.percussion_onsets.is_empty())
             + usize::from(!self.automation_activity.is_empty())
+            + usize::from(self.corpus_instrument_overlap_max.is_some())
+            + usize::from(self.corpus_axes_changed_min.is_some())
+    }
+
+    /// True when the rules can only be evaluated against a corpus.
+    pub fn needs_corpus(&self) -> bool {
+        self.corpus_instrument_overlap_max.is_some() || self.corpus_axes_changed_min.is_some()
     }
 }
 
@@ -231,6 +249,25 @@ fn validate_rules(rules: &Rules, prefix: &str) -> Result<()> {
                 return fail(&format!("harmony_allowed[{i}]"), error);
             }
         }
+    }
+    if let Some(max) = rules.corpus_instrument_overlap_max
+        && (!max.is_finite() || !(0.0..=1.0).contains(&max))
+    {
+        return fail(
+            "corpus_instrument_overlap_max",
+            format!("{max} out of range 0.0..=1.0"),
+        );
+    }
+    if let Some(min) = rules.corpus_axes_changed_min
+        && usize::from(min) > crate::diversity::AXIS_COUNT
+    {
+        return fail(
+            "corpus_axes_changed_min",
+            format!(
+                "{min} exceeds the {} measurable variation axes",
+                crate::diversity::AXIS_COUNT
+            ),
+        );
     }
     if let Some(min) = rules.percussion_events_per_bar_min
         && (!min.is_finite() || !(0.0..=4096.0).contains(&min))
@@ -347,8 +384,9 @@ pub fn schema_json() -> String {
 }
 
 /// Check a validated scene against a grammar. Suite scenes are checked
-/// section by section (each section is what a player actually hears).
-pub fn check(scene: &Scene, grammar: &Grammar) -> Vec<Violation> {
+/// section by section (each section is what a player actually hears);
+/// corpus rules (dimension K) are measured once, against the whole scene.
+pub fn check(scene: &Scene, grammar: &Grammar, corpus: &Corpus) -> Vec<Violation> {
     let mut violations = Vec::new();
     if scene.sections.is_empty() {
         check_one(scene, "scene", &grammar.rules, &mut violations);
@@ -382,7 +420,70 @@ pub fn check(scene: &Scene, grammar: &Grammar) -> Vec<Violation> {
             }
         }
     }
+    if grammar.rules.needs_corpus() {
+        check_corpus(scene, &grammar.rules, corpus, &mut violations);
+    }
     violations
+}
+
+/// Style independence (dimension K): measured overlap against every scene in
+/// the corpus. A stale or empty corpus is never silently "passing" — it is a
+/// finding of its own, because an unmeasurable gate is the homogenization
+/// hole this rule exists to close.
+fn check_corpus(scene: &Scene, rules: &Rules, corpus: &Corpus, out: &mut Vec<Violation>) {
+    if corpus.is_empty() {
+        out.push(Violation {
+            rule: "corpus",
+            subject: "scene".to_owned(),
+            measured: "0 comparable scene(s)".to_owned(),
+            want: "pass --corpus <dir> with at least one other scene".to_owned(),
+        });
+        return;
+    }
+    let comparisons = diversity::compare_all(&diversity::Piece::measure(scene), corpus);
+
+    if let Some(max) = rules.corpus_instrument_overlap_max {
+        for comparison in comparisons.iter().filter(|c| c.instrument_overlap > max) {
+            let shared = if comparison.shared.is_empty() {
+                "no shared instruments".to_owned()
+            } else {
+                format!("shared {}", comparison.shared.join(", "))
+            };
+            out.push(Violation {
+                rule: "corpus_instrument_overlap_max",
+                subject: format!("corpus `{}`", comparison.label),
+                measured: format!("{:.2} ({shared})", comparison.instrument_overlap),
+                want: format!("<= {max:.2}"),
+            });
+        }
+    }
+
+    if let Some(min) = rules.corpus_axes_changed_min {
+        let min = usize::from(min);
+        let mut by_axes: Vec<&diversity::Comparison> = comparisons.iter().collect();
+        by_axes.sort_by(|a, b| {
+            a.axes_changed
+                .cmp(&b.axes_changed)
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        for comparison in by_axes.iter().filter(|c| c.axes_changed < min) {
+            out.push(Violation {
+                rule: "corpus_axes_changed_min",
+                subject: format!("corpus `{}`", comparison.label),
+                measured: format!(
+                    "{} of {} axes changed (kept: {})",
+                    comparison.axes_changed,
+                    diversity::AXIS_COUNT,
+                    if comparison.unchanged.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        comparison.unchanged.join(", ")
+                    }
+                ),
+                want: format!(">= {min} axes differ"),
+            });
+        }
+    }
 }
 
 fn check_one(scene: &Scene, subject: &str, rules: &Rules, out: &mut Vec<Violation>) {

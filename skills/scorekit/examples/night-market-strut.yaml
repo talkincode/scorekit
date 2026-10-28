@@ -1,0 +1,103 @@
+# Worked example: a groove-first, non-orchestral identity built from clips.
+#
+# The four generative patterns (melody/sustain/arpeggio/bass) express a
+# chorale. Rhythmic identities need authored events, which is why the cheap
+# path defaults to strings — this file is the counterweight: a complete
+# GM-only funk vamp in ~70 lines, no strings, no SFZ library required.
+#
+# Palette declaration (palettes.md inertia rule):
+#   - inertia answer: strings + harp bed over slow 4/4
+#   - candidates: disco-funk (dry pocket), chiptune (8-bit), percussion-forward
+#   - picked: disco-funk — a night market at midnight is interlocking short
+#     phrases and air between them, not a pad with a tune on top.
+#   - variation axes vs a film-score piece: palette family (plucked/brass vs
+#     strings), key+mode (A minor vs whatever the last piece used), tempo
+#     class (mid 100 vs slow), lead timbre (plucked vs bowed), pulse (groove
+#     vs none), harmony color (static vamp vs default cycle), density.
+#
+# Two deterministic details that make clip scenes sound like a band instead
+# of a grid:
+#   - `harmony: [i]` is deliberate: the bass and comping clips carry the
+#     harmony in their fixed pitches, so a cycling progression would fight
+#     them. Keep the drone, let the riffs move.
+#   - `humanize.timing_ms: 0` keeps clip and drums on the same grid (clip
+#     timing ignores swing/legato/humanize) while velocity still breathes.
+title: Night Market Strut
+story: >-
+  Midnight street food stalls, a brass player busking between them, and a
+  bassist who will not stop. It loops forever because the market does.
+tempo: 100
+key: A_minor
+time_signature: 4/4
+bars: 8
+loop: true
+harmony: [i]
+
+performance:
+  humanize: { timing_ms: 0, velocity: 12, seed: 7717 }
+
+clips:
+  market_bass:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      a1_1: { at: 0, duration: 0.75, pitch: A1, velocity: 112 }
+      a1_2: { at: 0.75, duration: 0.25, pitch: E2, velocity: 92 }
+      a1_3: { at: 1.5, duration: 0.25, pitch: A2, velocity: 100 }
+      a1_4: { at: 2, duration: 0.5, pitch: C3, velocity: 96 }
+      a1_5: { at: 3, duration: 0.5, pitch: A1, velocity: 104 }
+      a1_6: { at: 3.5, duration: 0.5, pitch: G1, velocity: 88 }
+      a2_1: { at: 4, duration: 0.75, pitch: A1, velocity: 110 }
+      a2_2: { at: 4.75, duration: 0.25, pitch: E2, velocity: 90 }
+      a2_3: { at: 5.5, duration: 0.25, pitch: A2, velocity: 98 }
+      a2_4: { at: 6, duration: 0.5, pitch: C3, velocity: 94 }
+      a2_5: { at: 7, duration: 1, pitch: E2, velocity: 86 }
+      g_1: { at: 8, duration: 0.75, pitch: G1, velocity: 110 }
+      g_2: { at: 8.75, duration: 0.25, pitch: D2, velocity: 90 }
+      g_3: { at: 9.5, duration: 0.25, pitch: G2, velocity: 98 }
+      g_4: { at: 10, duration: 0.5, pitch: B2, velocity: 94 }
+      g_5: { at: 11, duration: 0.5, pitch: G1, velocity: 104 }
+      g_6: { at: 11.5, duration: 0.5, pitch: F2, velocity: 88 }
+      f_1: { at: 12, duration: 0.75, pitch: F1, velocity: 110 }
+      f_2: { at: 12.75, duration: 0.25, pitch: C2, velocity: 90 }
+      f_3: { at: 13.5, duration: 0.25, pitch: F2, velocity: 98 }
+      f_4: { at: 14, duration: 0.5, pitch: A2, velocity: 94 }
+      f_5: { at: 15, duration: 0.5, pitch: C3, velocity: 100 }
+      f_6: { at: 15.5, duration: 0.5, pitch: F2, velocity: 86 }
+  market_clav:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      c_01: { at: 0.5, duration: 0.125, pitch: A4, velocity: 96 }
+      c_02: { at: 1.5, duration: 0.125, pitch: C5, velocity: 88 }
+      c_03: { at: 2.5, duration: 0.125, pitch: E5, velocity: 100 }
+      c_04: { at: 3.5, duration: 0.125, pitch: G4, velocity: 84 }
+      c_05: { at: 4.5, duration: 0.125, pitch: A4, velocity: 94 }
+      c_06: { at: 5.5, duration: 0.125, pitch: D5, velocity: 90 }
+      c_07: { at: 6.5, duration: 0.125, pitch: E5, velocity: 98 }
+      c_08: { at: 7.5, duration: 0.125, pitch: C5, velocity: 86 }
+      c_09: { at: 8.5, duration: 0.125, pitch: B4, velocity: 92 }
+      c_10: { at: 9.5, duration: 0.125, pitch: D5, velocity: 88 }
+      c_11: { at: 10.5, duration: 0.125, pitch: G4, velocity: 96 }
+      c_12: { at: 11.5, duration: 0.125, pitch: B4, velocity: 84 }
+      c_13: { at: 12.5, duration: 0.125, pitch: A4, velocity: 94 }
+      c_14: { at: 13.5, duration: 0.125, pitch: C5, velocity: 88 }
+      c_15: { at: 14.5, duration: 0.125, pitch: F4, velocity: 92 }
+      c_16: { at: 15.5, duration: 0.125, pitch: A4, velocity: 84 }
+  market_horns:
+    kind: pitched
+    length_beats: 16
+    mode: loop
+    events:
+      h_01: { at: 2, duration: 0.5, pitch: E4, velocity: 104 }
+      h_02: { at: 3, duration: 0.5, pitch: D4, velocity: 92 }
+      h_03: { at: 10, duration: 0.5, pitch: C5, velocity: 106 }
+      h_04: { at: 11, duration: 0.5, pitch: B4, velocity: 94 }
+
+tracks:
+  - { id: bass, instrument: synth_bass, pattern: clip, clip: market_bass, intensity: 0.8 }
+  - { id: comp, instrument: clavinet, pattern: clip, clip: market_clav, intensity: 0.62 }
+  - { id: busker, instrument: brass, pattern: clip, clip: market_horns, intensity: 0.42 }
+  - { id: kit, instrument: drums, pattern: drums, intensity: 0.5 }

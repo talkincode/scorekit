@@ -1,6 +1,6 @@
 # scorekit reference
 
-Verified against scorekit v0.7.1. When in doubt, trust the binary:
+Verified against scorekit v0.8.0. When in doubt, trust the binary:
 `scorekit schema` / `scorekit schema --grammar` /
 `scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
@@ -388,12 +388,41 @@ for named sections and also requires those sections to exist.
 | `percussion_events_per_bar_min` | count/bar | compiled percussion note-on density |
 | `percussion_onsets` | voice + 1..=32 positions + coverage | fraction of bars whose `drums` track contains the GM voice at each exact within-bar quarter-beat; Tabla key numbers never satisfy a GM drum rule |
 | `automation_activity` | track? + target + minima | compiled point density per bar and/or value span for CC1/CC11/CC74/pitch bend |
+| `corpus_instrument_overlap_max` | 0.0..=1.0 | largest shared-instrument fraction (shared ÷ the larger of the two instrument sets) against any `--corpus` scene |
+| `corpus_axes_changed_min` | 0..=8 | fewest variation axes (palette family, key+mode, tempo class, meter, lead timbre, pulse, harmony color, density) that differ from any `--corpus` scene |
+
+Corpus rules are the only rules that read more than the scene, so `lint`
+needs `--corpus <dir>` (repeatable) whenever a grammar declares them:
+
+```bash
+scorekit lint scene.yaml --grammar grammars/anti-homogenization.yaml \
+  --corpus out/ --corpus examples/scenes
+# ok: conforms to `anti-homogenization` (2 rule(s) checked; corpus 22 scene(s), 0 skipped)
+# nearest examples/scenes/elegy.yaml — instrument overlap 0.42 (shared harp, violin), 5/8 axes changed (…)
+```
+
+The corpus is scanned recursively for `*.yaml`/`*.yml`; files that are not
+valid scenes (grammars, renderer profiles, batch reports) are counted as
+`skipped`, never fatal, and the scene under test is excluded by path. Corpus
+rules without `--corpus`, or `--corpus` pointing at a directory that promises
+zero scenes, are input errors (exit 2) — an unmeasurable style-independence
+gate never passes silently. Reading is dry: `lint` never rewrites a scene, and
+the comparison is a pure function of authored fields, so it cannot move MIDI
+bytes. Axes are measured as: `palette_family` = family most tracks belong to
+(tie → `mixed`), `key_mode` = parsed tonic + mode, `tempo_class` = <70 slow /
+70–110 mid / 111–140 driving / >140 fast, `meter` = parsed signature,
+`lead_timbre` = bowed/plucked/blown/struck/synthesized/vocal of the loudest
+melody track, `pulse` = none / soft (<0.35 intensity) / groove, `harmony_color`
+= static / default / modal (`VII`,`v` in minor) / other, `density` = ≤3 chamber /
+4–5 standard / ≥6 layered.
 
 Violation format: `{rule} @ {subject}: measured {value}, want {constraint}`
 (subject is `scene` or ``section `name` ``); exit 2; `--json` → `violations`
 array. Shipped pairs: `examples/grammars/grief.yaml` with
-`examples/scenes/dunes.yaml`, and `examples/grammars/heavy_dubstep.yaml` with
-`examples/scenes/heavy_dubstep.yaml`.
+`examples/scenes/dunes.yaml`, `examples/grammars/heavy_dubstep.yaml` with
+`examples/scenes/heavy_dubstep.yaml`, and the project-level
+`examples/grammars/anti-homogenization.yaml` (corpus rules; run it against
+`--corpus examples/scenes --corpus skills/scorekit/examples`).
 
 ## meta.json
 

@@ -1003,7 +1003,12 @@ fn all_shipped_examples_validate() {
 
 #[test]
 fn skill_narrative_worked_example_validates() {
-    for example in ["exile-in-the-dunes.yaml", "exile-in-the-dunes-v2.yaml"] {
+    for example in [
+        "exile-in-the-dunes.yaml",
+        "exile-in-the-dunes-v2.yaml",
+        "lantern-keepers.yaml",
+        "night-market-strut.yaml",
+    ] {
         bin()
             .arg("validate")
             .arg(repo("skills/scorekit/examples").join(example))
@@ -5847,6 +5852,305 @@ fn schema_profile_flag_emits_renderer_profile_schema() {
     );
 }
 
+// ---- lint: style independence against a corpus (dimension K) ----
+
+const STRING_SCENE: &str = "\
+tempo: 56
+key: D_minor
+bars: 8
+motifs:
+  cell:
+    - { degree: 0, beats: 4 }
+tracks:
+  - { id: lead, instrument: violin, pattern: melody, motif: cell }
+  - { id: bed, instrument: slow_strings, pattern: sustain }
+  - { id: floor, instrument: cello, pattern: bass }
+";
+
+const MALLET_SCENE: &str = "\
+tempo: 148
+key: A_major
+bars: 8
+harmony: [I, V, vi, IV]
+motifs:
+  cell:
+    - { degree: 0, beats: 4 }
+tracks:
+  - { id: lead, instrument: music_box, pattern: melody, motif: cell }
+  - { id: kit, instrument: drums, pattern: drums, intensity: 0.6 }
+";
+
+fn diversity_grammar(dir: &Path) -> PathBuf {
+    let grammar = dir.join("anti-homogenization.yaml");
+    fs::write(
+        &grammar,
+        "name: anti-homogenization\nrules:\n  corpus_instrument_overlap_max: 0.6\n  corpus_axes_changed_min: 3\n",
+    )
+    .unwrap();
+    grammar
+}
+
+/// The shipped skill examples are not decoration: the two non-string ones must
+/// validate, render, and seal as loops with the default SF2 path, otherwise a
+/// broken palette would ship as documentation that cannot be reproduced.
+#[test]
+fn skill_example_scenes_build_seamless_loops() {
+    let dir = tempfile::tempdir().unwrap();
+    for example in ["lantern-keepers.yaml", "night-market-strut.yaml"] {
+        let wav = dir.path().join(example.replace(".yaml", ".wav"));
+        bin()
+            .arg("build")
+            .arg(repo("skills/scorekit/examples").join(example))
+            .arg("--soundfont")
+            .arg(sf2())
+            .arg("-o")
+            .arg(&wav)
+            .assert()
+            .success();
+        let (spec, samples) = read_frames(&wav);
+        assert!(
+            samples.iter().any(|s| *s != 0),
+            "{example} rendered silence"
+        );
+        let meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(wav.with_extension("meta.json")).unwrap()).unwrap();
+        assert_eq!(meta["loop_samples"], meta["total_samples"], "{example}");
+        let frames = samples.len() as f64 / f64::from(spec.channels);
+        assert_eq!(frames, meta["loop_samples"].as_f64().unwrap(), "{example}");
+    }
+}
+
+/// The happy path: a piece whose palette, key, tempo class and timbre differ
+/// from everything in the corpus passes with its measured evidence on stdout.
+#[test]
+fn lint_corpus_measures_style_independence_and_reports_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    fs::create_dir(&corpus).unwrap();
+    fs::write(corpus.join("strings.yaml"), STRING_SCENE).unwrap();
+    let grammar = diversity_grammar(dir.path());
+    let target = dir.path().join("target.yaml");
+    fs::write(&target, MALLET_SCENE).unwrap();
+
+    let out = bin()
+        .arg("lint")
+        .arg(&target)
+        .arg("--grammar")
+        .arg(&grammar)
+        .arg("--corpus")
+        .arg(&corpus)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("ok: conforms to `anti-homogenization`"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("corpus 1 scene(s)"), "{stdout}");
+    assert!(
+        stdout.contains("instrument overlap 0.00") && stdout.contains("axes changed"),
+        "a passing corpus lint must still report what was measured: {stdout}"
+    );
+}
+
+/// The failure path that matters: a scene that re-uses the palette, key,
+/// tempo class, meter, timbre, pulse, harmony color and density of a piece
+/// already in the corpus is caught with both measured findings.
+#[test]
+fn lint_corpus_flags_a_sibling_piece_with_measured_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    fs::create_dir(&corpus).unwrap();
+    fs::write(corpus.join("previous.yaml"), STRING_SCENE).unwrap();
+    let grammar = diversity_grammar(dir.path());
+    // Same palette, key, tempo class, meter, lead timbre, pulse, harmony
+    // color and density: only the title moved.
+    let target = dir.path().join("next.yaml");
+    fs::write(&target, format!("title: Next Piece\n{STRING_SCENE}")).unwrap();
+
+    let out = bin()
+        .arg("lint")
+        .arg(&target)
+        .arg("--grammar")
+        .arg(&grammar)
+        .arg("--corpus")
+        .arg(&corpus)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("corpus_instrument_overlap_max @ corpus")
+            && stderr.contains("measured 1.00")
+            && stderr.contains("want <= 0.60"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("corpus_axes_changed_min")
+            && stderr.contains("measured 0 of 8 axes changed")
+            && stderr.contains("want >= 3 axes differ"),
+        "stderr: {stderr}"
+    );
+
+    let json = bin()
+        .args(["--json", "lint"])
+        .arg(&target)
+        .arg("--grammar")
+        .arg(&grammar)
+        .arg("--corpus")
+        .arg(&corpus)
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&json.get_output().stderr).expect("violations are JSON");
+    assert_eq!(error["code"], "lint");
+    let rules: Vec<&str> = error["violations"]
+        .as_array()
+        .expect("violations array")
+        .iter()
+        .map(|v| v["rule"].as_str().unwrap())
+        .collect();
+    assert!(
+        rules.contains(&"corpus_instrument_overlap_max"),
+        "{rules:?}"
+    );
+    assert!(rules.contains(&"corpus_axes_changed_min"), "{rules:?}");
+}
+
+/// A corpus rule without a corpus is unmeasurable, so it fails loudly instead
+/// of silently passing — the hole that let every piece come out the same.
+#[test]
+fn lint_corpus_rules_without_a_corpus_are_an_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let grammar = diversity_grammar(dir.path());
+    let target = dir.path().join("target.yaml");
+    fs::write(&target, MALLET_SCENE).unwrap();
+    let out = bin()
+        .arg("lint")
+        .arg(&target)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("--corpus"), "stderr: {stderr}");
+    assert!(stderr.contains("corpus rules"), "stderr: {stderr}");
+}
+
+/// A corpus directory that contains no scenes must say so, not "ok".
+#[test]
+fn lint_corpus_without_scenes_is_an_input_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    fs::create_dir(&corpus).unwrap();
+    fs::write(
+        corpus.join("grief.yaml"),
+        "name: grief\nrules:\n  tempo_max: 60\n",
+    )
+    .unwrap();
+    let grammar = diversity_grammar(dir.path());
+    let target = dir.path().join("target.yaml");
+    fs::write(&target, MALLET_SCENE).unwrap();
+    let out = bin()
+        .arg("lint")
+        .arg(&target)
+        .arg("--grammar")
+        .arg(&grammar)
+        .arg("--corpus")
+        .arg(&corpus)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("no scene files found"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("1 yaml file(s) were not scenes"),
+        "stderr: {stderr}"
+    );
+}
+
+/// Measuring must be read-only and repeatable: same corpus, same bytes out.
+#[test]
+fn lint_corpus_is_deterministic_and_leaves_the_scene_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    fs::create_dir(&corpus).unwrap();
+    fs::write(corpus.join("a.yaml"), STRING_SCENE).unwrap();
+    fs::write(corpus.join("b.yaml"), MALLET_SCENE).unwrap();
+    let grammar = diversity_grammar(dir.path());
+    let target = dir.path().join("target.yaml");
+    fs::write(&target, MALLET_SCENE).unwrap();
+    let before = fs::read(&target).unwrap();
+
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let out = bin()
+            .arg("lint")
+            .arg(&target)
+            .arg("--grammar")
+            .arg(&grammar)
+            .arg("--corpus")
+            .arg(&corpus)
+            .assert()
+            .code(2);
+        outputs.push(String::from_utf8_lossy(&out.get_output().stderr).into_owned());
+    }
+    assert_eq!(outputs[0], outputs[1], "lint output must be byte-stable");
+    assert_eq!(
+        before,
+        fs::read(&target).unwrap(),
+        "lint must not edit the scene"
+    );
+}
+
+/// The shipped constitution, measured against the shipped skill examples: the
+/// two non-string worked examples clear it, and the film-score sibling pair
+/// (v1 → v2, same palette/key/tempo/meter/timbre) is exactly what it catches.
+#[test]
+fn anti_homogenization_constitution_passes_non_string_examples_and_catches_siblings() {
+    let grammar = repo("examples/grammars/anti-homogenization.yaml");
+    let corpus = repo("skills/scorekit/examples");
+    for example in ["lantern-keepers.yaml", "night-market-strut.yaml"] {
+        bin()
+            .arg("lint")
+            .arg(corpus.join(example))
+            .arg("--grammar")
+            .arg(&grammar)
+            .arg("--corpus")
+            .arg(&corpus)
+            .assert()
+            .success();
+    }
+    let out = bin()
+        .arg("lint")
+        .arg(corpus.join("exile-in-the-dunes-v2.yaml"))
+        .arg("--grammar")
+        .arg(&grammar)
+        .arg("--corpus")
+        .arg(&corpus)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("corpus `")
+            && stderr.contains("exile-in-the-dunes.yaml")
+            && stderr.contains("corpus_axes_changed_min"),
+        "stderr: {stderr}"
+    );
+}
+
+/// `schema --grammar` publishes the corpus rules so agents can discover the
+/// gate without reading the docs.
+#[test]
+fn grammar_schema_publishes_corpus_rules() {
+    let out = bin().args(["schema", "--grammar"]).assert().success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let rules = &v["$defs"]["Rules"]["properties"];
+    assert!(
+        rules["corpus_instrument_overlap_max"].is_object(),
+        "{rules}"
+    );
+    assert!(rules["corpus_axes_changed_min"].is_object(), "{rules}");
+}
+
 // ---- export: sample-exact window ----
 
 #[test]
@@ -6045,6 +6349,53 @@ fn mcp_rejects_malformed_texture_filters() {
             .as_str()
             .unwrap()
             .contains("array of strings")
+    );
+}
+
+/// MCP is a pure adapter: the corpus argument reaches `lint` unchanged and
+/// corpus violations come back through the structured error path.
+#[test]
+fn mcp_lint_forwards_the_corpus_and_passes_corpus_violations_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    fs::create_dir(&corpus).unwrap();
+    fs::write(corpus.join("previous.yaml"), STRING_SCENE).unwrap();
+    let grammar = diversity_grammar(dir.path());
+    let target = dir.path().join("next.yaml");
+    fs::write(&target, format!("title: Next Piece\n{STRING_SCENE}")).unwrap();
+
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "lint", "arguments": {
+                "scene": target.to_str().unwrap(),
+                "grammar": grammar.to_str().unwrap(),
+                "corpus": [corpus.to_str().unwrap()]}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "lint", "arguments": {
+                "scene": target.to_str().unwrap(),
+                "grammar": grammar.to_str().unwrap(),
+                "corpus": "not-a-list"}}}),
+    ]);
+    assert_eq!(replies.len(), 3);
+    let tools = replies[0]["result"]["tools"].as_array().unwrap();
+    let lint = tools
+        .iter()
+        .find(|tool| tool["name"] == "lint")
+        .expect("lint tool is published");
+    assert!(
+        lint["inputSchema"]["properties"]["corpus"].is_object(),
+        "lint must publish the corpus argument: {lint}"
+    );
+    assert_eq!(replies[1]["result"]["isError"], true);
+    let text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("corpus_axes_changed_min"), "{text}");
+    assert_eq!(replies[2]["error"]["code"], -32602);
+    assert!(
+        replies[2]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("array of directories")
     );
 }
 

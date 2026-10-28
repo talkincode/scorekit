@@ -243,6 +243,36 @@ tempo_max @ scene: measured 92, want <= 60
 
 Violations report measured values, so an Agent can fix the scene directly. Great as a CI gate for your soundtrack.
 
+Grammars can also stop your agent from writing the same piece twice. Corpus
+rules compare the scene against scenes you already shipped, and measure
+instrument-set overlap plus eight variation axes instead of trusting the
+description:
+
+```yaml
+# anti-homogenization.yaml — the next piece must not be the last piece
+rules:
+  corpus_instrument_overlap_max: 0.6   # don't reuse a whole instrument set
+  corpus_axes_changed_min: 3           # of 8: palette, key, tempo class, meter,
+                                       # lead timbre, pulse, harmony, density
+```
+
+```text
+$ scorekit lint skills/scorekit/examples/exile-in-the-dunes-v2.yaml \
+    --grammar examples/grammars/anti-homogenization.yaml --corpus skills/scorekit/examples
+corpus_instrument_overlap_max @ corpus `skills/scorekit/examples/exile-in-the-dunes.yaml`: measured 1.00 (shared cello, harp, slow_strings, violin), want <= 0.60
+corpus_axes_changed_min @ corpus `skills/scorekit/examples/exile-in-the-dunes.yaml`: measured 0 of 8 axes changed (kept: palette_family, key_mode, tempo_class, meter, lead_timbre, pulse, harmony_color, density), want >= 3 axes differ
+
+$ scorekit lint skills/scorekit/examples/lantern-keepers.yaml \
+    --grammar examples/grammars/anti-homogenization.yaml --corpus out/
+ok: conforms to `anti-homogenization` (2 rule(s) checked; corpus 11 scene(s), 9 skipped)
+nearest out/heavy-drop/circuit-breaker-120s.yaml — instrument overlap 0.25 (shared picked_bass), 6/8 axes changed (palette_family, key_mode, tempo_class, meter, lead_timbre, harmony_color)
+```
+
+The shipped constitution is
+[`examples/grammars/anti-homogenization.yaml`](examples/grammars/anti-homogenization.yaml).
+A passing run still prints what was measured — evidence instead of a vibe —
+and a corpus rule with no corpus is an input error, never a silent pass.
+
 For a 140 BPM heavy-Dubstep reference that is reusable, semantic-diffable, and
 linted for drum density/backbeats/talking-bass automation, see the
 [`heavy_dubstep` scene](examples/scenes/heavy_dubstep.yaml) with its
@@ -312,7 +342,7 @@ Your scene stays portable — it says `instrument: violin`, and each track's opt
 
 ## Style gallery
 
-Ready-to-build references in [examples/scenes/](examples/scenes/): [chiptune](examples/scenes/chiptune.yaml) (8-bit), [dance](examples/scenes/dance.yaml), [epic](examples/scenes/epic.yaml), [ballad](examples/scenes/ballad.yaml) (3/4), [elegy](examples/scenes/elegy.yaml) (violin), [dunes](examples/scenes/dunes.yaml) (film-score texture, conforms to the [grief grammar](examples/grammars/grief.yaml)).
+Ready-to-build references in [examples/scenes/](examples/scenes/): [chiptune](examples/scenes/chiptune.yaml) (8-bit), [dance](examples/scenes/dance.yaml), [epic](examples/scenes/epic.yaml), [ballad](examples/scenes/ballad.yaml) (3/4), [elegy](examples/scenes/elegy.yaml) (violin), [dunes](examples/scenes/dunes.yaml) (film-score texture, conforms to the [grief grammar](examples/grammars/grief.yaml)). The installable Agent skill ships two deliberately unrelated worked scenes — [exile-in-the-dunes](skills/scorekit/examples/exile-in-the-dunes.yaml) (strings, D minor) and [lantern-keepers](skills/scorekit/examples/lantern-keepers.yaml) (music box, G major, 3/4) — plus a clip-based [night-market-strut](skills/scorekit/examples/night-market-strut.yaml) that needs no SFZ library at all, because the palette is a decision inside the brief rather than a default.
 
 ```bash
 scorekit batch \

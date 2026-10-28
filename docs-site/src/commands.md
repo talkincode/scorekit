@@ -12,7 +12,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `schema --orchestration` | Print the orchestration-profile schema |
 | `schema --texture-profile` | Print the texture-source profile schema |
 | `schema --resolver` | Print the instrument-resolver config schema |
-| `lint <scene> --grammar <file>` | Check compiled music against measurable style rules |
+| `lint <scene> --grammar <file> [--corpus <dir> …]` | Check compiled music against measurable style rules; `--corpus` supplies the scenes that style-independence rules compare against |
 | `midi <scene> -o <file>` | Compile deterministic Standard MIDI |
 | `makecode <scene> -o <file>` | Compile MakeCode `music.createSong` TypeScript (plus a `.meta.json` manifest) |
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
@@ -30,6 +30,13 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 Exit codes are stable: `0` success, `1` I/O failure, `2` invalid input, `3` missing dependency, and `4` external tool failure.
 
 Run `scorekit <command> --help` for the complete flag list shipped by the installed binary.
+
+`lint --corpus` is the only flag that reads more than the scene: it is
+required by the corpus rules (`corpus_instrument_overlap_max`,
+`corpus_axes_changed_min`), repeatable, scanned recursively for
+`*.yaml`/`*.yml`, tolerant of non-scene YAML sidecars (counted as `skipped`),
+and exclusive of the scene under test. A corpus rule without `--corpus`, or a
+corpus that yields no scenes, is exit 2 rather than a silent pass.
 
 Numeric audio-command options reject non-finite or out-of-range values before
 resolving tools or writing files: `--sample-rate` is 8000..=384000 Hz,

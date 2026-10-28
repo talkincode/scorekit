@@ -1,3 +1,11 @@
+# Worked example 1 of 2 — the film-score palette, earned by its brief.
+#
+# D minor, 56 BPM, 4/4, solo violin over harp / low strings / thin strings.
+# This palette is correct for *this* brief (a wide, grieving desert shot) and
+# is NOT the skill's default: see lantern-keepers.yaml for the same motif
+# discipline in music box + marimba + celesta + plucked bass, and palettes.md
+# for why the palette is a decision instead of a habit.
+#
 title: Exile in the Dunes
 tempo: 56
 key: D_minor

@@ -220,6 +220,15 @@ scorekit lint scene.yaml --grammar examples/grammars/grief.yaml
 
 - **A grammar is a constitution, not a composition.** It says what the style is *allowed* to sound like; the scene says what it does sound like. Keep them in separate files, both under version control.
 - **Use compiled structural rules for rhythm-first styles.** `percussion_events_per_bar_min`, `percussion_onsets`, and `automation_activity` can be global or added under named `section_rules`; see `examples/grammars/heavy_dubstep.yaml`.
+- **Gate style independence against your own catalogue.** `corpus_instrument_overlap_max` and `corpus_axes_changed_min` compare the scene against scenes you already shipped — instrument-set overlap plus eight variation axes (palette family, key+mode, tempo class, meter, lead timbre, pulse, harmony color, density):
+
+```bash
+scorekit lint scene.yaml --grammar examples/grammars/anti-homogenization.yaml --corpus out/
+# ok: ... (2 rule(s) checked; corpus 12 scene(s), 0 skipped)
+# nearest out/previous.yaml — instrument overlap 0.00 (no shared instruments), 6/8 axes changed (…)
+```
+
+  A passing run still prints what was measured, which is the evidence a review needs. `--corpus` is repeatable and scanned recursively; non-scene YAML (grammars, profiles, batch reports) is skipped, and a corpus that yields no scenes is an error rather than a silent pass.
 - **Lint in CI.** Every rule is deterministic and machine-checkable, so a pull request that breaks the project's musical language fails the same way one that breaks the schema does.
 
 ## Batch and CI

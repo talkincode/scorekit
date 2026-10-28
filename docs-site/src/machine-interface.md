@@ -33,7 +33,7 @@ With the global `--json` flag, every failure prints exactly one JSON object to *
 - `code` — stable machine tag: `io`, `parse`, `validation`, `lint`, `profile_check`, `resolution`, `doctor`, `missing_dependency`, `tool_failure`.
 - `location` — `{ "line": N, "column": N }` for parse errors, else `null`.
 - `field` — the offending DSL field path for validation errors, else `null`.
-- `lint` errors carry a `violations` array; `profile_check` and `doctor` carry a full `report` object instead of `location`/`field`.
+- `lint` errors carry a `violations` array; corpus rules appear in it exactly like style rules, so a style-independence failure is machine-readable without a separate channel. `profile_check` and `doctor` carry a full `report` object instead of `location`/`field`.
 
 Successful diagnostic commands (`doctor`, `profile check`, `diff`, `batch` reports) write JSON to **stdout**.
 
@@ -83,7 +83,7 @@ For the common case you don't need to write the wrapper at all:
 scorekit mcp        # MCP over stdio (newline-delimited JSON-RPC 2.0)
 ```
 
-`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, and `diff` as MCP tools. Texture discovery accepts exact family/tag/scene/mode/audio filters and page limits; a query with no candidate returns `status: "no_match"` rather than a ranked substitute. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers. The `build` and `inspect_instruments` tools take `orchestration` (the sfizz routing input) instead of the retired per-build `profile` argument.
+`scorekit mcp` exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, and `diff` as MCP tools. Texture discovery accepts exact family/tag/scene/mode/audio filters and page limits; a query with no candidate returns `status: "no_match"` rather than a ranked substitute. It is a pure protocol adapter: each tool call re-invokes the scorekit binary with `--json`, and the structured stdout/stderr is passed through verbatim as the tool result (`isError: true` carries the exact error object shown above). No HTTP, no auth, no resident state — determinism is untouched, and MCP clients get the same contract as subprocess callers. The `build` and `inspect_instruments` tools take `orchestration` (the sfizz routing input) instead of the retired per-build `profile` argument; `lint` takes an optional `corpus` array of directories, forwarded as repeated `--corpus` flags.
 
 Example client registration (Claude Desktop / any MCP client):
 

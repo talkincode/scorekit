@@ -2,7 +2,7 @@
 
 scorekit is an Agent-oriented music compiler for game and film-style scoring workflows. It compiles a reviewable YAML scene into deterministic MIDI, then delegates audio rendering and export to established external tools. The same scene can also compile to a MakeCode synth-song for Arcade and micro:bit V2.
 
-The compiler produces seamless loops, sample-aligned instrument/texture stems, suite sections, metadata, OGG or WAV assets, and optional MakeCode `music.createSong` TypeScript. Texture tracks bring deterministic field recordings, ambience, and SFX into the score timeline. Creative decisions stay in the upstream Agent and the text scene; scorekit does not contain a generative model.
+The compiler produces seamless loops, sample-aligned instrument/texture stems, suite sections, metadata, OGG or WAV assets, and optional MakeCode `music.createSong` TypeScript. Texture tracks bring deterministic field recordings, ambience, and SFX into the score timeline. Creative decisions stay in the upstream Agent and the text scene; scorekit does not contain a generative model. What it does own is measurement: grammar profiles lint the compiled score, and corpus rules (`lint --corpus`) measure how much a new piece actually differs from the ones already shipped.
 
 ```text
 scene.yaml -> Score IR -> MIDI -> renderer -> WAV -> FFmpeg -> game assets

@@ -61,12 +61,19 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "lint",
             description: "Check a scene against an aesthetic grammar profile; violations \
-                          report measured values from the compiled score.",
+                          report measured values from the compiled score. With `corpus` \
+                          directories, corpus rules also measure style independence \
+                          (instrument overlap and variation axes) against those scenes.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "scene": { "type": "string", "description": "Path to the scene YAML file" },
-                    "grammar": { "type": "string", "description": "Path to the grammar profile YAML" }
+                    "grammar": { "type": "string", "description": "Path to the grammar profile YAML" },
+                    "corpus": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Scene directories to compare against (required by corpus_* rules)"
+                    }
                 },
                 "required": ["scene", "grammar"],
                 "additionalProperties": false
@@ -247,6 +254,18 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             argv.push(required_str(args, "scene")?);
             argv.push("--grammar".into());
             argv.push(required_str(args, "grammar")?);
+            if let Some(corpus) = args.get("corpus") {
+                let dirs = corpus
+                    .as_array()
+                    .ok_or_else(|| "`corpus` must be an array of directories".to_owned())?;
+                for dir in dirs {
+                    let dir = dir
+                        .as_str()
+                        .ok_or_else(|| "`corpus` entries must be strings".to_owned())?;
+                    argv.push("--corpus".into());
+                    argv.push(dir.to_owned());
+                }
+            }
         }
         "build" => {
             argv.push("build".into());

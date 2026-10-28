@@ -1,0 +1,25 @@
+# Style independence as a deterministic gate (audit dimension K).
+#
+# Unlike the style grammars, these rules cannot be evaluated from one scene:
+# they compare the scene in hand against a corpus of scenes you already
+# shipped, and measure instrument-set overlap plus the eight variation axes
+# from `skills/scorekit/palettes.md`.
+#
+#   scorekit lint scene.yaml \
+#     --grammar examples/grammars/anti-homogenization.yaml \
+#     --corpus out/ --corpus examples/scenes
+#
+# Read it as "the next piece must not be the last piece". Thresholds are the
+# shipped defaults; raise them for a strict series, lower them when a project
+# is deliberately one sound. A revision of the same piece belongs in the
+# corpus only when you want it reported as a sibling — which is what v1/v2 of
+# a scene is.
+name: anti-homogenization
+description: >-
+  A project constitution for variety: the piece under test must not reuse the
+  instrument set of any corpus scene (overlap <= 0.60) and must differ from
+  every corpus scene on at least 3 of 8 variation axes (palette family,
+  key+mode, tempo class, meter, lead timbre, pulse, harmony color, density).
+rules:
+  corpus_instrument_overlap_max: 0.6
+  corpus_axes_changed_min: 3

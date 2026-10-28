@@ -63,6 +63,11 @@ or pass an explicit file to override it.
    inertia answer, weigh 2–3 candidate palettes against the brief, pick
    one for stated reasons, and note which variation axes differ from your
    recent pieces. Orchestral strings must win this step, never inherit it.
+   The film-score worked example is one of *two* shipped examples — the
+   contrasting one is [examples/lantern-keepers.yaml](examples/lantern-keepers.yaml)
+   (music box, G major, 3/4) and the groove one is
+   [examples/night-market-strut.yaml](examples/night-market-strut.yaml)
+   (clips, drums, no strings).
 3. **Write the scene** (see cheat sheet below and [reference.md](reference.md)).
 4. **Validate:** `scorekit --json validate scene.yaml` — errors are
    machine-readable on stderr with `field` paths and line numbers. Fix and
@@ -70,6 +75,11 @@ or pass an explicit file to override it.
 5. **Lint (if the project has grammar profiles):**
    `scorekit lint scene.yaml --grammar grammars/<style>.yaml` — violations
    report measured vs wanted values; edit the scene until it conforms.
+   When the project owns an anti-homogenization constitution (corpus rules
+   `corpus_instrument_overlap_max` / `corpus_axes_changed_min`), add
+   `--corpus <dir>` with the scenes this piece must differ from — e.g.
+   `--corpus out/ --corpus examples/scenes`. The passing run prints the
+   measured nearest neighbour, which is the evidence dimension K asks for.
 6. **Build:**
    ```bash
    scorekit build scene.yaml -o out/scene.ogg
@@ -92,11 +102,16 @@ or pass an explicit file to override it.
 When the request begins as a story, character, or film scene rather than a
 scene YAML, read [examples/narrative-film-score.md](examples/narrative-film-score.md).
 Use its prompt-to-brief mapping: keep narrative language in the creative brief,
-then translate only deterministic musical decisions into the DSL. The worked
-artifact is [examples/exile-in-the-dunes.yaml](examples/exile-in-the-dunes.yaml).
+then translate only deterministic musical decisions into the DSL. Two worked
+artifacts ship, in deliberately different palettes: the film-score scene
+[examples/exile-in-the-dunes.yaml](examples/exile-in-the-dunes.yaml) and the
+contrasting [examples/lantern-keepers.yaml](examples/lantern-keepers.yaml).
+Neither is a template until the palette decision picks it.
 
 Completion gate: `doctor` is ready, the scene passes `validate`, any requested
-grammar passes `lint`, `build` succeeds, and the **arrangement audit**
+grammar passes `lint` (including the corpus rules when the project has a
+constitution that declares them — pass `--corpus`), `build` succeeds, and the
+**arrangement audit**
 ([audit.md](audit.md)) ran self-check — deterministic gates pass, craft
 findings carry a fix or a justification. The response names the scene,
 audio, metadata, and stem paths plus the motif/orchestration choices made,
@@ -105,6 +120,17 @@ and ends with the audit verdict line.
 Batch many scenes: `scorekit batch a.yaml b.yaml --out-dir assets/` →
 per-scene results in `assets/report.json`, one failure
 doesn't stop the rest.
+
+**Timbre survivability of the default SF2 path:** FluidSynth + MuseScore
+General is the baseline and is fine for the GM-core palettes (keys, mallets,
+guitars/basses, pads, choir, drums, `square_lead`, `saw_lead`, `pan_flute`,
+`recorder`). Exposed GM brass/winds above the staff, GM organ reeds, and
+`synth_strings` are where it sounds like a placeholder — if the palette you
+picked leans on those, or on a world identity (erhu/pipa/guzheng/dizi/oud/
+ney/duduk/tabla), build through `--renderer sfizz --orchestration` with a real
+library instead of concluding that non-string palettes "sound bad". One bad
+trumpet render is not evidence that brass is off the table; it is evidence
+that GM brass is.
 
 With `--renderer sfizz`, pass `--orchestration <file>` (maps logical track
 `palette`s to certified renderer profiles; see `scorekit schema
@@ -175,15 +201,15 @@ clips:                         # exact, stable-ID events for authored rhythm
           seal: { at: 3.75, value: 0 }
 
 tracks:
-  - { id: lead, instrument: violin, pattern: melody, motif: lament, intensity: 0.65 }
-  - { id: motion, instrument: harp,   pattern: arpeggio, intensity: 0.3 }
-  - { id: harmony, instrument: slow_strings, pattern: sustain, intensity: 0.35 }  # "pad"
-  - { id: foundation, instrument: cello,  pattern: bass, intensity: 0.35 }
-  - { id: pulse, instrument: drums,  pattern: drums, intensity: 0.4 }  # drums↔drums only
-  # - { id: talker, instrument: synth_bass, pattern: clip, clip: talking_bass }
-  # ^ example wiring only — do NOT default to this string-quartet palette.
-  #   Pick a palette deliberately from palettes.md (chiptune, jazz-noir,
-  #   music-box, synth-ambient, east-asian, …) before writing tracks.
+  # One palette, shown with every pattern — NOT a default. The string quartet
+  # version of this block is at the bottom of palettes.md, labelled as the
+  # habit it is. Pick deliberately before you write tracks.
+  - { id: hook,  instrument: square_lead, pattern: melody, motif: lament, intensity: 0.7 }
+  - { id: motion, instrument: saw_lead,   pattern: arpeggio, intensity: 0.3 }
+  - { id: bed,   instrument: warm_pad,    pattern: sustain, intensity: 0.3 }
+  - { id: floor, instrument: synth_bass,  pattern: bass, intensity: 0.4 }
+  - { id: pulse, instrument: drums,       pattern: drums, intensity: 0.4 }  # drums↔drums only
+  - { id: talker, instrument: synth_bass, pattern: clip, clip: talking_bass }
   # optional: palette: solo | ensemble | ... — routes to an orchestration
   # palette (--orchestration). Omitted = the orchestration's default_palette.
   # Routing metadata only; never changes compiled MIDI.
@@ -260,12 +286,16 @@ use `sections:`; see [reference.md](reference.md).
 
 ## Composition craft (learned from real scoring sessions)
 
-- **Break palette inertia first.** The examples in this skill lean
-  strings because they came from film briefs — that is not a default.
+- **Break palette inertia first.** The film-score example leans strings
+  because it came from a film brief — that is one brief, not a default.
   [palettes.md](palettes.md) is the antidote: name your habitual answer,
   make palettes compete, vary ≥3 axes between consecutive pieces
-  (palette, key/mode, tempo class, meter, lead timbre, pulse, harmony
-  color, density).
+  (palette family, key/mode, tempo class, meter, lead timbre, pulse,
+  harmony color, density). Axis values are counted by the tool, not by
+  you: `scorekit lint scene.yaml --grammar <constitution with corpus
+  rules> --corpus <your shipped scenes>` returns the measured overlap and
+  how many axes actually changed. If the corpus has nothing to say because
+  you never pointed it anywhere, dimension K is not checked at all.
 - **Entrances/exits are melody-only.** `sustain`/`arpeggio`/`bass`/`drums`
   fill the whole scene. To bring an instrument in and out mid-piece, give it
   `pattern: melody` and write rests (`degree: 0`) around its material. This

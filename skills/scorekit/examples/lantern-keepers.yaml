@@ -1,0 +1,87 @@
+# Worked example: a non-orchestral palette carried by its own arc.
+#
+# This file exists to be copied instead of the film-score scene
+# (`exile-in-the-dunes.yaml`). Same motif economy and the same emotional
+# discipline, a completely different sound identity: struck timbres only
+# (music box / marimba / celesta) over a plucked bass, 3/4, G major.
+#
+# Palette declaration (palettes.md inertia rule):
+#   - inertia answer: strings + harp, D minor, slow 4/4, "cinematic"
+#   - candidates: music-box (memory as a toy), folk-acoustic (memory as a
+#     village), strings-cinema (the habit)
+#   - picked: music-box — the brief is a keepers' guild handing a lantern
+#     down, and the piece must sound like an object being carried, not a
+#     wide shot. The plucked bass keeps it walking without percussion.
+#   - variation axes vs the film-score example: palette family (mallets vs
+#     strings), key+mode (G major vs D minor), meter (3/4 vs 4/4), lead
+#     timbre (struck vs bowed), pulse (none vs none), harmony color
+#     (I-vi-IV-V vs modal minor), density (4 vs 4).
+#
+# Loop math: 16 bars of 3/4 = 48 beats, and `lantern` is exactly 48 beats so
+# the loop restates nothing early. It ends on the supertonic (degree 2), so
+# the last bar wants to fall back to bar 1.
+title: Lantern Keepers
+story: >-
+  A guild of lantern keepers hands one flame down a line of hill terraces at
+  dusk. Nothing dramatic happens; the piece is the walking and the handing
+  over, and it must loop for as long as the player stays.
+tempo: 84
+key: G_major
+time_signature: 3/4
+bars: 16
+loop: true
+# I - vi - IV - V, then I - IV - ii - V: bright, but the ii in the second half
+# keeps the loop from sounding finished.
+harmony: [I, vi, IV, V, I, IV, ii, V]
+
+performance:
+  humanize: { timing_ms: 22, velocity: 11, seed: 4409 }
+  legato: false
+  dynamics: { start: p, peak: mf }
+
+motifs:
+  lantern:
+    # Statement: five notes, plain, in the middle of the keyboard.
+    - { degree: 4, beats: 1 }
+    - { degree: 3, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 5, beats: 2 }
+    - { degree: 3, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 1, beats: 1 }
+    - { degree: 0, beats: 1 }
+    - { degree: 1, beats: 1 }
+    - { degree: 2, beats: 2 }
+    # Answer: the same cell lifted an octave, then cut short.
+    - { degree: 7, beats: 2 }
+    - { degree: 8, beats: 1 }
+    - { degree: 8, beats: 1 }
+    - { degree: 4, beats: 1 }
+    - { degree: 5, beats: 1 }
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 1, beats: 2 }
+    # Breath: the flame stops moving for a bar, then walks on.
+    - { degree: 0, beats: 3 }
+    - { degree: 0, beats: 3 }
+    - { degree: 0, beats: 3 }
+    - { degree: 4, beats: 1 }
+    - { degree: 3, beats: 1 }
+    - { degree: 2, beats: 1 }
+    - { degree: 5, beats: 2 }
+    - { degree: 3, beats: 1 }
+    # Handing over: the answer inverts, contract at the top, land on 2.
+    - { degree: 4, beats: 2 }
+    - { degree: 3, beats: 1 }
+    - { degree: 2, beats: 2 }
+    - { degree: 1, beats: 1 }
+    - { degree: 7, beats: 1 }
+    - { degree: 8, beats: 2 }
+    - { degree: 2, beats: 3 }
+
+tracks:
+  - { id: keeper, instrument: music_box, pattern: melody, motif: lantern, intensity: 0.62 }
+  - { id: terraces, instrument: marimba, pattern: arpeggio, intensity: 0.2 }
+  - { id: air, instrument: celesta, pattern: sustain, intensity: 0.16 }
+  - { id: walk, instrument: picked_bass, pattern: bass, intensity: 0.26 }
