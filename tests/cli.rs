@@ -5537,6 +5537,346 @@ fn validate_rejects_bad_pan_and_glide_on_non_melody() {
     );
 }
 
+// ---- level delivery & ambience (M19) ----
+
+/// Mean squared energy of the linear sum of both channels: a mono render and a
+/// wide one differ here even at identical loudness.
+fn power(frames: &[i16]) -> f64 {
+    if frames.is_empty() {
+        return 0.0;
+    }
+    frames
+        .iter()
+        .map(|s| f64::from(*s) * f64::from(*s))
+        .sum::<f64>()
+        / frames.len() as f64
+}
+
+/// Side-channel energy (L − R): the width a stereo image actually has.
+fn side_power(frames: &[i16]) -> f64 {
+    let (pairs_src, _) = frames.as_chunks::<2>();
+    let pairs: Vec<f64> = pairs_src
+        .iter()
+        .map(|pair| {
+            let side = (f64::from(pair[0]) - f64::from(pair[1])) / 2.0;
+            side * side
+        })
+        .collect();
+    if pairs.is_empty() {
+        return 0.0;
+    }
+    pairs.iter().sum::<f64>() / pairs.len() as f64
+}
+
+fn peak_abs(frames: &[i16]) -> f64 {
+    frames
+        .iter()
+        .map(|s| f64::from(*s).abs())
+        .fold(0.0, f64::max)
+}
+
+/// `--space` must change the render (dry → hall adds a tail and width) while
+/// keeping the loop window sample-exact, and it must stay byte-reproducible.
+#[test]
+fn build_space_changes_ambience_but_keeps_the_loop_exact_and_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = repo("examples/scenes/elegy.yaml");
+    let mut renders = Vec::new();
+    for (name, space) in [("dry", "dry"), ("hall", "hall")] {
+        let wav = dir.path().join(format!("{name}.wav"));
+        for run in 0..2 {
+            let out = dir.path().join(format!("{name}-{run}.wav"));
+            bin()
+                .arg("build")
+                .arg(&scene)
+                .arg("--soundfont")
+                .arg(sf2())
+                .arg("-o")
+                .arg(&out)
+                .args(["--space", space])
+                .assert()
+                .success();
+            let (spec, frames) = read_frames(&out);
+            assert_eq!(frames.len() as u64 % u64::from(spec.channels), 0);
+            let meta: serde_json::Value =
+                serde_json::from_slice(&fs::read(out.with_extension("meta.json")).unwrap())
+                    .unwrap();
+            assert_eq!(meta["space"], space);
+            // Loop window length is untouched by the ambience stage.
+            assert_eq!(
+                meta["loop_samples"], meta["total_samples"],
+                "loop asset must stay exactly L frames"
+            );
+            if run == 1 {
+                assert_eq!(
+                    fs::read(dir.path().join(format!("{name}-0.wav"))).unwrap(),
+                    fs::read(dir.path().join(format!("{name}-1.wav"))).unwrap(),
+                    "--space must render byte-identically across runs"
+                );
+            }
+            let _ = wav;
+        }
+        let (_, frames) = read_frames(&dir.path().join(format!("{name}-0.wav")));
+        renders.push((name, frames));
+    }
+    let (_, dry) = &renders[0];
+    let (_, hall) = &renders[1];
+    assert_eq!(dry.len(), hall.len(), "same exact sample count");
+    let width_ratio = side_power(hall) / side_power(dry).max(1.0);
+    assert!(
+        width_ratio > 1.2,
+        "hall must widen the image: side energy ratio {width_ratio:.2}"
+    );
+    assert!(
+        power(hall) > power(dry) * 1.02,
+        "a real room adds energy: dry {:.1}, hall {:.1}",
+        power(dry),
+        power(hall)
+    );
+}
+
+/// `--master` delivers the requested loudness with a static gain, stays under
+/// the true-peak ceiling, and records the measurement in meta.json.
+#[test]
+fn build_master_hits_the_loudness_target_without_clipping() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.wav");
+    let mastered = dir.path().join("mastered.wav");
+    for (out, extra) in [(&plain, vec![]), (&mastered, vec!["--master", "-14"])] {
+        let mut cmd = bin();
+        cmd.arg("build")
+            .arg(forest())
+            .arg("--soundfont")
+            .arg(sf2())
+            .arg("-o")
+            .arg(out);
+        for arg in &extra {
+            cmd.arg(arg);
+        }
+        cmd.assert().success();
+    }
+    let (_, plain_frames) = read_frames(&plain);
+    let (_, mastered_frames) = read_frames(&mastered);
+    assert_eq!(plain_frames.len(), mastered_frames.len());
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(mastered.with_extension("meta.json")).unwrap()).unwrap();
+    let master = &meta["master"];
+    let gain_db = master["gain_db"].as_f64().unwrap();
+    assert!(gain_db > 0.0, "a quiet render must be lifted: {master}");
+    assert_eq!(master["target_lufs"].as_f64(), Some(-14.0));
+    let achieved = master["achieved_lufs"].as_f64().unwrap();
+    assert!(
+        (achieved - -14.0).abs() < 1.0,
+        "achieved {achieved} LUFS must land on the target"
+    );
+    // The ceiling wins over the target, and the delivered peak respects it.
+    let ceiling = master["ceiling_dbfs"].as_f64().unwrap();
+    let peak_db = 20.0 * (peak_abs(&mastered_frames) / 32768.0).log10();
+    assert!(
+        peak_db <= ceiling + 0.05,
+        "delivered true peak {peak_db:.2} dBFS must respect the {ceiling} dBFS ceiling"
+    );
+    // Level, not dynamics: a static gain leaves the crest factor alone.
+    let plain_crest = 20.0 * (peak_abs(&plain_frames) / power(&plain_frames).sqrt()).log10();
+    let mastered_crest =
+        20.0 * (peak_abs(&mastered_frames) / power(&mastered_frames).sqrt()).log10();
+    assert!(
+        (plain_crest - mastered_crest).abs() < 1.0,
+        "--master is a static gain: crest {plain_crest:.2} vs {mastered_crest:.2} dB"
+    );
+}
+
+/// The seam guarantee survives mastering: every delivered frame is the raw
+/// frame times one factor, including the crossfaded wrap-around pair.
+#[test]
+fn build_master_keeps_the_loop_seal_bit_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("elegy.wav");
+    bin()
+        .arg("build")
+        .arg(repo("examples/scenes/elegy.yaml"))
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .args(["--master", "-16", "--keep-intermediates"])
+        .assert()
+        .success();
+    let (spec, out) = read_frames(&wav);
+    let ch = spec.channels as usize;
+    let l = out.len() / ch;
+    let (_, raw) = read_frames(&wav.with_extension("raw.wav"));
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(wav.with_extension("meta.json")).unwrap()).unwrap();
+    let gain_db = meta["master"]["gain_db"].as_f64().unwrap();
+    let factor = 10f64.powf(gain_db / 20.0);
+    let expect = |index: usize| -> Vec<i16> {
+        (0..ch)
+            .map(|c| {
+                (f64::from(raw[index * ch + c]) * factor)
+                    .round()
+                    .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+            })
+            .collect()
+    };
+    assert_eq!(&out[..ch], expect(l).as_slice(), "out[0] == gain * raw[L]");
+    assert_eq!(
+        &out[(l - 1) * ch..l * ch],
+        expect(l - 1).as_slice(),
+        "out[last] == gain * raw[L-1]"
+    );
+}
+
+/// Mastering is distributive, so stems must still reconstruct the mix exactly
+/// as they did before the gain existed.
+#[test]
+fn build_master_keeps_stems_summing_to_the_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("forest.wav");
+    bin()
+        .arg("build")
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wav)
+        .args(["--stems", "--master", "-14"])
+        .assert()
+        .success();
+    let stems_dir = dir.path().join("forest.stems");
+    let (spec, mix) = read_frames(&wav);
+    let ch = spec.channels as usize;
+    let names: Vec<String> = fs::read_dir(&stems_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 4, "every stem still ships: {names:?}");
+    let stems: Vec<Vec<i16>> = names
+        .iter()
+        .map(|name| read_frames(&stems_dir.join(name)).1)
+        .collect();
+    assert_eq!(mix.len() % ch, 0);
+    let (mut diff2, mut ref2) = (0f64, 0f64);
+    for i in 0..mix.len() {
+        let sum: f64 = stems.iter().map(|stem| f64::from(stem[i])).sum();
+        let m = f64::from(mix[i]);
+        diff2 += (sum - m) * (sum - m);
+        ref2 += m * m;
+    }
+    let ratio = (diff2 / ref2.max(1.0)).sqrt();
+    assert!(
+        ratio < 0.02,
+        "mastered stems must still sum to the mix: RMS ratio {ratio:.4}"
+    );
+}
+
+/// Out-of-range targets and impossible combinations fail before writing.
+#[test]
+fn master_and_space_reject_unsupported_combinations_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.wav");
+    let out_of_range = bin()
+        .args(["--json", "build"])
+        .arg(forest())
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&out)
+        .args(["--master", "-3"])
+        .assert()
+        .code(2);
+    let error: serde_json::Value =
+        serde_json::from_slice(&out_of_range.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "--master");
+    assert!(!out.exists());
+
+    let suite = bin()
+        .args(["--json", "build"])
+        .arg(repo("examples/scenes/forest_suite.yaml"))
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&out)
+        .args(["--master", "-14"])
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&suite.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "--master");
+    assert!(
+        error["message"].as_str().unwrap().contains("suite"),
+        "{error}"
+    );
+    assert!(!out.exists());
+}
+
+/// sfizz has no ambience stage: the flag must fail loudly instead of shipping a
+/// dry render the caller believes is reverberant.
+#[test]
+fn build_sfizz_rejects_space_without_writing_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = tiny_sfizz_scene(dir.path());
+    let orchestration = write_test_orchestration(dir.path());
+    let out = dir.path().join("out.wav");
+    let result = bin()
+        .env("PATH", sfizz_path_env())
+        .args(["--json", "build"])
+        .arg(&scene)
+        .arg("--renderer")
+        .arg("sfizz")
+        .arg("--orchestration")
+        .arg(&orchestration)
+        .arg("-o")
+        .arg(&out)
+        .args(["--space", "hall"])
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&result.get_output().stderr).unwrap();
+    assert_eq!(error["field"], "--space");
+    assert!(!out.exists(), "no partial artifact");
+}
+
+/// A scene that asks for reverb on a dry renderer gets told the send has no
+/// room to send into — the failure mode that made the field look inert.
+#[test]
+fn build_warns_when_reverb_is_sent_into_a_dry_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("wet.yaml");
+    fs::write(
+        &scene,
+        "tempo: 80\nkey: A_minor\nbars: 4\nloop: true\n\
+         motifs:\n  cell:\n    - { degree: 1, beats: 4 }\n\
+         tracks:\n  - { id: lead, instrument: flute, pattern: melody, motif: cell, reverb: 0.5 }\n",
+    )
+    .unwrap();
+    let dry = dir.path().join("dry.wav");
+    let wet = dir.path().join("wet.wav");
+    let out = bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&dry)
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("WARN ambience"), "stderr: {stderr}");
+    // With a room it is silent about it.
+    let out = bin()
+        .arg("build")
+        .arg(&scene)
+        .arg("--soundfont")
+        .arg(sf2())
+        .arg("-o")
+        .arg(&wet)
+        .args(["--space", "room"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(!stderr.contains("WARN ambience"), "stderr: {stderr}");
+}
+
 // ---- lint: aesthetic grammar (M6) ----
 
 /// The shipped reference pair must always agree: dunes.yaml is the
@@ -6135,6 +6475,131 @@ fn anti_homogenization_constitution_passes_non_string_examples_and_catches_sibli
             && stderr.contains("corpus_axes_changed_min"),
         "stderr: {stderr}"
     );
+}
+
+/// The fullness rules measure thickness the same way the corpus rules measure
+/// variety: notes sounding on average, the registers actually occupied, and
+/// how far apart the declared pans sit.
+#[test]
+fn lint_fullness_rules_measure_density_registers_and_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let grammar = dir.path().join("fullness.yaml");
+    fs::write(
+        &grammar,
+        "name: fullness\nrules:\n  simultaneous_notes_min: 6.0\n  lowest_note_at_most: 45\n  highest_note_at_least: 79\n  pan_spread_min: 0.3\n",
+    )
+    .unwrap();
+
+    // Thin: one mid-register triad per bar, one melody voice, nothing below
+    // MIDI 45, nothing above the melody, every track centred.
+    let thin = dir.path().join("thin.yaml");
+    fs::write(
+        &thin,
+        "tempo: 84\nkey: A_minor\nbars: 4\nloop: true\n\
+         motifs:\n  cell:\n    - { degree: 1, beats: 4 }\n\
+         tracks:\n  - { id: lead, instrument: flute, pattern: melody, motif: cell }\n  - { id: bed, instrument: slow_strings, pattern: sustain }\n",
+    )
+    .unwrap();
+    let out = bin()
+        .args(["--json", "lint"])
+        .arg(&thin)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .code(2);
+    let error: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    let violations = error["violations"].as_array().unwrap();
+    let rules: Vec<&str> = violations
+        .iter()
+        .map(|v| v["rule"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "simultaneous_notes_min",
+        "lowest_note_at_most",
+        "highest_note_at_least",
+        "pan_spread_min",
+    ] {
+        assert!(rules.contains(&expected), "missing {expected}: {rules:?}");
+    }
+    // Measured values, not verdicts.
+    let density = violations
+        .iter()
+        .find(|v| v["rule"] == "simultaneous_notes_min")
+        .unwrap();
+    assert!(
+        density["measured"]
+            .as_str()
+            .unwrap()
+            .contains("notes sounding on average"),
+        "{density}"
+    );
+    assert!(
+        violations
+            .iter()
+            .find(|v| v["rule"] == "pan_spread_min")
+            .unwrap()["measured"]
+            .as_str()
+            .unwrap()
+            .contains("0 track(s) declare pan"),
+        "pan measurement must say why it is zero"
+    );
+
+    // Full: a bass below MIDI 45, an octave-doubled pad, a melody that reaches
+    // above 79, and pans spread across the image.
+    let full = dir.path().join("full.yaml");
+    fs::write(
+        &full,
+        "tempo: 84\nkey: A_minor\nbars: 4\nloop: true\n\
+         motifs:\n  cell:\n    - { degree: 8, beats: 4 }\n\
+         tracks:\n\
+           - { id: lead, instrument: flute, pattern: melody, motif: cell, pan: 0.7 }\n\
+           - { id: air, instrument: glockenspiel, pattern: melody, motif: cell, pan: 0.3 }\n\
+           - { id: bed, instrument: slow_strings, pattern: sustain, pan: 0.4 }\n\
+           - { id: pad, instrument: choir_pad, pattern: sustain, pan: 0.6 }\n\
+           - { id: low, instrument: cello, pattern: bass, pan: 0.5 }\n",
+    )
+    .unwrap();
+    let out = bin()
+        .arg("lint")
+        .arg(&full)
+        .arg("--grammar")
+        .arg(&grammar)
+        .assert()
+        .success();
+    assert!(
+        String::from_utf8_lossy(&out.get_output().stdout).contains("ok: conforms to `fullness`")
+    );
+}
+
+/// MCP forwards the delivery flags and passes the structured error back.
+#[test]
+fn mcp_build_forwards_space_and_master() {
+    let replies = mcp_roundtrip(&[
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "build", "arguments": {
+                "scene": forest().to_str().unwrap(),
+                "output": "/tmp/mcp-master-should-not-exist.wav",
+                "master": -3,
+                "space": "hall"}}}),
+    ]);
+    let tools = replies[0]["result"]["tools"].as_array().unwrap();
+    let build = tools
+        .iter()
+        .find(|tool| tool["name"] == "build")
+        .expect("build tool is published");
+    assert!(
+        build["inputSchema"]["properties"]["space"].is_object()
+            && build["inputSchema"]["properties"]["master"].is_object(),
+        "build must publish space/master: {build}"
+    );
+    assert_eq!(replies[1]["result"]["isError"], true);
+    let text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("--master") && text.contains("out of range"),
+        "{text}"
+    );
+    assert!(!Path::new("/tmp/mcp-master-should-not-exist.wav").exists());
 }
 
 /// `schema --grammar` publishes the corpus rules so agents can discover the

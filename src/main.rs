@@ -7,6 +7,7 @@ mod error;
 mod grammar;
 mod instrument;
 mod makecode;
+mod mastering;
 mod mcp;
 mod midi;
 mod orchestration;
@@ -132,6 +133,11 @@ enum Command {
         sample_rate: u32,
         #[arg(long, default_value_t = 0.8)]
         gain: f32,
+        /// Ambience preset for the SF2 renderers: `dry` (default, reverb off),
+        /// `room`, or `hall`. The scene's `reverb` is only a send — this is the
+        /// room it sends into.
+        #[arg(long, value_enum, default_value_t = tools::Space::Dry)]
+        space: tools::Space,
     },
     /// Convert rendered audio via FFmpeg (.ogg → Vorbis, .wav → PCM)
     Export {
@@ -171,6 +177,20 @@ enum Command {
         sample_rate: u32,
         #[arg(long, default_value_t = 0.8)]
         gain: f32,
+        /// Ambience preset for the SF2 renderers: `dry` (default, reverb off),
+        /// `room`, or `hall`. The scene's `reverb` is only a send — this is the
+        /// room it sends into.
+        #[arg(long, value_enum, default_value_t = tools::Space::Dry)]
+        space: tools::Space,
+        /// Deliver at this integrated loudness (LUFS) with one static gain;
+        /// stems and mix get the same gain, so they still sum. Absent = the
+        /// render's natural level. Dynamics (compression/limiting) stay a post
+        /// step on the delivered asset.
+        #[arg(long, value_name = "LUFS", allow_negative_numbers = true)]
+        master: Option<f64>,
+        /// True-peak ceiling for --master, in dBFS (0.0..=-6.0-ish range).
+        #[arg(long, default_value_t = -1.0, value_name = "DBFS", allow_negative_numbers = true)]
+        master_true_peak: f64,
         #[arg(long, default_value_t = 5)]
         quality: u8,
         /// Also render one sample-aligned stem per instrument/texture track
@@ -223,6 +243,17 @@ enum Command {
         sample_rate: u32,
         #[arg(long, default_value_t = 0.8)]
         gain: f32,
+        /// Ambience preset for the SF2 renderers: `dry` (default, reverb off),
+        /// `room`, or `hall`.
+        #[arg(long, value_enum, default_value_t = tools::Space::Dry)]
+        space: tools::Space,
+        /// Deliver every scene at this integrated loudness (LUFS) with one
+        /// static gain; absent = each render's natural level.
+        #[arg(long, value_name = "LUFS", allow_negative_numbers = true)]
+        master: Option<f64>,
+        /// True-peak ceiling for --master, in dBFS.
+        #[arg(long, default_value_t = -1.0, value_name = "DBFS", allow_negative_numbers = true)]
+        master_true_peak: f64,
         #[arg(long, default_value_t = 5)]
         quality: u8,
         /// Also render instrument/texture stems for every scene
@@ -566,6 +597,20 @@ fn validate_crossfade(crossfade_ms: u32) -> Result<()> {
             format!("{crossfade_ms} out of range 0..=60000"),
         ))
     }
+}
+
+/// `--space` is only meaningful for the SF2 backends: they own a room model.
+/// sfizz has no ambience stage, so accepting the flag would silently deliver a
+/// dry render that the caller believes is reverberant.
+fn validate_space(renderer: tools::Renderer, space: tools::Space) -> Result<()> {
+    if renderer == tools::Renderer::Sfizz && space != tools::Space::Dry {
+        return Err(error::Error::Validation {
+            path: "--space".to_owned(),
+            message: "renderer `sfizz` has no ambience stage (the `.sfz` patch owns its tail);                       build through an SF2 backend, or add ambience in a post step"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_build_options(
@@ -985,9 +1030,17 @@ fn run(command: &Command, json: bool) -> Result<String> {
             renderer,
             sample_rate,
             gain,
+            space,
         } => {
             validate_sample_rate(*sample_rate)?;
             validate_gain(*gain)?;
+            if *renderer == tools::Renderer::Sfizz && *space != tools::Space::Dry {
+                return Err(error::Error::Validation {
+                    path: "--space".to_owned(),
+                    message: "renderer `sfizz` has no ambience stage; render through an SF2 backend, or apply space in a post step"
+                        .to_owned(),
+                });
+            }
             match renderer {
                 tools::Renderer::Sfizz => {
                     let sfz = sfz.as_deref().ok_or_else(|| error::Error::Validation {
@@ -1020,7 +1073,15 @@ fn run(command: &Command, json: bool) -> Result<String> {
                         });
                     }
                     let soundfont = soundfont::resolve(soundfont.as_deref())?;
-                    tools::render(*renderer, midi, &soundfont, output, *sample_rate, *gain)?;
+                    tools::render(
+                        *renderer,
+                        midi,
+                        &soundfont,
+                        output,
+                        *sample_rate,
+                        *gain,
+                        *space,
+                    )?;
                 }
             }
             Ok(format!("wrote {}", output.display()))
@@ -1070,6 +1131,9 @@ fn run(command: &Command, json: bool) -> Result<String> {
             renderer,
             sample_rate,
             gain,
+            space,
+            master,
+            master_true_peak,
             quality,
             stems,
             tail,
@@ -1079,6 +1143,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             fallback_mode,
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
+            validate_space(*renderer, *space)?;
             let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::build(&pipeline::BuildArgs {
@@ -1090,6 +1155,9 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 renderer: *renderer,
                 sample_rate: *sample_rate,
                 gain: *gain,
+                space: *space,
+                master: *master,
+                master_true_peak: *master_true_peak,
                 quality: *quality,
                 stems: *stems,
                 tail: *tail,
@@ -1127,6 +1195,9 @@ fn run(command: &Command, json: bool) -> Result<String> {
             renderer,
             sample_rate,
             gain,
+            space,
+            master,
+            master_true_peak,
             quality,
             stems,
             tail,
@@ -1136,6 +1207,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
             fallback_mode,
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
+            validate_space(*renderer, *space)?;
             let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::batch(&pipeline::BatchArgs {
@@ -1148,6 +1220,9 @@ fn run(command: &Command, json: bool) -> Result<String> {
                 renderer: *renderer,
                 sample_rate: *sample_rate,
                 gain: *gain,
+                space: *space,
+                master: *master,
+                master_true_peak: *master_true_peak,
                 quality: *quality,
                 stems: *stems,
                 tail: *tail,

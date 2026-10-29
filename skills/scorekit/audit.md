@@ -53,12 +53,13 @@ grammar overrides them — note the override in the report.
 | C · breathing | per melody track: rest beats ÷ total beats | ≥0.3 |
 | D · emotional curve | intensity × register × active-voice count over the timeline, as rough percentages | has corners (rise, peak, cut or contrast, return) — not a plateau |
 | E · role coverage | tracks per role: foundation (`bass` or low pitched clip), harmony (`sustain`/`arpeggio`), lead (`melody` or foreground pitched clip), pulse (`drums`/`tabla` or percussion clip) | no unintended gap; no two tracks duplicating a role without registral or rhythmic contrast |
-| F · register spacing | octave bands occupied by concurrent tracks | bass alone at the bottom; ≤2 voices per band; melody clear of the pad's center |
+| F · register spacing | octave bands occupied by concurrent tracks, plus the lowest/highest MIDI note that actually sounds | bass alone at the bottom; ≤2 voices per band; melody clear of the pad's center; the low end and the air are occupied (`lowest_note_at_most` / `highest_note_at_least`) |
 | G · loop/ending seal | loop: `dynamics` start == end and last chord pulls to the first; one-shot: final cadence matches the brief (`resolution` complete/incomplete) | matches the declared `loop` and the stated intent |
 | H · determinism hygiene | `performance.humanize` present ⇒ `seed` set | seeded |
 | I · story alignment | if `story:` present: each major musical decision (key, tempo, motif shape, curve, orchestration) traceable to it | no decision contradicts the brief |
 | J · source honesty | unreviewed fallbacks from G3/G5; texture sources picked by guess | 0 |
 | K · style independence | vs your recent deliverables (this session/project): instrument-set overlap, and variation axes changed (palette family, key+mode, tempo class, meter, lead timbre, pulse, harmony color, density — see [palettes.md](palettes.md)) | overlap <50% and ≥3 axes changed, unless the user pinned a series style; strings/orchestral palette carries a stated brief-based justification |
+| L · delivery (room, level, width) | read `meta.json`: `space`, `master.achieved_lufs`, `master.achieved_true_peak_dbfs`, `limited_by_peak`; and the side/mid ratio of the delivered file | space is deliberate (not the dry default for a cue that wants depth); loudness in the brief's range (−16…−12 LUFS for game/film, unless the brief says otherwise); true peak ≤ −1 dBFS; width not collapsed <−15 dB side/mid |
 
 **K is no longer a judgement call.** The eight axes and the overlap are
 computed by the tool: declare the corpus rules in the project's constitution
@@ -75,6 +76,15 @@ sentence. A failing run is a G2 violation with `measured` vs `want`, which
 makes a BLOCKED verdict — not a note-to-self. `--corpus` with no scenes in
 it, or corpus rules without `--corpus`, is an input error: an unmeasurable K
 must never be reported as passing.
+
+Measuring L: `build` records the room preset and the full mastering plan in
+`meta.json` (`space`, `master.{target_lufs, measured_lufs, achieved_lufs,
+gain_db, achieved_true_peak_dbfs, limited_by_peak}`). Report the achieved
+numbers, not the flags you passed. A delivered asset at −23 LUFS with a −9
+dBFS peak is not "ready for the engine" — it is 13 dB of unused headroom, and
+the finding is `fix: --master -14` (or a post FFmpeg pass if the crest factor
+also has to come down, which `build` deliberately does not do because
+compression is not distributive over stems).
 
 Measuring K: list the instrument sets side by side and count; run
 `scorekit diff` between the current and previous scene when both exist —

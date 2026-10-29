@@ -96,7 +96,20 @@ fn tools() -> Vec<Tool> {
                     "soundfont": { "type": "string", "description": "SF2 SoundFont path (fluidsynth/timidity)" },
                     "orchestration": { "type": "string", "description": "Orchestration profile path (sfizz only)" },
                     "texture_profile": { "type": "string", "description": "Texture-source profile path when the scene declares textures" },
-                    "stems": { "type": "boolean", "description": "Also render sample-aligned instrument and texture stems" }
+                    "stems": { "type": "boolean", "description": "Also render sample-aligned instrument and texture stems" },
+                    "space": {
+                        "type": "string",
+                        "enum": ["dry", "room", "hall"],
+                        "description": "Ambience preset for the SF2 renderers (default dry); sfizz rejects it"
+                    },
+                    "master": {
+                        "type": "number",
+                        "description": "Static-gain loudness target in LUFS (e.g. -14); omit for the natural level"
+                    },
+                    "master_true_peak": {
+                        "type": "number",
+                        "description": "True-peak ceiling for master, in dBFS (default -1.0)"
+                    }
                 },
                 "required": ["scene", "output"],
                 "additionalProperties": false
@@ -228,6 +241,17 @@ fn optional_str<'a>(args: &'a Value, key: &str) -> std::result::Result<Option<&'
     }
 }
 
+fn optional_number(args: &Value, key: &str) -> std::result::Result<Option<f64>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .ok_or_else(|| format!("`{key}` must be a finite number"))
+            .map(Some),
+        Some(_) => Err(format!("`{key}` must be a number")),
+    }
+}
+
 /// Translate one MCP tool call into CLI argv (without the leading `--json`).
 fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, String> {
     let mut argv: Vec<String> = Vec::new();
@@ -290,6 +314,18 @@ fn tool_argv(name: &str, args: &Value) -> std::result::Result<Vec<String>, Strin
             }
             if args.get("stems").and_then(Value::as_bool) == Some(true) {
                 argv.push("--stems".into());
+            }
+            if let Some(space) = args.get("space").and_then(Value::as_str) {
+                argv.push("--space".into());
+                argv.push(space.to_owned());
+            }
+            if let Some(master) = optional_number(args, "master")? {
+                argv.push("--master".into());
+                argv.push(master.to_string());
+            }
+            if let Some(ceiling) = optional_number(args, "master_true_peak")? {
+                argv.push("--master-true-peak".into());
+                argv.push(ceiling.to_string());
             }
         }
         "diff" => {

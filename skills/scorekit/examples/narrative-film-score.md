@@ -79,13 +79,18 @@ starting point, and only after the palette decision agrees with it:
 scorekit doctor
 scorekit schema > /tmp/scorekit-scene-schema.json
 scorekit --json validate out/scene.yaml
-scorekit build out/scene.yaml --stems -o out/scene.wav
+scorekit build out/scene.yaml --stems -o out/scene.wav --space hall --master -14
 ```
 
 `exile-in-the-dunes.yaml` is 24 bars at 56 BPM (about 102.9 s before the
 non-loop tail) and develops its `exile_arc` cell through statement, collapse,
 silence and an unresolved ending. `lantern-keepers.yaml` is 16 bars of 3/4 at
 84 BPM, loops seamlessly, and carries the same craft in struck timbres.
+
+`--space hall` gives the piece a room (a scene's `reverb` alone cannot) and
+`--master -14` delivers the level; both are recorded in `meta.json`
+(`space`, `master`). Without them the same render measures −23 LUFS with a
+−82 dB tail — quiet and dry, which is what "thin" sounds like.
 
 The default FluidSynth path resolves
 `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`. For SFZ libraries,

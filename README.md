@@ -340,6 +340,42 @@ scorekit build elegy.yaml --renderer sfizz \
 
 Your scene stays portable — it says `instrument: violin`, and each track's optional `palette` (defaulting to `default_palette` when omitted) picks which renderer profile in the orchestration resolves it to real `.sfz` sample files. A scene can layer palettes explicitly (e.g. one track pinned to a `solo` palette next to section tracks on `ensemble`) to get a soloist over a section without ever naming a local path. See the [profiles manual](https://talkincode.github.io/scorekit/profiles.html).
 
+## Room, level, and why renders sound thin
+
+`build` renders through FluidSynth, whose default room is a tiny box: the
+shipped reference render measures −23 LUFS with a 17 dB crest factor, a −11 dB
+hole in 80–200 Hz and a −7 dB side/mid ratio. A scene's `reverb` is only a CC91
+*send* — it cannot create a room, so at high values it used to look inert. Two
+flags close that gap:
+
+```bash
+scorekit build scene.yaml -o out/scene.ogg --space hall --master -14
+# master: -23.0 → -14.7 LUFS (gain +8.3 dB), true peak -1.0 dBFS, PLR 13.7 dB
+```
+
+- `--space dry|room|hall` picks the ambience room (default `dry`, reverb pinned
+  off so a user's `.fluidsynthrc` cannot change output). `hall` measured +1.4 dB
+  energy, +2 dB width and an audible tail where the default tail sat at −82 dB.
+  A scene that sends `reverb` into a dry room now prints `WARN ambience:`.
+- `--master <LUFS>` delivers the level with **one static gain**, measured with
+  FFmpeg's EBU R128 filter on the assembled cut and capped by
+  `--master-true-peak` (default −1 dBFS). A static gain is distributive and
+  time-invariant, so stems still sum to the mix and the loop seal stays
+  bit-exact; `meta.json` records the whole plan.
+
+Compression and limiting are deliberately not in `build` — they are
+time-varying, so they would break both invariants. Crest-factor work belongs to
+a post step on the delivered asset (`ffmpeg -af acompressor,alimiter`). Suite
+scenes refuse `--master` (per-section normalization would flatten the authored
+arc), and `sfizz` refuses a non-dry `--space` because `.sfz` patches own their
+tails.
+
+The arrangement half of "full" is measurable too:
+[`examples/grammars/fullness.yaml`](examples/grammars/fullness.yaml) lints
+`simultaneous_notes_min`, `lowest_note_at_most`, `highest_note_at_least` and
+`pan_spread_min`, so a mid-register pad over a root-note bass fails a gate
+instead of a review.
+
 ## Style gallery
 
 Ready-to-build references in [examples/scenes/](examples/scenes/): [chiptune](examples/scenes/chiptune.yaml) (8-bit), [dance](examples/scenes/dance.yaml), [epic](examples/scenes/epic.yaml), [ballad](examples/scenes/ballad.yaml) (3/4), [elegy](examples/scenes/elegy.yaml) (violin), [dunes](examples/scenes/dunes.yaml) (film-score texture, conforms to the [grief grammar](examples/grammars/grief.yaml)). The installable Agent skill ships two deliberately unrelated worked scenes — [exile-in-the-dunes](skills/scorekit/examples/exile-in-the-dunes.yaml) (strings, D minor) and [lantern-keepers](skills/scorekit/examples/lantern-keepers.yaml) (music box, G major, 3/4) — plus a clip-based [night-market-strut](skills/scorekit/examples/night-market-strut.yaml) that needs no SFZ library at all, because the palette is a decision inside the brief rather than a default.

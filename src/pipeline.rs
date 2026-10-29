@@ -13,7 +13,7 @@
 
 use crate::error::{Error, Result};
 use crate::schema::Scene;
-use crate::{audio, composer, midi, schema, tools};
+use crate::{audio, composer, mastering, midi, schema, tools};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -32,6 +32,14 @@ pub struct BuildArgs<'a> {
     pub renderer: tools::Renderer,
     pub sample_rate: u32,
     pub gain: f32,
+    /// Ambience preset for the SF2 renderers (`--space`). `Dry` pins FluidSynth
+    /// reverb off, so renders never inherit a user's `.fluidsynthrc`.
+    pub space: tools::Space,
+    /// Static-gain loudness target in LUFS (`--master`); `None` delivers the
+    /// render at its natural level, exactly as before.
+    pub master: Option<f64>,
+    /// True-peak ceiling for `--master` in dBFS.
+    pub master_true_peak: f64,
     pub quality: u8,
     pub stems: bool,
     /// Decay tail (seconds) appended after the music for non-loop scenes.
@@ -279,6 +287,9 @@ pub struct BatchArgs<'a> {
     pub renderer: tools::Renderer,
     pub sample_rate: u32,
     pub gain: f32,
+    pub space: tools::Space,
+    pub master: Option<f64>,
+    pub master_true_peak: f64,
     pub quality: u8,
     pub stems: bool,
     pub tail: f64,
@@ -330,6 +341,9 @@ pub fn batch(args: &BatchArgs) -> Result<String> {
             renderer: args.renderer,
             sample_rate: args.sample_rate,
             gain: args.gain,
+            space: args.space,
+            master: args.master,
+            master_true_peak: args.master_true_peak,
             quality: args.quality,
             stems: args.stems,
             tail: args.tail,
@@ -513,6 +527,7 @@ fn render_texture_tracks(
 /// `keep_cut`, the intermediate `.cut.wav` survives for the caller (suite
 /// main-file assembly) instead of being cleaned up here; for WAV output the
 /// output itself is the cut, so the flag is a no-op.
+#[allow(clippy::too_many_arguments)]
 fn produce(
     raw: &Path,
     output: &Path,
@@ -521,15 +536,16 @@ fn produce(
     window: audio::Window,
     cleanup: &mut Cleanup,
     keep_cut: bool,
+    gain: f64,
 ) -> Result<()> {
     if ext == "wav" {
-        audio::extract(raw, output, window)
+        audio::extract_scaled(raw, output, window, gain)
     } else {
         let cut = output.with_extension("cut.wav");
         if !keep_cut {
             cleanup.files.push(cut.clone());
         }
-        audio::extract(raw, &cut, window)?;
+        audio::extract_scaled(raw, &cut, window, gain)?;
         tools::export(&cut, output, quality)?;
         // Remove eagerly: stem cuts live in the staging dir, which is renamed
         // into place before the deferred Cleanup runs — the recorded path
@@ -596,6 +612,21 @@ pub fn build(args: &BuildArgs) -> Result<String> {
             entry["total_samples"],
             if scene.r#loop { ", seamless loop" } else { "" },
             meta_path.display(),
+        ));
+    }
+
+    // A suite exists to express an authored arc across sections. Normalizing
+    // each section on its own would erase exactly that, and one plan cannot be
+    // computed before the sections exist — so refuse instead of silently
+    // flattening the piece.
+    if !scene.sections.is_empty() && args.master.is_some() {
+        return Err(validation(
+            "--master",
+            "suite scenes cannot be mastered in one pass: per-section normalization would flatten \
+             the authored arc and the sections are built independently. Build the main file without \
+             --master and normalize the delivered asset in a post step (FFmpeg loudnorm), or split \
+             the sections into individual scenes"
+                .to_owned(),
         ));
     }
 
@@ -689,6 +720,7 @@ pub fn build(args: &BuildArgs) -> Result<String> {
         "sample_rate": args.sample_rate,
         "audio": args.output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         "loop": false,
+        "space": args.space.name(),
         "total_samples": total_samples,
         "seconds": total_samples as f64 / f64::from(args.sample_rate),
         "instrument_resolution": resolution.to_json(),
@@ -781,6 +813,8 @@ fn build_one(
         None
     };
 
+    // `(raw wav, stem file name)`, produced once the mastering plan is known.
+    let mut stem_raws: Vec<(PathBuf, String)> = Vec::new();
     match require_backend(args.renderer, args.soundfont, args.orchestration)? {
         Backend::Sfizz { .. } => {
             // sfizz_render only ever plays one instrument: render every track
@@ -841,26 +875,18 @@ fn build_one(
             }
             // Gain is already baked into each track above; mix at unity here.
             audio::mix(&track_raws, &raw, 1.0)?;
-            if args.stems {
-                let stems_staging = stems_staging.as_ref().expect("created when --stems");
-                for (i, track) in scene.tracks.iter().enumerate() {
-                    let name = format!("{:02}-{}.{ext}", i + 1, track.id);
-                    produce(
-                        &track_raws[i],
-                        &stems_staging.join(&name),
-                        ext,
-                        args.quality,
-                        window,
-                        &mut cleanup,
-                        false,
-                    )?;
-                    let dir_name = stems_dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    stem_rel.push(format!("{dir_name}/{name}"));
-                }
-            }
+            // Stems are encoded after the mastering plan exists, so they carry
+            // exactly the same static gain as the full mix.
+            stem_raws = track_raws
+                .iter()
+                .enumerate()
+                .map(|(i, raw_i)| {
+                    (
+                        raw_i.clone(),
+                        format!("{:02}-{}.{ext}", i + 1, scene.tracks[i].id),
+                    )
+                })
+                .collect();
         }
         Backend::Sf2 { soundfont } => {
             // Full mix: render, cut sample-exactly in-process, then encode if needed.
@@ -872,8 +898,10 @@ fn build_one(
                 &raw,
                 args.sample_rate,
                 args.gain,
+                args.space,
             )?;
-            // Stems: staged in a temp dir, swapped in only when every track rendered.
+            // Stems: staged in a temp dir, swapped in only when every track
+            // rendered. Encoded after the mastering plan exists (see below).
             if args.stems {
                 let staging = stems_staging.as_ref().expect("created when --stems");
                 for (i, track) in scene.tracks.iter().enumerate() {
@@ -888,23 +916,10 @@ fn build_one(
                         &raw_i,
                         args.sample_rate,
                         args.gain,
-                    )?;
-                    produce(
-                        &raw_i,
-                        &staging.join(&name),
-                        ext,
-                        args.quality,
-                        window,
-                        &mut cleanup,
-                        false,
+                        args.space,
                     )?;
                     let _ = std::fs::remove_file(&mid_i);
-                    let _ = std::fs::remove_file(&raw_i);
-                    let dir_name = stems_dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    stem_rel.push(format!("{dir_name}/{name}"));
+                    stem_raws.push((raw_i, name));
                 }
             }
         }
@@ -921,6 +936,42 @@ fn build_one(
         audio::mix(&inputs, &combined, 1.0)?;
         combined
     };
+    // Loudness delivery: measure the assembled pre-encode cut, decide one
+    // static gain, then apply that same gain to the mix and to every stem (a
+    // static gain is distributive, so "sum of stems == full mix" still holds
+    // and the loop seal is untouched).
+    let master_plan = match args.master {
+        Some(target) => {
+            let probe = output.with_extension(format!("probe-{}.wav", std::process::id()));
+            cleanup.files.push(probe.clone());
+            audio::extract(&full_raw, &probe, window)?;
+            let measured = tools::measure_loudness(&probe)?;
+            Some(mastering::plan(measured, target, args.master_true_peak)?)
+        }
+        None => None,
+    };
+    let master_factor = master_plan
+        .as_ref()
+        .map(mastering::Plan::factor)
+        .unwrap_or(1.0);
+    if let Some(plan) = &master_plan {
+        eprintln!("{}", plan.summary());
+    }
+    // A scene's `reverb` is only a CC91 send: it cannot create a room. Saying so
+    // once, loudly, is the difference between "dry on purpose" and "the knob
+    // did nothing" (the field used to fail silently on the default backend).
+    let declared_reverb = scene
+        .tracks
+        .iter()
+        .filter_map(|track| track.reverb)
+        .fold(0.0f32, f32::max);
+    if declared_reverb > 0.0 && args.space == tools::Space::Dry {
+        eprintln!(
+            "WARN ambience: the scene sends {declared_reverb:.2} reverb but the renderer room is dry; \
+             pass --space room|hall (the send only decides how much signal leaves for the room)"
+        );
+    }
+
     produce(
         &full_raw,
         output,
@@ -929,7 +980,32 @@ fn build_one(
         window,
         &mut cleanup,
         keep_cut,
+        master_factor,
     )?;
+
+    if let Some(staging) = &stems_staging {
+        for (raw_i, name) in &stem_raws {
+            produce(
+                raw_i,
+                &staging.join(name),
+                ext,
+                args.quality,
+                window,
+                &mut cleanup,
+                false,
+                master_factor,
+            )?;
+            let dir_name = stems_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            stem_rel.push(format!("{dir_name}/{name}"));
+            // The per-track raw lives in the staging dir that is about to be
+            // renamed into place; drop it once its stem exists so the shipped
+            // folder contains assets only.
+            let _ = std::fs::remove_file(raw_i);
+        }
+    }
 
     if let Some(staging) = &stems_staging {
         for (i, (texture, texture_raw)) in scene.textures.iter().zip(&texture_raws).enumerate() {
@@ -946,6 +1022,7 @@ fn build_one(
                 window,
                 &mut cleanup,
                 false,
+                master_factor,
             )?;
             let dir_name = stems_dir
                 .file_name()
@@ -984,6 +1061,7 @@ fn build_one(
         "total_samples": total_samples,
         "crossfade_samples": if scene.r#loop { crossfade.min(loop_samples) } else { 0 },
         "seconds": total_samples as f64 / f64::from(args.sample_rate),
+        "space": args.space.name(),
         "audio": audio_name,
         "stems": stem_rel,
         "tracks": scene.tracks.iter().map(|t| json!({
@@ -1009,6 +1087,11 @@ fn build_one(
                 }))
                 .collect::<Vec<_>>()
         );
+    }
+    if let Some(plan) = &master_plan {
+        metadata["master"] = plan.as_json();
+    } else {
+        metadata["master"] = json!(null);
     }
     Ok(metadata)
 }

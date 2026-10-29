@@ -124,6 +124,40 @@ for `--renderer sfizz --orchestration` with a real source (see the ScoreData
 profile set), **not** an argument for going back to strings. Judge the
 palette on a proper render before you judge it.
 
+## Thickness recipes (the other half of the palette decision)
+
+A palette decides *what* sounds; a thickness recipe decides whether it sounds
+full or thin. Two palettes with the same tracks differ by 10 dB of perceived
+body depending on these four lines:
+
+| Move | Measured effect | How |
+| --- | --- | --- |
+| Room | `--space hall` vs default: +1.4 dB energy, +2 dB width, audible tail (−41 vs −82 dB) | `build --space room\|hall`; a scene's `reverb` alone cannot create a room |
+| Level | −23 LUFS render → −14 LUFS delivered, same crest factor | `build --master -14` (static gain; stems still sum, loop seal intact) |
+| Registers | 80–200 Hz rose from −11 dB below the mix once a note existed there | octave-double the bass, add a low pad, double the pad up an octave |
+| Pans | side/mid from −22 dB (≈mono) toward −4 dB | `pan: 0.35 / 0.5 / 0.68` across three roles |
+
+Per-family starting points:
+
+- **struck (music box, marimba, celesta)** — double the melody with the same
+  instrument an octave down (two melody tracks, one `clips`-free octave
+  double); `--space room`; pans 0.4 / 0.6.
+- **bowed (strings)** — split the pad into two octaves (two `sustain` tracks,
+  one voiced an octave up via a second instrument such as `choir_pad`);
+  `--space hall`; pans 0.3 / 0.5 / 0.7.
+- **plucked / groove (funk, disco)** — the low end is the thickness: bass plus
+  an octave-up stab layer on the same clip; keep pans tight (0.45 / 0.55) so
+  the pocket stays centred; `--space room`.
+- **synthesized** — two pads rather than one (`warm_pad` low, `halo_pad`
+  high), and let `--master` do the level work instead of raising intensities.
+- **percussion-forward** — thickness comes from the low percussion (timpani,
+  kick) plus one sustained layer; a wall of drums with no pad still reads thin.
+
+`examples/grammars/fullness.yaml` measures the arrangement half of this
+(`simultaneous_notes_min`, `lowest_note_at_most`, `highest_note_at_least`,
+`pan_spread_min`). The room and the level are build flags, so no grammar can
+see them — check `meta.json`'s `space` and `master` blocks instead.
+
 ## Same brief, different palettes (worked contrast)
 
 "A character walks through ruins, remembering" does **not** force

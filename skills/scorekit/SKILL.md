@@ -82,11 +82,17 @@ or pass an explicit file to override it.
    measured nearest neighbour, which is the evidence dimension K asks for.
 6. **Build:**
    ```bash
-   scorekit build scene.yaml -o out/scene.ogg
+   scorekit build scene.yaml -o out/scene.ogg --space room --master -14
    ```
-   Add `--stems` for per-track files in `out/scene.ogg.stems/` (adaptive
+   `--space dry|room|hall` is the **room** (default `dry`); a scene's
+   `reverb` is only the send into it, and a `reverb` with no room prints
+   `WARN ambience:`. `--master <LUFS>` delivers the level with one static
+   gain (stems keep summing, the loop seal survives) and records the
+   measurement in `meta.json`; without it a render keeps 14–17 dB of unused
+   headroom and sounds weak on every player. Add `--stems` for per-track
+   files in `out/scene.ogg.stems/` (adaptive
    game audio), `--renderer timidity` for the alternate backend. Non-loop
-   scenes get a reverb tail (`--tail`, default 4s). A scene declaring
+   scenes get a decay tail (`--tail`, default 4s). A scene declaring
    `textures` also needs `--texture-profile <file>`. For MakeCode Arcade
    or micro:bit V2, compile instead with
    `scorekit makecode scene.yaml -o song.ts` (no renderer; do not use
@@ -296,6 +302,29 @@ use `sections:`; see [reference.md](reference.md).
   rules> --corpus <your shipped scenes>` returns the measured overlap and
   how many axes actually changed. If the corpus has nothing to say because
   you never pointed it anywhere, dimension K is not checked at all.
+- **Fullness is built from four concrete moves, not one loudness trick.**
+  Measured on the shipped references, an unaltered render sits at −23 LUFS
+  with a 17 dB crest factor, a −11 dB hole in 80–200 Hz and a −7 dB
+  side/mid ratio: quiet, uncompressed, mid-register heavy, nearly mono.
+  The fixes, in order of audible return:
+  1. **`--space room|hall`** — a room, not a bigger send. `hall` measured
+     +1.4 dB energy, +2 dB width and a real tail where the default room's
+     tail sits at −82 dB.
+  2. **`--master -14`** (to −16 for ambient, −12 for combat) — level.
+     Crest factor, if the piece needs it, is a post step
+     (`ffmpeg -af acompressor,alimiter`), because compression is not
+     distributive and would stop stems summing.
+  3. **Fill the registers** — a `bass` track is a single root two octaves
+     down: add an octave double, a low pad, or a second bass voice. Give
+     the melody somewhere to sit by doubling the pad an octave up. With no
+     note below MIDI 45 and none above 76 the mix can only be a hump.
+  4. **Spread the pans** — two or three pan positions (`0.35 / 0.5 / 0.68`)
+     turn a centred stack into an image. Zero shipped reference scenes
+     declared `pan` before this was measured.
+  `examples/grammars/fullness.yaml` turns the arrangement half into lint
+  rules (`simultaneous_notes_min`, `lowest_note_at_most`,
+  `highest_note_at_least`, `pan_spread_min`); use it when a brief asks for
+  "big", "full", or a trailer.
 - **Entrances/exits are melody-only.** `sustain`/`arpeggio`/`bass`/`drums`
   fill the whole scene. To bring an instrument in and out mid-piece, give it
   `pattern: melody` and write rests (`degree: 0`) around its material. This

@@ -87,6 +87,22 @@ pub struct Rules {
     /// meter, lead timbre, pulse, harmony color, density).
     #[serde(default)]
     pub corpus_axes_changed_min: Option<u8>,
+    /// Minimum time-weighted average of simultaneously sounding notes — the
+    /// measurable half of "the arrangement is too thin".
+    #[serde(default)]
+    pub simultaneous_notes_min: Option<f64>,
+    /// Require at least one sounding note at or below this MIDI number (the
+    /// low end is actually occupied, not just implied by harmony).
+    #[serde(default)]
+    pub lowest_note_at_most: Option<u8>,
+    /// Require at least one sounding note at or above this MIDI number (there
+    /// is air above the melody instead of a mid-register hump).
+    #[serde(default)]
+    pub highest_note_at_least: Option<u8>,
+    /// Minimum stereo spread (max − min over declared track `pan` values).
+    /// A scene with no pan declarations measures 0.0.
+    #[serde(default)]
+    pub pan_spread_min: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -165,6 +181,10 @@ impl Rules {
             + usize::from(!self.automation_activity.is_empty())
             + usize::from(self.corpus_instrument_overlap_max.is_some())
             + usize::from(self.corpus_axes_changed_min.is_some())
+            + usize::from(self.simultaneous_notes_min.is_some())
+            + usize::from(self.lowest_note_at_most.is_some())
+            + usize::from(self.highest_note_at_least.is_some())
+            + usize::from(self.pan_spread_min.is_some())
     }
 
     /// True when the rules can only be evaluated against a corpus.
@@ -268,6 +288,35 @@ fn validate_rules(rules: &Rules, prefix: &str) -> Result<()> {
                 crate::diversity::AXIS_COUNT
             ),
         );
+    }
+    if let Some(min) = rules.simultaneous_notes_min
+        && (!min.is_finite() || !(0.0..=64.0).contains(&min))
+    {
+        return fail(
+            "simultaneous_notes_min",
+            format!("{min} out of range 0.0..=64.0"),
+        );
+    }
+    if let Some(max) = rules.lowest_note_at_most
+        && max > 127
+    {
+        return fail(
+            "lowest_note_at_most",
+            format!("{max} out of MIDI range 0..=127"),
+        );
+    }
+    if let Some(min) = rules.highest_note_at_least
+        && min > 127
+    {
+        return fail(
+            "highest_note_at_least",
+            format!("{min} out of MIDI range 0..=127"),
+        );
+    }
+    if let Some(min) = rules.pan_spread_min
+        && (!min.is_finite() || !(0.0..=1.0).contains(&min))
+    {
+        return fail("pan_spread_min", format!("{min} out of range 0.0..=1.0"));
     }
     if let Some(min) = rules.percussion_events_per_bar_min
         && (!min.is_finite() || !(0.0..=4096.0).contains(&min))
@@ -518,6 +567,24 @@ fn check_one(scene: &Scene, subject: &str, rules: &Rules, out: &mut Vec<Violatio
         }
     }
 
+    if let Some(min) = rules.pan_spread_min {
+        let pans: Vec<f32> = scene.tracks.iter().filter_map(|track| track.pan).collect();
+        let spread = match (
+            pans.iter().fold(f32::INFINITY, |a, b| a.min(*b)),
+            pans.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b)),
+        ) {
+            (lo, hi) if pans.len() >= 2 && lo.is_finite() && hi.is_finite() => f64::from(hi - lo),
+            _ => 0.0,
+        };
+        if spread < min {
+            push(
+                "pan_spread_min",
+                format!("{spread:.2} ({} track(s) declare pan)", pans.len()),
+                format!(">= {min}"),
+            );
+        }
+    }
+
     if rules.require_performance == Some(true) && scene.performance.is_none() {
         push(
             "require_performance",
@@ -571,7 +638,10 @@ fn check_one(scene: &Scene, subject: &str, rules: &Rules, out: &mut Vec<Violatio
         || rules.resolution.is_some()
         || rules.percussion_events_per_bar_min.is_some()
         || !rules.percussion_onsets.is_empty()
-        || !rules.automation_activity.is_empty();
+        || !rules.automation_activity.is_empty()
+        || rules.simultaneous_notes_min.is_some()
+        || rules.lowest_note_at_most.is_some()
+        || rules.highest_note_at_least.is_some();
     if !needs_ir {
         return;
     }
@@ -716,6 +786,78 @@ fn check_one(scene: &Scene, subject: &str, rules: &Rules, out: &mut Vec<Violatio
                     format!(">= {min}"),
                 );
             }
+        }
+    }
+
+    // Thickness: the time-weighted count of simultaneously sounding pitched
+    // notes, plus the registers the piece actually occupies. These are the
+    // measurable half of "too thin" — a mid-register hump with an empty bottom
+    // and no air scores exactly as it sounds.
+    if rules.simultaneous_notes_min.is_some() {
+        let total = ir.total_ticks.max(1);
+        let mut edges: Vec<(u32, i32)> = Vec::new();
+        for (track, track_ir) in scene.tracks.iter().zip(&ir.tracks) {
+            if track.instrument.is_percussion() {
+                continue;
+            }
+            for note in &track_ir.notes {
+                edges.push((note.tick, 1));
+                edges.push((note.tick.saturating_add(note.dur).min(ir.total_ticks), -1));
+            }
+        }
+        edges.sort_unstable_by_key(|(tick, delta)| (*tick, *delta));
+        let mut sounding: i32 = 0;
+        let mut cursor = 0u32;
+        let mut note_ticks: f64 = 0.0;
+        for (tick, delta) in edges {
+            note_ticks += f64::from(sounding.max(0)) * f64::from(tick.saturating_sub(cursor));
+            cursor = cursor.max(tick);
+            sounding += delta;
+        }
+        let mean = note_ticks / f64::from(total);
+        if let Some(min) = rules.simultaneous_notes_min
+            && mean < min
+        {
+            push(
+                "simultaneous_notes_min",
+                format!("{mean:.2} notes sounding on average"),
+                format!(">= {min}"),
+            );
+        }
+    }
+
+    let lowest = ir
+        .tracks
+        .iter()
+        .zip(&scene.tracks)
+        .filter(|(_, track)| !track.instrument.is_percussion())
+        .flat_map(|(track_ir, _)| track_ir.notes.iter().map(|note| note.key))
+        .min();
+    let highest = ir
+        .tracks
+        .iter()
+        .zip(&scene.tracks)
+        .filter(|(_, track)| !track.instrument.is_percussion())
+        .flat_map(|(track_ir, _)| track_ir.notes.iter().map(|note| note.key))
+        .max();
+    if let Some(max) = rules.lowest_note_at_most {
+        let measured = lowest.unwrap_or(127);
+        if measured > max {
+            push(
+                "lowest_note_at_most",
+                format!("lowest MIDI note {measured}"),
+                format!("<= {max}"),
+            );
+        }
+    }
+    if let Some(min) = rules.highest_note_at_least {
+        let measured = highest.unwrap_or(0);
+        if measured < min {
+            push(
+                "highest_note_at_least",
+                format!("highest MIDI note {measured}"),
+                format!(">= {min}"),
+            );
         }
     }
 

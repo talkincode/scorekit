@@ -28,18 +28,22 @@ tracks:
     pattern: melody
     motif: fanfare
     intensity: 0.75
+    pan: 0.5
   - id: harmony
     instrument: strings # orchestral bed
     pattern: sustain
     intensity: 0.55
+    pan: 0.38
   - id: halo
     instrument: choir_pad # supported halo above the strings
     pattern: sustain
     intensity: 0.35
+    pan: 0.62
   - id: motion
     instrument: harp # glinting motion
     pattern: arpeggio
     intensity: 0.4
+    pan: 0.68
   - id: pulse
     instrument: timpani # martial pulse on chord roots
     pattern: bass

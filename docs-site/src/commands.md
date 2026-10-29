@@ -17,7 +17,7 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 | `makecode <scene> -o <file>` | Compile MakeCode `music.createSong` TypeScript (plus a `.meta.json` manifest) |
 | `render <midi> -o <wav>` | Render one MIDI file through a selected backend |
 | `export <audio> -o <file>` | Convert or trim audio through FFmpeg |
-| `build <scene> -o <file>` | Run the complete asset pipeline |
+| `build <scene> -o <file> [--space dry\|room\|hall] [--master <-LUFS>]` | Run the complete asset pipeline, optionally with a real room and a loudness target |
 | `profile check <profile>` | Render probes through every mapped SFZ patch in a leaf renderer profile |
 | `orchestration check <file>` | Validate palette bindings and every referenced leaf profile/SFZ file |
 | `inspect-instruments <scene>` | Resolve every track's instrument and report substitutions and gaps |
@@ -30,6 +30,18 @@ All commands accept the global `--json` flag. Successful diagnostic commands wri
 Exit codes are stable: `0` success, `1` I/O failure, `2` invalid input, `3` missing dependency, and `4` external tool failure.
 
 Run `scorekit <command> --help` for the complete flag list shipped by the installed binary.
+
+`--space` selects the ambience *room* (FluidSynth/TiMidity). It is separate from
+a scene's `reverb`, which is only the CC91 send into that room; without it the
+render is dry, and a scene that sends reverb anyway prints `WARN ambience:`.
+`--master <LUFS>` measures the assembled asset with FFmpeg's EBU R128 filter and
+applies one static gain, capped by `--master-true-peak` (default −1.0 dBFS).
+Because the gain is static it is distributive and time-invariant: stems still
+sum to the mix, the loop seal stays bit-exact, and `meta.json` records the plan
+under `master` together with `space`. Dynamics are not applied — compression and
+limiting are a post step on the delivered asset. Suite scenes refuse `--master`
+(per-section normalization would flatten the authored arc), and `sfizz` refuses
+any non-dry `--space` because `.sfz` patches own their own tails.
 
 `lint --corpus` is the only flag that reads more than the scene: it is
 required by the corpus rules (`corpus_instrument_overlap_max`,

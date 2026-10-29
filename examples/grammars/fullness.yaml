@@ -1,0 +1,30 @@
+# Thickness as a deterministic gate (audit dimensions E/F/L).
+#
+# "Too thin / too dry" is usually three measurable facts, not a taste:
+#   - too few notes sounding at once (density)
+#   - an empty bottom and no air above the melody (registers)
+#   - everything in the centre (width)
+# The thresholds below are the shipped defaults for a standard 4–6 track cue.
+# Loosen them for a deliberate chamber piece; tighten them for a trailer.
+#
+# Two shipped references legitimately fail this gate and are kept as-is:
+# `ballad` never sounds above MIDI 74 (its air is the point of the omission) and
+# `chiptune` averages 3.0 sounding notes (an 8-bit arp texture is sparse by
+# design). Override those values in that project's copy of this file instead of
+# lowering the global gate — a gate everybody passes measures nothing.
+#
+#   scorekit lint scene.yaml --grammar examples/grammars/fullness.yaml
+name: fullness
+description: >-
+  A project constitution for depth: the arrangement must actually fill its
+  registers and its stereo image instead of stacking a mid-register pad over a
+  root-note bass.
+rules:
+  # Time-weighted mean of simultaneously sounding pitched notes.
+  simultaneous_notes_min: 4.0
+  # At least one note at or below MIDI 45 (A2): the low end is occupied.
+  lowest_note_at_most: 45
+  # At least one note at or above MIDI 76 (E5): there is air above the melody.
+  highest_note_at_least: 76
+  # max − min over declared track `pan` values.
+  pan_spread_min: 0.25

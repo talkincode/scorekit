@@ -56,6 +56,66 @@ impl ToolLimits {
     }
 }
 
+/// Ambience preset for the SF2 renderers. This is the *room*, not the per-track
+/// send: a scene's `reverb` compiles to CC91 (how much signal leaves for the
+/// room), while this decides whether there is a room at all. FluidSynth's own
+/// defaults describe a tiny box (room-size 0.2), which is why an un-tuned
+/// render sounds dry no matter what the scene asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Space {
+    /// No ambience processing (FluidSynth reverb off, TiMidity reverb 0).
+    /// Byte-identical to earlier releases, and the default.
+    Dry,
+    /// Small-to-medium room: audible depth without washing the mix.
+    Room,
+    /// Large hall: long tail, wide stereo, for cinematic and ambient palettes.
+    Hall,
+}
+
+impl Space {
+    pub fn name(self) -> &'static str {
+        match self {
+            Space::Dry => "dry",
+            Space::Room => "room",
+            Space::Hall => "hall",
+        }
+    }
+
+    /// FluidSynth `-o` settings for this room. Deterministic: the same preset
+    /// always renders bit-identical PCM, and `Dry` matches the historical
+    /// command line exactly.
+    fn fluidsynth_settings(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            Space::Dry => vec![("synth.reverb.active", "0")],
+            // A real room has damping (highs die first) and width < 1.0 so the
+            // tail does not smear the centre image.
+            Space::Room => vec![
+                ("synth.reverb.active", "1"),
+                ("synth.reverb.room-size", "0.62"),
+                ("synth.reverb.damp", "0.5"),
+                ("synth.reverb.width", "0.7"),
+                ("synth.reverb.level", "0.7"),
+            ],
+            Space::Hall => vec![
+                ("synth.reverb.active", "1"),
+                ("synth.reverb.room-size", "0.86"),
+                ("synth.reverb.damp", "0.35"),
+                ("synth.reverb.width", "0.9"),
+                ("synth.reverb.level", "0.85"),
+            ],
+        }
+    }
+
+    /// TiMidity has a single reverb amount (`-EFreverb=0..=127`).
+    fn timidity_reverb(self) -> u8 {
+        match self {
+            Space::Dry => 0,
+            Space::Room => 40,
+            Space::Hall => 90,
+        }
+    }
+}
+
 /// Which external synthesizer turns MIDI + SF2 into PCM. The rest of the
 /// pipeline (loop-seal surgery, stems, export) is renderer-agnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -332,6 +392,7 @@ pub fn render(
     output: &Path,
     sample_rate: u32,
     gain: f32,
+    space: Space,
 ) -> Result<()> {
     require_file(midi, "midi")?;
     if renderer == Renderer::Sfizz {
@@ -351,7 +412,7 @@ pub fn render(
             // render is silent; treat its error lines as failures.
             &["fluidsynth: error:", "Failed to load the SoundFont"],
             |tmp| {
-                vec![
+                let mut args: Vec<std::ffi::OsString> = vec![
                     "-ni".into(),
                     "-q".into(),
                     "-g".into(),
@@ -360,9 +421,17 @@ pub fn render(
                     sample_rate.to_string().into(),
                     "-F".into(),
                     tmp.as_os_str().to_owned(),
-                    soundfont.as_os_str().to_owned(),
-                    midi.as_os_str().to_owned(),
-                ]
+                ];
+                // `-o key=value` before the positional arguments; `Dry` pins
+                // reverb off so a user's ambient `.fluidsynthrc` cannot make
+                // renders non-reproducible.
+                for (key, value) in space.fluidsynth_settings() {
+                    args.push("-o".into());
+                    args.push(format!("{key}={value}").into());
+                }
+                args.push(soundfont.as_os_str().to_owned());
+                args.push(midi.as_os_str().to_owned());
+                args
             },
             output,
         ),
@@ -384,18 +453,22 @@ pub fn render(
                     "No instrument mapped",
                 ],
                 |tmp| {
-                    vec![
+                    let mut args: Vec<std::ffi::OsString> = vec![
                         "-x".into(),
                         cfg.into(),
                         "-idq".into(),
                         format!("-A{amp}").into(),
                         "-s".into(),
                         sample_rate.to_string().into(),
-                        "-Ow".into(),
-                        "-o".into(),
-                        tmp.as_os_str().to_owned(),
-                        midi.as_os_str().to_owned(),
-                    ]
+                    ];
+                    // TiMidity's global effect amounts; `Dry` disables reverb
+                    // so the historical output stays byte-identical.
+                    args.push(format!("-EFreverb={}", space.timidity_reverb()).into());
+                    args.push("-Ow".into());
+                    args.push("-o".into());
+                    args.push(tmp.as_os_str().to_owned());
+                    args.push(midi.as_os_str().to_owned());
+                    args
                 },
                 output,
             )
@@ -417,6 +490,70 @@ pub fn render(
         });
     }
     Ok(())
+}
+
+/// Measure the delivered audio with FFmpeg's EBU R128 filter and return
+/// integrated loudness plus true peak. Read-only: it decodes to the null muxer,
+/// writes no files, and the same input always yields the same numbers (so a
+/// `--master` run stays byte-reproducible).
+pub fn measure_loudness(input: &Path) -> Result<crate::mastering::Measurement> {
+    require_file(input, "audio")?;
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostats", "-loglevel", "info", "-i"])
+        .arg(input)
+        .args(["-af", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::MissingDependency {
+                    tool: "ffmpeg".to_owned(),
+                    hint: "install FFmpeg (e.g. `brew install ffmpeg` or `apt install ffmpeg`)"
+                        .to_owned(),
+                }
+            } else {
+                io_err(Path::new("ffmpeg"), e)
+            }
+        })?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(Error::ToolFailure {
+            tool: "ffmpeg".to_owned(),
+            status: output.status.to_string(),
+            stderr: stderr.lines().rev().take(4).collect::<Vec<_>>().join(" | "),
+        });
+    }
+    let integrated = summary_value(&stderr, "I:")
+        .ok_or_else(|| measurement_error(input, "integrated loudness (`I:`) missing"))?;
+    let peak = summary_value(&stderr, "Peak:")
+        .ok_or_else(|| measurement_error(input, "true peak (`Peak:`) missing"))?;
+    Ok(crate::mastering::Measurement {
+        integrated_lufs: integrated,
+        true_peak_dbfs: peak,
+    })
+}
+
+fn measurement_error(input: &Path, what: &str) -> Error {
+    Error::Validation {
+        path: "--master".to_owned(),
+        message: format!(
+            "could not measure `{}`: {what} — is it silent or undecodable?",
+            input.display()
+        ),
+    }
+}
+
+/// Pull the number out of an EBU R128 summary line such as
+/// `    I:         -23.0 LUFS` or `    Peak:       -9.3 dBFS`. `-inf` (silence)
+/// is rejected rather than becoming a NaN gain.
+fn summary_value(stderr: &str, label: &str) -> Option<f64> {
+    stderr.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(label)?;
+        let token = rest.split_whitespace().next()?;
+        token.parse::<f64>().ok().filter(|v| v.is_finite())
+    })
 }
 
 fn renderer_tool(renderer: Renderer) -> &'static str {

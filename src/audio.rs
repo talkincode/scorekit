@@ -54,6 +54,16 @@ pub fn frames(path: &Path) -> Result<u64> {
 /// Extract `window` from `input` into `output` (16-bit PCM in and out),
 /// written atomically. Deterministic: integer/f64 position-only math.
 pub fn extract(input: &Path, output: &Path, window: Window) -> Result<()> {
+    extract_scaled(input, output, window, 1.0)
+}
+
+/// Same as [`extract`] with a linear gain applied to every sample before the
+/// 16-bit round. A *static* gain is used for mastering because it is
+/// distributive: applying it to the full mix and to each stem yields
+/// `sum(stems) == mix`, and because it cannot move a sample in time, the
+/// loop-seal guarantee (`out[last]` is bit-equal to the pre-window material)
+/// survives it untouched.
+pub fn extract_scaled(input: &Path, output: &Path, window: Window, gain: f64) -> Result<()> {
     let mut reader = hound::WavReader::open(input).map_err(|e| wav_err(input, e))?;
     let spec = reader.spec();
     if spec.bits_per_sample != 16 || spec.sample_format != hound::SampleFormat::Int {
@@ -95,7 +105,9 @@ pub fn extract(input: &Path, output: &Path, window: Window) -> Result<()> {
                 let pre = sample_at(window.skip - cf + (j - 1), ch);
                 v += (pre - v) * a;
             }
-            let s = v.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+            let s = (v * gain)
+                .round()
+                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             writer.write_sample(s).map_err(|e| wav_err(output, e))?;
         }
     }

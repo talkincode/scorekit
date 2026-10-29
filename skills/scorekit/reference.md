@@ -1,6 +1,6 @@
 # scorekit reference
 
-Verified against scorekit v0.8.0. When in doubt, trust the binary:
+Verified against scorekit v0.9.0. When in doubt, trust the binary:
 `scorekit schema` / `scorekit schema --grammar` /
 `scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
@@ -26,13 +26,51 @@ Exit codes: `0` ok · `1` io · `2` invalid input / lint violations · `3` missi
 | `lint <scene> --grammar <file>` | check scene against aesthetic grammar | — |
 | `midi <scene> -o <out.mid>` | compile to SMF (format 1, PPQ 480) | `--passes` 1..=8 (1), `--solo <track id>`, `--section <name>`; profile-only melodic identities are rejected before writing because no renderer profile is available |
 | `makecode <scene> -o <out.ts>` | compile MakeCode `music.createSong` TypeScript + `.meta.json` | one song per suite section; chip/drum amplitudes follow `intensity` against a 1.2-scale mix budget; rejects `glide`/pitch bends, clip CC automation, `textures`, and sub-255-tick grids (`humanize`); `pan`/`reverb` dropped with WARN |
-| `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz) |
+| `render <mid> -o <out.wav>` | synthesize WAV | `--soundfont <sf2>` (defaults to `$SCOREKIT_SOUND_LIBRARY_DIR/sf2/MuseScore_General.sf2`) **or** `--sfz <file>` (sfizz, single instrument); `--renderer fluidsynth\|timidity\|sfizz` (fluidsynth), `--sample-rate` 8000..=384000 (44100), `--gain` 0.0..=8.0 (0.8, ignored by sfizz), `--space dry\|room\|hall` (dry; SF2 backends only) |
 | `export <in> -o <out>` | FFmpeg convert (.ogg Vorbis / .wav PCM) | `--quality` 0..=10 (5), `--seek-samples` (0), `--take-samples` |
-| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz only; routes each track's `palette` to a certified leaf renderer profile); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates` |
+| `build <scene> -o <out.ogg\|wav>` | full chain + meta.json | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz only; routes each track's `palette` to a certified leaf renderer profile); `--texture-profile <file>` when `textures` are declared; `--renderer fluidsynth\|timidity\|sfizz`; `--fallback-mode strict\|conservative\|flexible` + `--resolver <config>` (instrument substitution); plus `--stems`, `--tail` 0.0..=3600.0 secs (4.0, non-loop), `--crossfade-ms` 0..=60000 (50, loop seal), `--keep-intermediates`, `--space dry\|room\|hall` (dry; SF2 backends only — sfizz rejects it), `--master <LUFS>` + `--master-true-peak <dBFS>` (off; static-gain loudness delivery, see below) |
 | `inspect-instruments <scene>` | resolve instruments, report per-track palette/profile/SFZ routing | `--orchestration <file>` (omit = exact GM subset; non-GM world identities remain missing), `--resolver <config>`, `--fallback-mode`, `--verbose` (all scored candidates); exit 2 when unresolved; global `--json` emits the report |
 | `diff <old> <new>` | semantic scene diff (ignores formatting) | — |
 | `mcp` | serve MCP over stdio (newline-delimited JSON-RPC 2.0); exposes `doctor`, `validate`, `schema`, `lint`, `build`, `inspect_instruments`, `orchestration_check`, `inspect_textures`, `texture_check`, `diff` as tools, each re-invoking the CLI with `--json` and passing structured output through verbatim | — |
 | `batch <scenes...> --out-dir <dir>` | build many; report.json; failures don't stop the rest | default MuseScore General, explicit `--soundfont <sf2>`, **or** `--orchestration <file>` (sfizz); `--format ogg\|wav` (ogg) + render/export/resolver flags |
+
+## Ambience and level delivery (`--space`, `--master`)
+
+A scene's `reverb` is a **send** (CC91): it decides how much signal leaves for
+a room. It cannot create one. `--space` is the room:
+
+| `--space` | FluidSynth settings | Character |
+| --- | --- | --- |
+| `dry` (default) | `synth.reverb.active=0` | no ambience; also pins reverb off so a user `.fluidsynthrc` cannot change output |
+| `room` | room-size 0.62, damp 0.5, width 0.7, level 0.7 | audible depth without washing the mix |
+| `hall` | room-size 0.86, damp 0.35, width 0.9, level 0.85 | long tail, wide image; cinematic and ambient palettes |
+
+TiMidity maps the same three presets to `-EFreverb=0|40|90`. sfizz has no
+ambience stage at all, so `--space room|hall` with `--renderer sfizz` is a
+structured exit 2 (`--space`) instead of a silently dry render. Rendering is
+byte-reproducible per preset, and the full mix stays sample-exact (space never
+moves a sample, so the loop seal is untouched). A scene that sends `reverb`
+while the room is dry prints `WARN ambience:` once — the knob is not silently
+inert.
+
+`--master <LUFS>` delivers the asset at a target loudness with **one static
+gain**, measured with FFmpeg's EBU R128 filter on the assembled pre-encode cut:
+
+- the gain is capped so the true peak stays at `--master-true-peak`
+  (default −1.0 dBFS); when the ceiling wins, the plan says so and reports the
+  achieved loudness;
+- the same gain is applied to the mix **and to every stem**, because a static
+  gain is distributive — `sum(stems) == mix` and the bit-exact loop seal both
+  survive;
+- `meta.json` records `master: {target_lufs, measured_lufs, achieved_lufs,
+  gain_db, measured/achieved true peak, ceiling_dbfs, limited_by_peak}`;
+- dynamics (bus compression, limiting) are deliberately **not** in `build`:
+  they are time-varying, hence not distributive (stems would stop summing) and
+  not seal-preserving. Do that on the delivered asset with FFmpeg
+  (`acompressor`, `alimiter`) if the piece needs a lower crest factor;
+- suite scenes are refused (exit 2, `--master`): per-section normalization
+  would flatten the authored arc. Master the delivered main file in a post
+  step, or build the sections as individual scenes.
 
 Individual file writes are atomic (temp + rename). Suite builds additionally
 stage every section, main asset, stem directory, and manifest as one set; a
@@ -390,6 +428,10 @@ for named sections and also requires those sections to exist.
 | `automation_activity` | track? + target + minima | compiled point density per bar and/or value span for CC1/CC11/CC74/pitch bend |
 | `corpus_instrument_overlap_max` | 0.0..=1.0 | largest shared-instrument fraction (shared ÷ the larger of the two instrument sets) against any `--corpus` scene |
 | `corpus_axes_changed_min` | 0..=8 | fewest variation axes (palette family, key+mode, tempo class, meter, lead timbre, pulse, harmony color, density) that differ from any `--corpus` scene |
+| `simultaneous_notes_min` | 0..=64 | time-weighted mean of simultaneously sounding pitched notes — the measurable half of "too thin" |
+| `lowest_note_at_most` | MIDI 0..=127 | the piece must sound at least one note at or below this number (occupied low end) |
+| `highest_note_at_least` | MIDI 0..=127 | the piece must sound at least one note at or above this number (air above the melody) |
+| `pan_spread_min` | 0.0..=1.0 | `max − min` over declared track `pan` values; no pan declarations measure 0.0 |
 
 Corpus rules are the only rules that read more than the scene, so `lint`
 needs `--corpus <dir>` (repeatable) whenever a grammar declares them:
@@ -434,6 +476,11 @@ Single scene (`build`):
   "time_signature": "4/4", "bars": 16, "sample_rate": 44100,
   "loop_samples": 1841216, "total_samples": 1841216,
   "crossfade_samples": 2205, "seconds": 41.75,
+  "space": "hall",
+  "master": { "target_lufs": -14.0, "measured_lufs": -23.0, "achieved_lufs": -14.7,
+              "gain_db": 8.3, "measured_true_peak_dbfs": -9.3,
+              "achieved_true_peak_dbfs": -1.0, "ceiling_dbfs": -1.0,
+              "limited_by_peak": true },
   "audio": "scene.ogg",
   "stems": ["scene.stems/01-piano.ogg", "..."],
   "tracks": [{ "id": "harmony", "palette": null, "instrument": "piano", "articulation": "sustain", "pattern": "sustain", "intensity": 0.6 }],
