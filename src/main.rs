@@ -613,6 +613,27 @@ fn validate_space(renderer: tools::Renderer, space: tools::Space) -> Result<()> 
     Ok(())
 }
 
+/// Reject an impossible loudness target before a single note is rendered.
+/// `mastering::plan` re-checks (it is the last line of defence), but an agent
+/// that typos `--master -3` should not wait for a full render to find out.
+fn validate_master(master: Option<f64>, true_peak_dbfs: f64) -> Result<()> {
+    if let Some(target) = master
+        && (!target.is_finite() || !(-40.0..=-5.0).contains(&target))
+    {
+        return Err(error::Error::Validation {
+            path: "--master".to_owned(),
+            message: format!("{target} out of range -40.0..=-5.0 LUFS"),
+        });
+    }
+    if !true_peak_dbfs.is_finite() || !(-6.0..=0.0).contains(&true_peak_dbfs) {
+        return Err(error::Error::Validation {
+            path: "--master-true-peak".to_owned(),
+            message: format!("{true_peak_dbfs} out of range -6.0..=0.0 dBFS"),
+        });
+    }
+    Ok(())
+}
+
 fn validate_build_options(
     sample_rate: u32,
     gain: f32,
@@ -1144,6 +1165,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
             validate_space(*renderer, *space)?;
+            validate_master(*master, *master_true_peak)?;
             let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::build(&pipeline::BuildArgs {
@@ -1208,6 +1230,7 @@ fn run(command: &Command, json: bool) -> Result<String> {
         } => {
             validate_build_options(*sample_rate, *gain, *quality, *tail, *crossfade_ms)?;
             validate_space(*renderer, *space)?;
+            validate_master(*master, *master_true_peak)?;
             let fallback = assemble_fallback_policy(resolver_config.as_deref(), *fallback_mode)?;
             let soundfont = soundfont::for_renderer(*renderer, soundfont.as_deref())?;
             pipeline::batch(&pipeline::BatchArgs {

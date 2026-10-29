@@ -6580,6 +6580,7 @@ fn mcp_build_forwards_space_and_master() {
             "params": {"name": "build", "arguments": {
                 "scene": forest().to_str().unwrap(),
                 "output": "/tmp/mcp-master-should-not-exist.wav",
+                "soundfont": sf2().to_str().unwrap(),
                 "master": -3,
                 "space": "hall"}}}),
     ]);

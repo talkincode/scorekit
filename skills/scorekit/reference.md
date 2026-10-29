@@ -1,6 +1,6 @@
 # scorekit reference
 
-Verified against scorekit v0.9.0. When in doubt, trust the binary:
+Verified against scorekit v0.9.1. When in doubt, trust the binary:
 `scorekit schema` / `scorekit schema --grammar` /
 `scorekit schema --texture-profile` are the live source of truth.
 The normative spec (protocol stance, stability rules, compile semantics)
